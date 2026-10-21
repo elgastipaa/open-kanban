@@ -9,6 +9,7 @@ import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Logo } from "@/components/ui/logo";
+import { siteUrl } from "@/lib/site";
 import { generateRandomSlug } from "@/lib/utils";
 
 const BackgroundLayer = dynamic(
@@ -103,7 +104,7 @@ export const HeroSection = ({
             <div className="absolute inset-0 rounded-xl bg-accent opacity-0 blur-md transition-opacity duration-500 group-focus-within:opacity-20"></div>
             <div className="relative flex h-14 items-center gap-0 overflow-hidden rounded-xl border border-neutral-800 bg-black/80 backdrop-blur-xl transition-colors focus-within:border-accent sm:h-auto">
               <span className="shrink-0 select-none pl-3 font-medium text-neutral-500 text-xs sm:pl-5 sm:text-sm">
-                kanban.isdevs.cv/
+                {siteUrl.host}/
               </span>
               <input
                 // biome-ignore lint/a11y/noAutofocus: Mandatory as a part of the flow.

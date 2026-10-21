@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Bricolage_Grotesque, Inter } from "next/font/google";
 import { Toaster } from "sonner";
 import { OfflineBanner } from "@/components/ui/offline-banner";
+import { siteUrl } from "@/lib/site";
 import "./globals.css";
 
 const inter = Inter({
@@ -17,7 +18,7 @@ const bricolage = Bricolage_Grotesque({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://kanban.isdevs.cv"),
+  metadataBase: siteUrl,
   title: {
     default: "OpenKanban - Your Board, Your URL",
     template: "%s | OpenKanban",

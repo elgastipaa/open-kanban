@@ -13,7 +13,7 @@ A modern, real-time Kanban board application built with Next.js, React, and Supa
 
 ## Tech Stack
 
-* **Framework**: Next.js 14+ (App Router)
+* **Framework**: Next.js 16 (App Router)
 * **Library**: React 19
 * **Database and Real-time**: Supabase (PostgreSQL)
 * **Styling**: Tailwind CSS v4
@@ -28,42 +28,57 @@ A modern, real-time Kanban board application built with Next.js, React, and Supa
 ### Prerequisites
 
 Ensure you have the following installed on your local machine:
-* Node.js (v20 or newer recommended)
-* pnpm (preferred package manager)
+* Node.js 24 (`nvm use`, version recorded in `.nvmrc`)
+* pnpm 11.3.0 (recorded in `packageManager`; available through Corepack)
 * A Supabase account and project
 
 ### Installation
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/your-username/openkanban.git
-cd openkanban
+git clone https://github.com/elgastipaa/open-kanban.git
+cd open-kanban
 ```
 
 2. Install dependencies:
 ```bash
-pnpm install
+pnpm install --frozen-lockfile
 ```
 
 ### Supabase Setup
 
-1. Create a new Supabase project.
+1. Create a dedicated Supabase Free project with fictional data only.
 2. Navigate to the SQL Editor in your Supabase dashboard.
 3. Execute the migration scripts found in the `supabase/migrations` directory in sequential order:
    * `001_create_boards.sql`
    * `002_create_columns.sql`
    * `003_create_tasks.sql`
    * `004_add_is_collapsed_to_columns.sql`
-4. Copy your Supabase URL and Anon Key.
+   * `005_hardened_rls.sql`
+   * `006_fix_rls.sql`
+   * `007_complete_rpc_coverage.sql`
+   * `008_get_full_board.sql`
+   * `009_slug_locked_mutations.sql`
+   * `010_batch_toggle_columns_collapse.sql`
+   * `011_batch_size_guards.sql`
+   * `012_harden_rpc_access.sql`
+4. Copy the project URL and **publishable** key from the Connect dialog or Settings → API Keys.
+
+Do not expose the instance before migration 012 is applied. Apply these scripts only once to a new dedicated project; do not blindly rerun the full history on an existing database. Remote SQL execution requires the owner's approval.
+
+Keep Realtime and public channels enabled for the original Broadcast/Presence behavior. Auth, email, Storage, and Postgres Changes subscriptions are not required.
 
 ### Environment Variables
 
 Create a `.env.local` file in the root of your project and add your Supabase credentials:
 
 ```ini
-NEXT_PUBLIC_SUPABASE_URL=your_supabase_project_url
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
+NEXT_PUBLIC_SUPABASE_PUBLIC_URL=https://your-project.supabase.co
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_your_public_key
+NEXT_PUBLIC_SITE_URL=http://localhost:3000
 ```
+
+Never use a secret key, `service_role` key, or database password in `NEXT_PUBLIC_*`. `.env.local` is excluded from Git. The optional Upstash variables can remain empty; the original visit limiter is then disabled.
 
 ### Running the Application
 
@@ -72,6 +87,27 @@ Start the development server:
 pnpm dev
 ```
 Open `http://localhost:3000` in your browser to view the application.
+
+### Validation and deployment
+
+```bash
+pnpm lint
+pnpm typecheck
+pnpm test:db
+pnpm audit
+pnpm build
+pnpm start
+```
+
+`test:db` requires native PostgreSQL tools (including `pg_config`, `initdb`, `pg_ctl`, and `psql`) on Linux/WSL/macOS. It creates and removes a disposable cluster with local Unix-socket access only; it never reads `DATABASE_URL` or connects to your Supabase project. Run it as a regular user, not root. No Docker or additional npm dependency is required.
+
+See [installation and Vercel instructions (Spanish)](docs/SETUP.md) and [validation evidence and remaining checks](docs/VALIDATION.md). Deployment and remote database changes are separate approval steps; neither happens during install or build. `vercel.json` disables automatic branch previews and permits Git deployments only from `main` once the project is connected.
+
+### Privacy and recovery
+
+This fork retains the original **anonymous, URL-based access**: anyone who knows a board URL can read, edit, and delete it. No Auth or owner accounts have been added. Use fictional data for the initial evaluation and defer sensitive information until access control is implemented.
+
+Export important boards as JSON and keep the files outside the app. Import replaces an existing board's contents and is not atomic across requests: export first and test restoration into a different disposable URL. Supabase Free may pause inactive projects and does not provide the paid plan's automatic backup recovery. The offline banner is a warning, not durable offline storage.
 
 ## Project Structure
 

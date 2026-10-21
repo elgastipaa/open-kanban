@@ -1,6 +1,6 @@
 # Estado de validación — 2026-10-21
 
-Base: upstream `1cef328fbab93a87bd80a3e770327e9236a6d5d3`. Evaluación inicial exclusivamente con datos ficticios. Sin SQL remoto ni despliegue ejecutados.
+Base: upstream `1cef328fbab93a87bd80a3e770327e9236a6d5d3`. Evaluación inicial exclusivamente con datos ficticios. SQL remoto aplicado con aprobación del propietario; despliegue en Vercel todavía no autorizado ni ejecutado.
 
 ## Verificado localmente
 
@@ -20,7 +20,7 @@ Entorno: WSL Ubuntu, Node 24.14.1, pnpm 11.3.0, PostgreSQL 16 descartable. La ap
 | Proxy | `/My_Test` redirige con 308 a `/my-test`. |
 | Worker bajo la CSP de la aplicación | Aprobado en Chromium después de agregar `worker-src 'self' blob:`. |
 
-La comprobación de navegador utilizó un runner Playwright ya disponible en el equipo, desde scripts de diagnóstico ignorados en `.temp`; no se agregó al manifest del proyecto. Se revisaron capturas de escritorio y móvil. Es evidencia de la landing y las rutas públicas, no del tablero conectado a Supabase.
+Las comprobaciones de navegador utilizaron un runner Playwright ya disponible en el equipo, desde scripts de diagnóstico ignorados en `.temp`; no se agregó al manifest del proyecto. Se revisaron capturas de escritorio y móvil. El build se repitió después de configurar las variables públicas de Supabase para las pruebas conectadas detalladas abajo.
 
 ## Evidencia rojo → verde
 
@@ -33,22 +33,29 @@ Las pruebas SQL usan los RPC reales como `anon`, con tablas y RLS reales. Ademá
 
 El original pasó lint y build antes de los cambios. La instalación de pnpm 11 detectó la opción heredada `ignoredBuiltDependencies`, sustituida por `allowBuilds` conservando las decisiones originales de no ejecutar esos scripts. La auditoría inicial reportó 49 avisos; se actualizaron Next/React y únicamente las dependencias transitivas afectadas. No se cambiaron las versiones resueltas de los componentes visuales.
 
-## Pendiente: proyecto Supabase dedicado
+## Verificado: Supabase dedicado y navegador conectado
 
-Todavía falta disponer del proyecto y aprobar/aplicar el SQL remoto. Hasta entonces no se afirma que el tablero conectado esté funcionando.
+El propietario creó el proyecto Free dedicado. Antes de escribir se comprobó que `public` no contenía tablas. Con su aprobación explícita se aplicaron las migraciones 001–012 juntas en una transacción; resultado `COMMIT`. El SQL combinado coincidía exactamente con el historial versionado (SHA-256 `da80e1dafc46e1e2a12ecebca40caa568afa2fcd77f54ccf944a4d960a8db173`). No volver a ejecutar el historial inicial sobre esta instancia.
 
-Repetir esta matriz contra la instancia local conectada y después contra la URL publicada:
+La conexión administrativa se hizo desde Windows porque WSL no tenía ruta IPv6 al endpoint directo. Se verificó TLS con la CA pública de Supabase y `rejectUnauthorized: true`; no se desactivó la validación de certificados. La contraseña no se guardó en archivos del proyecto. `.env.local`, excluido de Git, contiene solamente URL, clave publicable y origen local.
 
-- [ ] Crear un tablero ficticio desde una URL nueva, agregar una tarea y recuperar el contenido después de recargar.
-- [ ] Crear/editar/borrar tareas; comprobar título, descripción, las cuatro prioridades y orden.
-- [ ] Crear/renombrar/mover/plegar/borrar columnas; comprobar cascadas y confirmaciones.
-- [ ] Mover tareas dentro de una columna y entre columnas.
-- [ ] Verificar atajos de teclado y controles del tablero en móvil.
-- [ ] Abrir dos clientes, comprobar presencia y sincronización después de crear, editar, mover y borrar.
-- [ ] Exportar e importar en otra URL ficticia; comparar contenido y comprobar restauración.
-- [ ] Interrumpir la conexión y comprobar que los fallos de guardado se informan.
-- [ ] Confirmar en Supabase que las firmas antiguas no están expuestas y que siguen bloqueados los destinos ajenos.
-- [ ] Autorizar y efectuar el despliegue de la revisión aprobada; repetir los recorridos anteriores online.
+Se ejecutaron también las regresiones de `tests/db/security.sql` contra Supabase dentro de su transacción con `ROLLBACK`: aprobadas, sin fixtures persistidos. Las tres tablas tienen RLS activo y los 15 RPC de aplicación tienen los permisos y `search_path` esperados. Se recargó la caché de esquema de PostgREST.
+
+Build de producción servido en `127.0.0.1:3017`, conectado por HTTPS/WSS al proyecto real usando exclusivamente la clave publicable:
+
+- [x] Crear un tablero ficticio desde una URL nueva, agregar una tarea y recuperar el contenido después de recargar.
+- [x] Crear/editar/borrar tareas; comprobar descripción, las cuatro prioridades y orden. La modificación de título también está cubierta en las regresiones SQL.
+- [x] Crear/renombrar/mover/plegar/borrar columnas; comprobar cascadas y confirmaciones.
+- [x] Mover tareas entre columnas con el drag/drop accesible por teclado; ordenar y mover entre columnas con controles móviles.
+- [x] Plegar/desplegar todas las columnas con los atajos de teclado originales; verificar navegación y controles móviles.
+- [x] Abrir dos contextos independientes, comprobar presencia y sincronización después de crear, editar, mover y borrar, incluido el borrado del tablero.
+- [x] Exportar e importar en otra URL ficticia; comparar títulos, descripciones, prioridades, posiciones y estructura. Reimportar sobre ese destino y verificar reemplazo sin duplicación.
+- [x] Interrumpir la conexión del navegador, comprobar el aviso de error al guardar y verificar que la tarea fallida no existe en la base.
+- [x] Confirmar en Supabase que las firmas antiguas no están expuestas y que siguen bloqueados los destinos ajenos.
+- [x] Cero errores JavaScript no capturados durante el recorrido conectado.
+- [ ] Autorizar y efectuar el despliegue de la revisión aprobada; repetir los recorridos anteriores en la URL pública.
+
+Los tableros de navegador usaron slugs únicos `qa-fictional-<timestamp>` y su destino `-import`. Se eliminaron exclusivamente esos fixtures al terminar, incluidos columnas y tareas. No se usaron datos personales. La aplicación funciona localmente contra Supabase; esto todavía no constituye validación de Vercel ni una prueba exhaustiva de concurrencia o recuperación ante importaciones parcialmente fallidas.
 
 ## Límites conservados del original
 

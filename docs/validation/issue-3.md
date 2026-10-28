@@ -50,6 +50,9 @@ Se usaron dos páginas de Chromium contra la aplicación y Supabase locales, con
 19. En un tablero nuevo se retuvo la respuesta de creación del tablero después del commit. Se añadieron dos tareas temporales y se reordenaron antes de liberar esa respuesta. Al terminar la cola, el RPC de posiciones incluyó ambos IDs persistidos y la columna creada; la consulta directa confirmó `Local second` en posición 0 y `Local first` en posición 1.
 20. Se retuvo una creación de tarea después del commit, se eliminó la tarjeta temporal antes de liberar la respuesta y la cola llamó al RPC de borrado con el ID persistido. La tarjeta no reapareció y una lectura directa confirmó que la fila no existía.
 21. Se retuvo un refresh externo anterior a un movimiento local exitoso. Al liberar el snapshot después del commit, la interfaz y la base conservaron la tarea en `Done`.
+22. Se retuvo una respuesta de creación después del commit y otro cliente provocó un refresh que sustituyó la tarjeta temporal por su fila persistida. Al liberar la respuesta, no se llamó al RPC de borrado; la interfaz conservó una sola tarjeta y la consulta directa confirmó la fila.
+23. En móvil se retuvo y falló la creación de una tarjeta temporal mientras se movía una tarea persistida de `Source` a `Done`. La petición de posiciones posterior incluyó dos IDs persistidos y ninguno temporal; la base confirmó `Move B` en `Done`.
+24. Se creó una tarea sin refresh concurrente. La interfaz reemplazó el ID temporal por uno persistido y mostró exactamente una tarjeta.
 
 ## Verificaciones
 

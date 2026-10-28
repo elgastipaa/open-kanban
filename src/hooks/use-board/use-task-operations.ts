@@ -66,6 +66,7 @@ export function useTaskOperations({
         updated_at: new Date().toISOString(),
       };
 
+      ledger.beginTaskCreation(tempTask.id);
       setColumns((prev) =>
         prev.map((c) =>
           c.id === columnId ? { ...c, tasks: [...c.tasks, tempTask] } : c,
@@ -115,10 +116,12 @@ export function useTaskOperations({
           const dbTask = await createTask(supabase, slug, payload);
 
           const current = columnsRef.current ?? [];
-          const taskStillExists = current.some((column) =>
-            column.tasks.some((task) => task.id === tempTask.id),
+          const creation = ledger.completeTaskCreation(
+            tempTask.id,
+            dbTask,
+            current,
           );
-          if (!taskStillExists) {
+          if (creation.deleteRequested) {
             try {
               await dbDeleteTask(supabase, slug, dbTask.id);
             } catch {
@@ -126,22 +129,22 @@ export function useTaskOperations({
               showMutationError("delete task");
               return;
             }
-            setColumns(ledger.forgetTask(tempTask.id, current));
+            setColumns(
+              ledger.forgetTask(
+                dbTask.id,
+                ledger.forgetTask(tempTask.id, creation.columns),
+              ),
+            );
             onMutationRef.current?.();
             return;
           }
 
-          const withSavedTask = current.map((column) => ({
-            ...column,
-            tasks: column.tasks.map((task) =>
-              task.id === tempTask.id ? dbTask : task,
-            ),
-          }));
-          setColumns(ledger.replaceTaskId(tempTask.id, dbTask, withSavedTask));
+          setColumns(creation.columns);
           onMutationRef.current?.();
         } catch {
           // Rollback task addition
           const current = columnsRef.current ?? [];
+          const creationWasDeleted = ledger.failTaskCreation(tempTask.id);
           setColumns(
             ledger.forgetTask(
               tempTask.id,
@@ -151,7 +154,7 @@ export function useTaskOperations({
               })),
             ),
           );
-          showMutationError("add task");
+          if (!creationWasDeleted) showMutationError("add task");
         }
       });
     },
@@ -229,6 +232,9 @@ export function useTaskOperations({
 
   const removeTask = useCallback(
     (taskId: string) => {
+      if (taskId.startsWith("local-")) {
+        ledger.requestTaskCreationDeletion(taskId);
+      }
       const intent: TaskMutationIntent = {
         id: generateUUID(),
         kind: "delete",

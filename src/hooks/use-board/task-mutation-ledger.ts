@@ -47,6 +47,11 @@ export class TaskMutationLedger {
   private confirmedTasks = new Map<string, Task>();
   private pendingIntents: TaskMutationIntent[] = [];
   private deletedTaskIds = new Set<string>();
+  private mutationRevision = 0;
+
+  get revision(): number {
+    return this.mutationRevision;
+  }
 
   constructor(columns: ColumnWithTasks[]) {
     this.sync(columns, true);
@@ -70,6 +75,7 @@ export class TaskMutationLedger {
         column.tasks.map((task) => [task.id, { ...task }] as const),
       ),
     );
+    this.mutationRevision += 1;
     return this.project(columns);
   }
 
@@ -118,6 +124,7 @@ export class TaskMutationLedger {
     this.pendingIntents = this.pendingIntents.filter(
       (candidate) => candidate.id !== id,
     );
+    this.mutationRevision += 1;
     return this.project(columns);
   }
 
@@ -139,22 +146,46 @@ export class TaskMutationLedger {
         intent.taskId = task.id;
       }
     }
+    this.mutationRevision += 1;
+    return this.project(columns);
+  }
+
+  replaceColumnId(
+    oldId: string,
+    newId: string,
+    columns: ColumnWithTasks[],
+  ): ColumnWithTasks[] {
+    for (const [taskId, task] of this.confirmedTasks) {
+      if (task.column_id === oldId) {
+        this.confirmedTasks.set(taskId, { ...task, column_id: newId });
+      }
+    }
+    for (const intent of this.pendingIntents) {
+      if (intent.kind !== "move") continue;
+      for (const update of intent.updates) {
+        if (update.column_id === oldId) update.column_id = newId;
+      }
+    }
+    this.mutationRevision += 1;
     return this.project(columns);
   }
 
   forgetTask(taskId: string, columns: ColumnWithTasks[]): ColumnWithTasks[] {
     this.confirmedTasks.delete(taskId);
     this.deletedTaskIds.delete(taskId);
-    const retained: TaskMutationIntent[] = [];
     for (const intent of this.pendingIntents) {
       if (intent.kind === "move") {
-        const updates = intent.updates.filter((update) => update.id !== taskId);
-        if (updates.length > 0) retained.push({ ...intent, updates });
-        continue;
+        if (intent.updates.some((update) => update.id === taskId)) {
+          intent.updates = [];
+        }
       }
-      if (intent.taskId !== taskId) retained.push(intent);
     }
-    this.pendingIntents = retained;
+    this.pendingIntents = this.pendingIntents.filter((intent) =>
+      intent.kind === "move"
+        ? intent.updates.length > 0
+        : intent.taskId !== taskId,
+    );
+    this.mutationRevision += 1;
     return this.project(columns);
   }
 

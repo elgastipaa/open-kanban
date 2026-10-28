@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import {
   createColumn,
   createTask,
@@ -46,6 +46,8 @@ export function useTaskOperations({
   enqueue,
   ledger,
 }: UseTaskOperationsProps) {
+  const localColumnIds = useRef(new Map<string, string>());
+
   const addTask = useCallback(
     (columnId: string, title: string, priority: Priority = "medium") => {
       const currentCols = columnsRef.current ?? [];
@@ -74,23 +76,32 @@ export function useTaskOperations({
         try {
           // Ensure board exists
           const board = await persistBoard();
-          let targetColumnId = columnId;
+          let targetColumnId = localColumnIds.current.get(columnId) ?? columnId;
 
           // If the target column is still unpersisted local-, create it first
-          if (columnId.startsWith("local-")) {
+          if (targetColumnId.startsWith("local-")) {
             const currentSnapshot = columnsRef.current ?? [];
-            const targetCol = currentSnapshot.find((c) => c.id === columnId);
+            const targetCol = currentSnapshot.find(
+              (column) => column.id === targetColumnId,
+            );
             if (targetCol) {
               const newCol = await createColumn(supabase, slug, {
                 board_id: board.id,
                 title: targetCol.title,
                 position: targetCol.position,
               });
+              const oldColumnId = targetColumnId;
+              localColumnIds.current.set(columnId, newCol.id);
+              localColumnIds.current.set(oldColumnId, newCol.id);
               targetColumnId = newCol.id;
-              setColumns((prev) =>
-                prev.map((c) =>
-                  c.id === columnId ? { ...c, id: newCol.id } : c,
-                ),
+              const withSavedColumn = (columnsRef.current ?? []).map(
+                (column) =>
+                  column.id === oldColumnId
+                    ? { ...column, id: newCol.id }
+                    : column,
+              );
+              setColumns(
+                ledger.replaceColumnId(oldColumnId, newCol.id, withSavedColumn),
               );
             }
           }
@@ -104,6 +115,22 @@ export function useTaskOperations({
           const dbTask = await createTask(supabase, slug, payload);
 
           const current = columnsRef.current ?? [];
+          const taskStillExists = current.some((column) =>
+            column.tasks.some((task) => task.id === tempTask.id),
+          );
+          if (!taskStillExists) {
+            try {
+              await dbDeleteTask(supabase, slug, dbTask.id);
+            } catch {
+              setColumns(ledger.replaceTaskId(tempTask.id, dbTask, current));
+              showMutationError("delete task");
+              return;
+            }
+            setColumns(ledger.forgetTask(tempTask.id, current));
+            onMutationRef.current?.();
+            return;
+          }
+
           const withSavedTask = current.map((column) => ({
             ...column,
             tasks: column.tasks.map((task) =>
@@ -311,8 +338,8 @@ export function useTaskOperations({
           !update.column_id?.startsWith("local-"),
       );
       if (
-        !isPersistedRef.current ||
-        (!includesPersistedTask && !includesLocalTask)
+        !includesLocalTask &&
+        (!isPersistedRef.current || !includesPersistedTask)
       ) {
         setColumns(
           ledger.settle(intent.id, optimisticColumns, {
@@ -325,6 +352,15 @@ export function useTaskOperations({
 
       enqueue(async () => {
         try {
+          if (!isPersistedRef.current) {
+            setColumns(
+              ledger.settle(intent.id, columnsRef.current ?? [], {
+                kind: "positions-saved",
+                tasks: [],
+              }),
+            );
+            return;
+          }
           const tasksToUpdate = intent.updates.filter(
             (update) =>
               !update.id.startsWith("local-") &&

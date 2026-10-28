@@ -32,8 +32,13 @@ export function useBoardSync({
 
   const refreshFromDB = useCallback(async () => {
     const generation = ++refreshGenerationRef.current;
+    const ledgerRevision = taskMutationLedger.revision;
     const data = await getFullBoard(supabase, slug);
-    if (generation === refreshGenerationRef.current && data) {
+    if (
+      generation === refreshGenerationRef.current &&
+      ledgerRevision === taskMutationLedger.revision &&
+      data
+    ) {
       boardRef.current = data.board;
       isPersistedRef.current = true;
       setBoard(data.board);

@@ -12,7 +12,7 @@
 - La edición recibe solo las claves explícitas. Una descripción omitida conserva su valor y `description: null` la borra.
 - El movimiento devuelve las filas actuales para que el cliente que partió de una vista desactualizada muestre el contenido más reciente después de mover.
 - El ledger mantiene separadas las filas confirmadas y las intenciones optimistas pendientes. Al confirmar o fallar una petición, vuelve a proyectar solo las intenciones que siguen pendientes, sin restaurar snapshots de todo el tablero.
-- Las respuestas retrasadas no recuperan tareas borradas, los movimientos en cola incorporan las tareas que terminan de crearse antes de ejecutarse y los refreshes se aplican por orden de solicitud.
+- Las respuestas retrasadas no recuperan tareas borradas, los movimientos en cola incorporan tareas y columnas temporales que terminan de crearse antes de ejecutarse, y los refreshes previos a un commit local se descartan.
 - El batch valida todas las entradas antes de actualizar; rechaza campos de contenido, tareas de otro tablero y batches inválidos sin aplicar cambios parciales.
 
 ## Evidencia
@@ -47,6 +47,9 @@ Se usaron dos páginas de Chromium contra la aplicación y Supabase locales, con
 16. Se retuvo la respuesta exitosa de un movimiento y un segundo cliente borró esa tarea. La primera página la quitó al recibir realtime y no la recuperó al liberar la respuesta; la base confirmó que seguía borrada.
 17. Se retuvo el primer refresh realtime con una edición externa, luego se permitió completar el refresh de una segunda edición. Al liberar el primer resultado atrasado, la interfaz conservó la segunda edición.
 18. Se repitió la edición externa durante un movimiento retenido con respuestas de red que diferían únicamente en 1 μs (`.123455` y `.123456`) dentro del mismo milisegundo. La interfaz conservó el título y descripción recientes después de liberar la respuesta anterior; una lectura directa confirmó los campos en `Done`.
+19. En un tablero nuevo se retuvo la respuesta de creación del tablero después del commit. Se añadieron dos tareas temporales y se reordenaron antes de liberar esa respuesta. Al terminar la cola, el RPC de posiciones incluyó ambos IDs persistidos y la columna creada; la consulta directa confirmó `Local second` en posición 0 y `Local first` en posición 1.
+20. Se retuvo una creación de tarea después del commit, se eliminó la tarjeta temporal antes de liberar la respuesta y la cola llamó al RPC de borrado con el ID persistido. La tarjeta no reapareció y una lectura directa confirmó que la fila no existía.
+21. Se retuvo un refresh externo anterior a un movimiento local exitoso. Al liberar el snapshot después del commit, la interfaz y la base conservaron la tarea en `Done`.
 
 ## Verificaciones
 

@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { useCallback, useRef } from "react";
+import { useCallback } from "react";
 import {
   createColumn,
   createTask,
@@ -16,6 +16,11 @@ import type {
   TaskPositionUpdate,
 } from "@/lib/types";
 import { generateUUID } from "@/lib/utils";
+import type {
+  TaskMutationIntent,
+  TaskMutationLedger,
+  TaskMutationResult,
+} from "./task-mutation-ledger";
 import { showMutationError } from "./utils";
 
 interface UseTaskOperationsProps {
@@ -27,69 +32,7 @@ interface UseTaskOperationsProps {
   onMutationRef: React.RefObject<(() => void) | undefined>;
   persistBoard: () => Promise<Board>;
   enqueue: (op: () => Promise<void>) => void;
-}
-
-interface TaskPositionSnapshot {
-  column_id: string;
-  position: number;
-  version: number;
-  optimistic_column_id: string;
-}
-
-function restoreMovePositions(
-  current: ColumnWithTasks[],
-  snapshots: Map<string, TaskPositionSnapshot>,
-  positionVersions: Map<string, number>,
-): ColumnWithTasks[] {
-  const columnIds = new Set(current.map((column) => column.id));
-  const restorable = new Map<string, TaskPositionSnapshot>();
-
-  for (const [taskId, snapshot] of snapshots) {
-    if (
-      positionVersions.get(taskId) === snapshot.version &&
-      columnIds.has(snapshot.column_id)
-    ) {
-      restorable.set(taskId, snapshot);
-    }
-  }
-
-  const tasksByColumn = new Map<
-    string,
-    { task: Task; position: number; order: number }[]
-  >();
-  let order = 0;
-
-  for (const column of current) {
-    for (const task of column.tasks) {
-      const snapshot = restorable.get(task.id);
-      // Deleting a sibling compacts indices without superseding the move.
-      const shouldRestore =
-        snapshot !== undefined &&
-        task.column_id === snapshot.optimistic_column_id;
-      const columnId = shouldRestore ? snapshot.column_id : column.id;
-      const position = shouldRestore ? snapshot.position : task.position;
-      const tasks = tasksByColumn.get(columnId) ?? [];
-      tasks.push({ task, position, order });
-      tasksByColumn.set(columnId, tasks);
-      order += 1;
-    }
-  }
-
-  return current.map((column) => {
-    const tasks = (tasksByColumn.get(column.id) ?? []).sort(
-      (left, right) =>
-        left.position - right.position || left.order - right.order,
-    );
-
-    return {
-      ...column,
-      tasks: tasks.map(({ task }, position) => ({
-        ...task,
-        column_id: column.id,
-        position,
-      })),
-    };
-  });
+  ledger: TaskMutationLedger;
 }
 
 export function useTaskOperations({
@@ -101,10 +44,8 @@ export function useTaskOperations({
   onMutationRef,
   persistBoard,
   enqueue,
+  ledger,
 }: UseTaskOperationsProps) {
-  const taskEditVersions = useRef(new Map<string, number>());
-  const taskPositionVersions = useRef(new Map<string, number>());
-
   const addTask = useCallback(
     (columnId: string, title: string, priority: Priority = "medium") => {
       const currentCols = columnsRef.current ?? [];
@@ -162,20 +103,26 @@ export function useTaskOperations({
           };
           const dbTask = await createTask(supabase, slug, payload);
 
-          setColumns((prev) =>
-            prev.map((c) => ({
-              ...c,
-              tasks: c.tasks.map((t) => (t.id === tempTask.id ? dbTask : t)),
-            })),
-          );
+          const current = columnsRef.current ?? [];
+          const withSavedTask = current.map((column) => ({
+            ...column,
+            tasks: column.tasks.map((task) =>
+              task.id === tempTask.id ? dbTask : task,
+            ),
+          }));
+          setColumns(ledger.replaceTaskId(tempTask.id, dbTask, withSavedTask));
           onMutationRef.current?.();
         } catch {
           // Rollback task addition
-          setColumns((prev) =>
-            prev.map((c) => ({
-              ...c,
-              tasks: c.tasks.filter((t) => t.id !== tempTask.id),
-            })),
+          const current = columnsRef.current ?? [];
+          setColumns(
+            ledger.forgetTask(
+              tempTask.id,
+              current.map((column) => ({
+                ...column,
+                tasks: column.tasks.filter((task) => task.id !== tempTask.id),
+              })),
+            ),
           );
           showMutationError("add task");
         }
@@ -184,6 +131,7 @@ export function useTaskOperations({
     [
       columnsRef,
       setColumns,
+      ledger,
       enqueue,
       persistBoard,
       supabase,
@@ -201,51 +149,41 @@ export function useTaskOperations({
         priority?: Priority;
       },
     ) => {
-      const taskBeforeEdit = (columnsRef.current ?? [])
-        .flatMap((col) => col.tasks)
-        .find((task) => task.id === taskId);
-      const previousTask = taskBeforeEdit ? { ...taskBeforeEdit } : undefined;
-      const editVersion = (taskEditVersions.current.get(taskId) ?? 0) + 1;
-      taskEditVersions.current.set(taskId, editVersion);
-      setColumns((prev) =>
-        prev.map((col) => ({
-          ...col,
-          tasks: col.tasks.map((t) =>
-            t.id === taskId ? { ...t, ...updates } : t,
-          ),
-        })),
-      );
+      const intent: TaskMutationIntent = {
+        id: generateUUID(),
+        kind: "edit",
+        taskId,
+        updates,
+      };
+      const optimisticColumns = ledger.begin(intent, columnsRef.current ?? []);
+      setColumns(optimisticColumns);
 
-      if (!isPersistedRef.current || taskId.startsWith("local-")) return;
+      if (!isPersistedRef.current || taskId.startsWith("local-")) {
+        const task = optimisticColumns
+          .flatMap((column) => column.tasks)
+          .find((candidate) => candidate.id === taskId);
+        const saved: TaskMutationResult | undefined = task
+          ? { kind: "task-saved", task: { ...task, ...updates } }
+          : undefined;
+        setColumns(ledger.settle(intent.id, optimisticColumns, saved));
+        return;
+      }
 
       enqueue(async () => {
         try {
-          await updateTask(supabase, slug, { id: taskId, ...updates });
+          const savedTask = await updateTask(supabase, slug, {
+            id: taskId,
+            ...updates,
+          });
+          setColumns(
+            ledger.settle(intent.id, columnsRef.current ?? [], {
+              kind: "task-saved",
+              task: savedTask,
+            }),
+          );
           onMutationRef.current?.();
         } catch {
-          setColumns((current) => {
-            if (
-              !previousTask ||
-              taskEditVersions.current.get(taskId) !== editVersion
-            ) {
-              return current;
-            }
-
-            return current.map((col) => ({
-              ...col,
-              tasks: col.tasks.map((task) =>
-                task.id === taskId
-                  ? {
-                      ...task,
-                      title: previousTask.title,
-                      description: previousTask.description,
-                      priority: previousTask.priority,
-                      updated_at: previousTask.updated_at,
-                    }
-                  : task,
-              ),
-            }));
-          });
+          setColumns(ledger.settle(intent.id, columnsRef.current ?? []));
           showMutationError("update task");
         }
       });
@@ -256,6 +194,7 @@ export function useTaskOperations({
       columnsRef,
       setColumns,
       isPersistedRef,
+      ledger,
       enqueue,
       onMutationRef,
     ],
@@ -263,28 +202,32 @@ export function useTaskOperations({
 
   const removeTask = useCallback(
     (taskId: string) => {
-      const snapshot = columnsRef.current ?? [];
-      taskEditVersions.current.delete(taskId);
-      taskPositionVersions.current.delete(taskId);
-      // Keep the move version for surviving siblings so rollback can reinsert
-      // the moved task into their original order after this deletion.
-      setColumns((prev) =>
-        prev.map((col) => ({
-          ...col,
-          tasks: col.tasks
-            .filter((t) => t.id !== taskId)
-            .map((t, i) => ({ ...t, position: i })),
-        })),
-      );
+      const intent: TaskMutationIntent = {
+        id: generateUUID(),
+        kind: "delete",
+        taskId,
+      };
+      const optimisticColumns = ledger.begin(intent, columnsRef.current ?? []);
+      setColumns(optimisticColumns);
 
-      if (!isPersistedRef.current || taskId.startsWith("local-")) return;
+      if (!isPersistedRef.current || taskId.startsWith("local-")) {
+        setColumns(
+          ledger.settle(intent.id, optimisticColumns, { kind: "task-deleted" }),
+        );
+        return;
+      }
 
       enqueue(async () => {
         try {
           await dbDeleteTask(supabase, slug, taskId);
+          setColumns(
+            ledger.settle(intent.id, columnsRef.current ?? [], {
+              kind: "task-deleted",
+            }),
+          );
           onMutationRef.current?.();
         } catch {
-          setColumns(snapshot);
+          setColumns(ledger.settle(intent.id, columnsRef.current ?? []));
           showMutationError("delete task");
         }
       });
@@ -295,6 +238,7 @@ export function useTaskOperations({
       columnsRef,
       setColumns,
       isPersistedRef,
+      ledger,
       enqueue,
       onMutationRef,
     ],
@@ -320,21 +264,6 @@ export function useTaskOperations({
 
       if (!sourceCol.tasks[sourceIndex]) return;
 
-      const positionSnapshot = new Map<string, TaskPositionSnapshot>();
-      for (const column of currentCols) {
-        if (column.id !== sourceColId && column.id !== destColId) continue;
-        for (const task of column.tasks) {
-          const version = (taskPositionVersions.current.get(task.id) ?? 0) + 1;
-          taskPositionVersions.current.set(task.id, version);
-          positionSnapshot.set(task.id, {
-            column_id: column.id,
-            position: task.position,
-            version,
-            optimistic_column_id: column.id,
-          });
-        }
-      }
-
       const [movedTask] = sourceCol.tasks.splice(sourceIndex, 1);
       if (!movedTask) return;
 
@@ -348,83 +277,62 @@ export function useTaskOperations({
         t.position = i;
       });
 
-      setColumns(newCols);
-
-      if (!isPersistedRef.current) return;
-
+      const allPositionUpdates: TaskPositionUpdate[] = [];
       const tasksToUpdate: TaskPositionUpdate[] = [];
-      const editVersionsAtMove = new Map<string, number>();
       const affected =
         sourceColId === destColId ? [destCol] : [sourceCol, destCol];
       for (const col of affected) {
         for (const task of col.tasks) {
-          const snapshot = positionSnapshot.get(task.id);
-          if (snapshot) {
-            snapshot.optimistic_column_id = col.id;
-          }
-        }
-
-        if (col.id.startsWith("local-")) continue;
-        for (const task of col.tasks) {
-          if (task.id.startsWith("local-")) continue;
-          tasksToUpdate.push({
+          const update = {
             id: task.id,
             column_id: col.id,
             position: task.position,
-          });
-          editVersionsAtMove.set(
-            task.id,
-            taskEditVersions.current.get(task.id) ?? 0,
-          );
+          };
+          allPositionUpdates.push(update);
+
+          if (col.id.startsWith("local-")) continue;
+          if (task.id.startsWith("local-")) continue;
+          tasksToUpdate.push(update);
         }
       }
 
-      if (tasksToUpdate.length > 0) {
-        enqueue(async () => {
-          try {
-            const savedTasks = await updateTaskPositions(
-              supabase,
-              slug,
-              tasksToUpdate,
-            );
-            const savedById = new Map(
-              savedTasks.map((task) => [task.id, task]),
-            );
-            setColumns((current) =>
-              current.map((col) => ({
-                ...col,
-                tasks: col.tasks.map((task) => {
-                  const savedTask = savedById.get(task.id);
-                  if (!savedTask) return task;
+      const intent: TaskMutationIntent = {
+        id: generateUUID(),
+        kind: "move",
+        updates: allPositionUpdates,
+      };
+      const optimisticColumns = ledger.begin(intent, currentCols);
+      setColumns(optimisticColumns);
 
-                  const editedAfterMoveStarted =
-                    (taskEditVersions.current.get(task.id) ?? 0) >
-                    (editVersionsAtMove.get(task.id) ?? 0);
-                  if (editedAfterMoveStarted) return task;
-
-                  return {
-                    ...task,
-                    title: savedTask.title,
-                    description: savedTask.description,
-                    priority: savedTask.priority,
-                    updated_at: savedTask.updated_at,
-                  };
-                }),
-              })),
-            );
-            onMutationRef.current?.();
-          } catch {
-            setColumns((current) =>
-              restoreMovePositions(
-                current,
-                positionSnapshot,
-                taskPositionVersions.current,
-              ),
-            );
-            showMutationError("move task");
-          }
-        });
+      if (!isPersistedRef.current || tasksToUpdate.length === 0) {
+        setColumns(
+          ledger.settle(intent.id, optimisticColumns, {
+            kind: "positions-saved",
+            tasks: [],
+          }),
+        );
+        return;
       }
+
+      enqueue(async () => {
+        try {
+          const savedTasks = await updateTaskPositions(
+            supabase,
+            slug,
+            tasksToUpdate,
+          );
+          setColumns(
+            ledger.settle(intent.id, columnsRef.current ?? [], {
+              kind: "positions-saved",
+              tasks: savedTasks,
+            }),
+          );
+          onMutationRef.current?.();
+        } catch {
+          setColumns(ledger.settle(intent.id, columnsRef.current ?? []));
+          showMutationError("move task");
+        }
+      });
     },
     [
       columnsRef,
@@ -433,6 +341,7 @@ export function useTaskOperations({
       enqueue,
       supabase,
       slug,
+      ledger,
       onMutationRef,
     ],
   );

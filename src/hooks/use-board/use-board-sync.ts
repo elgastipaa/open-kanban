@@ -6,6 +6,7 @@ import {
   getFullBoard,
 } from "@/lib/db";
 import type { Board, ColumnWithTasks } from "@/lib/types";
+import type { TaskMutationLedger } from "./task-mutation-ledger";
 import { getInitialLocalColumn, showMutationError } from "./utils";
 
 interface UseBoardSyncProps {
@@ -15,6 +16,7 @@ interface UseBoardSyncProps {
   isPersistedRef: React.RefObject<boolean>;
   setBoard: React.Dispatch<React.SetStateAction<Board | null>>;
   setColumns: React.Dispatch<React.SetStateAction<ColumnWithTasks[]>>;
+  taskMutationLedger: TaskMutationLedger;
 }
 
 export function useBoardSync({
@@ -24,6 +26,7 @@ export function useBoardSync({
   isPersistedRef,
   setBoard,
   setColumns,
+  taskMutationLedger,
 }: UseBoardSyncProps) {
   const refreshFromDB = useCallback(async () => {
     const data = await getFullBoard(supabase, slug);
@@ -31,11 +34,19 @@ export function useBoardSync({
       boardRef.current = data.board;
       isPersistedRef.current = true;
       setBoard(data.board);
-      setColumns(
-        data.columns.length > 0 ? data.columns : [getInitialLocalColumn()],
-      );
+      const nextColumns =
+        data.columns.length > 0 ? data.columns : [getInitialLocalColumn()];
+      setColumns(taskMutationLedger.sync(nextColumns));
     }
-  }, [slug, supabase, boardRef, isPersistedRef, setBoard, setColumns]);
+  }, [
+    slug,
+    supabase,
+    boardRef,
+    isPersistedRef,
+    setBoard,
+    setColumns,
+    taskMutationLedger,
+  ]);
 
   const persistBoard = useCallback(async (): Promise<Board> => {
     if (boardRef.current) return boardRef.current;
@@ -59,19 +70,27 @@ export function useBoardSync({
     boardRef.current = null;
     isPersistedRef.current = false;
     setBoard(null);
-    setColumns([getInitialLocalColumn()]);
-  }, [supabase, slug, boardRef, isPersistedRef, setBoard, setColumns]);
+    setColumns(taskMutationLedger.sync([getInitialLocalColumn()], true));
+  }, [
+    supabase,
+    slug,
+    boardRef,
+    isPersistedRef,
+    setBoard,
+    setColumns,
+    taskMutationLedger,
+  ]);
 
   const replaceState = useCallback(
     (newBoard: Board | null, newColumns: ColumnWithTasks[]) => {
       boardRef.current = newBoard;
       isPersistedRef.current = newBoard !== null;
       setBoard(newBoard);
-      setColumns(
-        newColumns.length > 0 ? newColumns : [getInitialLocalColumn()],
-      );
+      const nextColumns =
+        newColumns.length > 0 ? newColumns : [getInitialLocalColumn()];
+      setColumns(taskMutationLedger.sync(nextColumns, true));
     },
-    [boardRef, isPersistedRef, setBoard, setColumns],
+    [boardRef, isPersistedRef, setBoard, setColumns, taskMutationLedger],
   );
 
   return {

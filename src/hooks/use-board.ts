@@ -3,7 +3,7 @@
 import { useCallback, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { Board, ColumnWithTasks } from "@/lib/types";
-
+import { TaskMutationLedger } from "./use-board/task-mutation-ledger";
 import type { UseBoardOptions } from "./use-board/types";
 import { useBoardSync } from "./use-board/use-board-sync";
 import { useColumnOperations } from "./use-board/use-column-operations";
@@ -21,6 +21,11 @@ export function useBoard({
     if (initialColumns.length > 0) return initialColumns;
     return [getInitialLocalColumn()];
   });
+  const taskMutationLedgerRef = useRef<TaskMutationLedger | null>(null);
+  if (!taskMutationLedgerRef.current) {
+    taskMutationLedgerRef.current = new TaskMutationLedger(columns);
+  }
+  const taskMutationLedger = taskMutationLedgerRef.current;
 
   /** Whether board + columns have been persisted to DB */
   const isPersistedRef = useRef(initialBoard !== null);
@@ -52,6 +57,7 @@ export function useBoard({
       isPersistedRef,
       setBoard,
       setColumns,
+      taskMutationLedger,
     });
 
   const {
@@ -81,6 +87,7 @@ export function useBoard({
     onMutationRef,
     persistBoard,
     enqueue,
+    ledger: taskMutationLedger,
   });
 
   return {

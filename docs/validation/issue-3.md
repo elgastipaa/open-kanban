@@ -11,7 +11,7 @@
 - La migración `013_separate_task_edits_from_moves.sql` reemplaza la mutación combinada por `edit_task_fields_p` y limita `update_task_positions_p` a `id`, `column_id` y `position`.
 - La edición recibe solo las claves explícitas. Una descripción omitida conserva su valor y `description: null` la borra.
 - El movimiento devuelve las filas actuales para que el cliente que partió de una vista desactualizada muestre el contenido más reciente después de mover.
-- La reconciliación preserva ediciones del mismo cliente iniciadas durante el movimiento; si falla, revierte únicamente posiciones que no hayan cambiado por una operación posterior.
+- El ledger mantiene separadas las filas confirmadas y las intenciones optimistas pendientes. Al confirmar o fallar una petición, vuelve a proyectar solo las intenciones que siguen pendientes, sin restaurar snapshots de todo el tablero.
 - El batch valida todas las entradas antes de actualizar; rechaza campos de contenido, tareas de otro tablero y batches inválidos sin aplicar cambios parciales.
 
 ## Evidencia
@@ -36,14 +36,18 @@ Se usaron dos páginas de Chromium contra la aplicación y Supabase locales, con
 6. Se retuvo el movimiento siguiente y se respondió con un 500 simulado. Mientras esperaba, la página editó la tarea. Al fallar el movimiento, la tarea volvió a `Source`; la edición encolada quedó visible y persistida.
 7. Se retuvo una edición y se respondió con un 500 simulado mientras la página movía la tarea. La edición falló, pero el movimiento encolado terminó en `Done` y la base conservó los campos originales.
 8. Se retuvo un movimiento y se respondió con un 500 simulado mientras se eliminaba una tarea hermana. El rollback devolvió la tarea a `Source` delante de la hermana restante; la interfaz y la base conservaron el orden `Fixture task`, `Third task` y la tarea eliminada no volvió.
+9. Se retuvo una edición optimista, se inició una segunda edición de la misma tarea y se respondieron ambas con 500. La interfaz volvió al título, descripción y prioridad confirmados; la consulta directa confirmó que la base no recibió ninguna de las dos ediciones.
+10. Se retuvo un movimiento y se eliminó optimistamente una tarea hermana. El movimiento y el borrado fallaron; la interfaz volvió al orden `Fixture task`, `Neighbor task`, `Third task`, y una consulta directa confirmó las tres tareas en `Source` con posiciones 0, 1 y 2.
+11. Se retuvo un movimiento que falló y se encoló una edición de la misma tarea. La edición llegó después del fallo; la interfaz y la base conservaron el título, descripción y prioridad nuevos en `Source`.
+12. Se retuvo una edición que falló y se encoló un movimiento. El movimiento llegó después del fallo; la interfaz y la base conservaron los campos originales en `Done`.
+13. Se retuvo la respuesta de un movimiento después de que el servidor lo aplicó. Un segundo cliente editó la tarea y emitió realtime; la primera página actualizó sus campos mientras la respuesta seguía retenida. Al liberar la respuesta antigua, la interfaz y la base conservaron el título, descripción y prioridad más recientes en `Done`.
+14. Se retuvo un movimiento que falló mientras el borrado de una tarea hermana sí se completó. El rollback conservó `Fixture task` y `Third task` en `Source`; la tarea eliminada no reapareció.
 
 ## Verificaciones
 
 - `pnpm typecheck` — pasó.
-- `pnpm exec biome lint next.config.ts src/lib/types.ts src/lib/validations.ts src/lib/db/tasks.ts src/hooks/use-board/use-task-operations.ts` — pasó.
-- `pnpm exec biome check src/hooks/use-board/use-task-operations.ts --line-ending=crlf` — pasó.
-- `pnpm lint` — Biome revisó 74 archivos y pasó después de normalizar temporalmente los finales de texto rastreados a LF.
+- `pnpm exec biome check . --line-ending=crlf` — pasó en los 75 archivos del checkout Windows.
 - `pnpm build` — pasó con Next.js 16.4.2.
 - `scripts/test-db.sh` sobre clúster PostgreSQL descartable — pasó.
 
-El checkout volvió a sus finales de línea originales CRLF. Con `core.autocrlf=true`, el chequeo de formato de Biome sobre el checkout solicita LF, mientras los blobs del repositorio están en LF.
+El checkout conserva sus finales de línea originales CRLF. Con `core.autocrlf=true`, se usó `--line-ending=crlf` para que Biome comprobara los finales presentes en Windows sin cambiar la configuración del repositorio.

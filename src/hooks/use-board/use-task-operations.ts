@@ -34,7 +34,6 @@ interface TaskPositionSnapshot {
   position: number;
   version: number;
   optimistic_column_id: string;
-  optimistic_position: number;
 }
 
 function restoreMovePositions(
@@ -63,10 +62,10 @@ function restoreMovePositions(
   for (const column of current) {
     for (const task of column.tasks) {
       const snapshot = restorable.get(task.id);
+      // Deleting a sibling compacts indices without superseding the move.
       const shouldRestore =
         snapshot !== undefined &&
-        task.column_id === snapshot.optimistic_column_id &&
-        task.position === snapshot.optimistic_position;
+        task.column_id === snapshot.optimistic_column_id;
       const columnId = shouldRestore ? snapshot.column_id : column.id;
       const position = shouldRestore ? snapshot.position : task.position;
       const tasks = tasksByColumn.get(columnId) ?? [];
@@ -202,11 +201,12 @@ export function useTaskOperations({
         priority?: Priority;
       },
     ) => {
-      const snapshot = columnsRef.current ?? [];
-      taskEditVersions.current.set(
-        taskId,
-        (taskEditVersions.current.get(taskId) ?? 0) + 1,
-      );
+      const taskBeforeEdit = (columnsRef.current ?? [])
+        .flatMap((col) => col.tasks)
+        .find((task) => task.id === taskId);
+      const previousTask = taskBeforeEdit ? { ...taskBeforeEdit } : undefined;
+      const editVersion = (taskEditVersions.current.get(taskId) ?? 0) + 1;
+      taskEditVersions.current.set(taskId, editVersion);
       setColumns((prev) =>
         prev.map((col) => ({
           ...col,
@@ -223,7 +223,29 @@ export function useTaskOperations({
           await updateTask(supabase, slug, { id: taskId, ...updates });
           onMutationRef.current?.();
         } catch {
-          setColumns(snapshot);
+          setColumns((current) => {
+            if (
+              !previousTask ||
+              taskEditVersions.current.get(taskId) !== editVersion
+            ) {
+              return current;
+            }
+
+            return current.map((col) => ({
+              ...col,
+              tasks: col.tasks.map((task) =>
+                task.id === taskId
+                  ? {
+                      ...task,
+                      title: previousTask.title,
+                      description: previousTask.description,
+                      priority: previousTask.priority,
+                      updated_at: previousTask.updated_at,
+                    }
+                  : task,
+              ),
+            }));
+          });
           showMutationError("update task");
         }
       });
@@ -244,6 +266,8 @@ export function useTaskOperations({
       const snapshot = columnsRef.current ?? [];
       taskEditVersions.current.delete(taskId);
       taskPositionVersions.current.delete(taskId);
+      // Keep the move version for surviving siblings so rollback can reinsert
+      // the moved task into their original order after this deletion.
       setColumns((prev) =>
         prev.map((col) => ({
           ...col,
@@ -307,7 +331,6 @@ export function useTaskOperations({
             position: task.position,
             version,
             optimistic_column_id: column.id,
-            optimistic_position: task.position,
           });
         }
       }
@@ -338,7 +361,6 @@ export function useTaskOperations({
           const snapshot = positionSnapshot.get(task.id);
           if (snapshot) {
             snapshot.optimistic_column_id = col.id;
-            snapshot.optimistic_position = task.position;
           }
         }
 

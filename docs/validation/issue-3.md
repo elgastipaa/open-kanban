@@ -34,6 +34,8 @@ Se usaron dos páginas de Chromium contra la aplicación y Supabase locales, con
 4. En una ventana de 390 × 844, el control móvil `Move to` movió la misma tarea de vuelta a `Source`. Su RPC también incluyó únicamente `{id, column_id, position}`.
 5. En otra página, el servidor aplicó un movimiento y retuvo su respuesta. Antes de liberarla, la misma página editó título, descripción y prioridad. La edición quedó en cola; después de liberar la respuesta del movimiento, la interfaz y la base conservaron los nuevos campos en `Done`.
 6. Se retuvo el movimiento siguiente y se respondió con un 500 simulado. Mientras esperaba, la página editó la tarea. Al fallar el movimiento, la tarea volvió a `Source`; la edición encolada quedó visible y persistida.
+7. Se retuvo una edición y se respondió con un 500 simulado mientras la página movía la tarea. La edición falló, pero el movimiento encolado terminó en `Done` y la base conservó los campos originales.
+8. Se retuvo un movimiento y se respondió con un 500 simulado mientras se eliminaba una tarea hermana. El rollback devolvió la tarea a `Source` delante de la hermana restante; la interfaz y la base conservaron el orden `Fixture task`, `Third task` y la tarea eliminada no volvió.
 
 ## Verificaciones
 

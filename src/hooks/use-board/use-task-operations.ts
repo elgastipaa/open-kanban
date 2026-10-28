@@ -13,6 +13,7 @@ import type {
   CreateTaskPayload,
   Priority,
   Task,
+  TaskPositionUpdate,
 } from "@/lib/types";
 import { generateUUID } from "@/lib/utils";
 import { showMutationError } from "./utils";
@@ -214,7 +215,7 @@ export function useTaskOperations({
 
       const newCols = currentCols.map((col) => ({
         ...col,
-        tasks: [...col.tasks],
+        tasks: col.tasks.map((task) => ({ ...task })),
       }));
 
       const sourceCol = newCols.find((c) => c.id === sourceColId);
@@ -238,7 +239,7 @@ export function useTaskOperations({
 
       if (!isPersistedRef.current) return;
 
-      const tasksToUpdate: Task[] = [];
+      const tasksToUpdate: TaskPositionUpdate[] = [];
       const affected =
         sourceColId === destColId ? [destCol] : [sourceCol, destCol];
       for (const col of affected) {
@@ -246,7 +247,7 @@ export function useTaskOperations({
         for (const task of col.tasks) {
           if (task.id.startsWith("local-")) continue;
           tasksToUpdate.push({
-            ...task,
+            id: task.id,
             column_id: col.id,
             position: task.position,
           });
@@ -256,7 +257,20 @@ export function useTaskOperations({
       if (tasksToUpdate.length > 0) {
         enqueue(async () => {
           try {
-            await updateTaskPositions(supabase, slug, tasksToUpdate);
+            const savedTasks = await updateTaskPositions(
+              supabase,
+              slug,
+              tasksToUpdate,
+            );
+            const savedById = new Map(
+              savedTasks.map((task) => [task.id, task]),
+            );
+            setColumns((current) =>
+              current.map((col) => ({
+                ...col,
+                tasks: col.tasks.map((task) => savedById.get(task.id) ?? task),
+              })),
+            );
             onMutationRef.current?.();
           } catch {
             setColumns(snapshot);

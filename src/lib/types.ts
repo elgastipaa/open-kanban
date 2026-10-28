@@ -60,8 +60,13 @@ export interface UpdateTaskPayload {
   title?: string;
   description?: string | null;
   priority?: Priority;
+}
+
+/** Position-only change made by dragging or mobile move controls. */
+export interface TaskPositionUpdate {
+  id: string;
   column_id?: string;
-  position?: number;
+  position: number;
 }
 
 /** Payload for creating a new column */

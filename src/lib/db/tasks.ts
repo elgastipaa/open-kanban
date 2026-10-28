@@ -1,5 +1,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { CreateTaskPayload, Task, UpdateTaskPayload } from "@/lib/types";
+import type {
+  CreateTaskPayload,
+  Task,
+  TaskPositionUpdate,
+  UpdateTaskPayload,
+} from "@/lib/types";
 import { createTaskSchema, updateTaskSchema } from "@/lib/validations";
 import { handleSupabaseError } from "./errors";
 
@@ -39,7 +44,7 @@ export async function createTask(
   return response.data as Task;
 }
 
-/** Update a task (title, description, priority, column_id, position) */
+/** Update only explicitly supplied task fields; null clears description. */
 export async function updateTask(
   supabase: SupabaseClient,
   slug: string,
@@ -49,14 +54,10 @@ export async function updateTask(
 
   const { id, ...updates } = payload;
   const response = await supabase
-    .rpc("update_task_p", {
+    .rpc("edit_task_fields_p", {
       p_slug: slug,
       p_id: id,
-      p_title: updates.title ?? null,
-      p_description: updates.description ?? null,
-      p_priority: updates.priority ?? null,
-      p_column_id: updates.column_id ?? null,
-      p_position: updates.position ?? null,
+      p_updates: updates,
     })
     .single();
 
@@ -80,13 +81,13 @@ export async function deleteTask(
 /** Maximum batch size for position updates (Finding #4) */
 const MAX_BATCH_SIZE = 200;
 
-/** Batch update task positions and/or column assignments */
+/** Batch update only task positions and optional column assignments. */
 export async function updateTaskPositions(
   supabase: SupabaseClient,
   slug: string,
-  updates: Task[],
-): Promise<void> {
-  if (updates.length === 0) return;
+  updates: TaskPositionUpdate[],
+): Promise<Task[]> {
+  if (updates.length === 0) return [];
 
   // Deduplicate by ID to prevent updating the same row twice in one batch
   const uniqueUpdates = Array.from(
@@ -100,16 +101,14 @@ export async function updateTaskPositions(
 
   const payload = uniqueUpdates.map((task) => ({
     id: task.id,
-    column_id: task.column_id,
+    ...(task.column_id !== undefined && { column_id: task.column_id }),
     position: task.position,
-    title: task.title,
-    description: task.description,
-    priority: task.priority,
   }));
 
-  const { error } = await supabase.rpc("update_task_positions_p", {
+  const { data, error } = await supabase.rpc("update_task_positions_p", {
     p_slug: slug,
     p_updates: payload,
   });
   if (error) handleSupabaseError(error);
+  return (data as Task[]) ?? [];
 }

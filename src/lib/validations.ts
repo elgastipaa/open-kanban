@@ -60,6 +60,4 @@ export const updateTaskSchema = z.object({
   title: taskTitleSchema.optional(),
   description: taskDescriptionSchema,
   priority: prioritySchema.optional(),
-  column_id: z.string().uuid().optional(),
-  position: z.number().int().nonnegative().optional(),
 });

@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import {
   createColumn,
   createTask,
@@ -29,6 +29,70 @@ interface UseTaskOperationsProps {
   enqueue: (op: () => Promise<void>) => void;
 }
 
+interface TaskPositionSnapshot {
+  column_id: string;
+  position: number;
+  version: number;
+  optimistic_column_id: string;
+  optimistic_position: number;
+}
+
+function restoreMovePositions(
+  current: ColumnWithTasks[],
+  snapshots: Map<string, TaskPositionSnapshot>,
+  positionVersions: Map<string, number>,
+): ColumnWithTasks[] {
+  const columnIds = new Set(current.map((column) => column.id));
+  const restorable = new Map<string, TaskPositionSnapshot>();
+
+  for (const [taskId, snapshot] of snapshots) {
+    if (
+      positionVersions.get(taskId) === snapshot.version &&
+      columnIds.has(snapshot.column_id)
+    ) {
+      restorable.set(taskId, snapshot);
+    }
+  }
+
+  const tasksByColumn = new Map<
+    string,
+    { task: Task; position: number; order: number }[]
+  >();
+  let order = 0;
+
+  for (const column of current) {
+    for (const task of column.tasks) {
+      const snapshot = restorable.get(task.id);
+      const shouldRestore =
+        snapshot !== undefined &&
+        task.column_id === snapshot.optimistic_column_id &&
+        task.position === snapshot.optimistic_position;
+      const columnId = shouldRestore ? snapshot.column_id : column.id;
+      const position = shouldRestore ? snapshot.position : task.position;
+      const tasks = tasksByColumn.get(columnId) ?? [];
+      tasks.push({ task, position, order });
+      tasksByColumn.set(columnId, tasks);
+      order += 1;
+    }
+  }
+
+  return current.map((column) => {
+    const tasks = (tasksByColumn.get(column.id) ?? []).sort(
+      (left, right) =>
+        left.position - right.position || left.order - right.order,
+    );
+
+    return {
+      ...column,
+      tasks: tasks.map(({ task }, position) => ({
+        ...task,
+        column_id: column.id,
+        position,
+      })),
+    };
+  });
+}
+
 export function useTaskOperations({
   slug,
   supabase,
@@ -39,6 +103,9 @@ export function useTaskOperations({
   persistBoard,
   enqueue,
 }: UseTaskOperationsProps) {
+  const taskEditVersions = useRef(new Map<string, number>());
+  const taskPositionVersions = useRef(new Map<string, number>());
+
   const addTask = useCallback(
     (columnId: string, title: string, priority: Priority = "medium") => {
       const currentCols = columnsRef.current ?? [];
@@ -136,6 +203,10 @@ export function useTaskOperations({
       },
     ) => {
       const snapshot = columnsRef.current ?? [];
+      taskEditVersions.current.set(
+        taskId,
+        (taskEditVersions.current.get(taskId) ?? 0) + 1,
+      );
       setColumns((prev) =>
         prev.map((col) => ({
           ...col,
@@ -171,6 +242,8 @@ export function useTaskOperations({
   const removeTask = useCallback(
     (taskId: string) => {
       const snapshot = columnsRef.current ?? [];
+      taskEditVersions.current.delete(taskId);
+      taskPositionVersions.current.delete(taskId);
       setColumns((prev) =>
         prev.map((col) => ({
           ...col,
@@ -211,7 +284,6 @@ export function useTaskOperations({
       destIndex: number,
     ) => {
       const currentCols = columnsRef.current ?? [];
-      const snapshot = currentCols;
 
       const newCols = currentCols.map((col) => ({
         ...col,
@@ -221,6 +293,24 @@ export function useTaskOperations({
       const sourceCol = newCols.find((c) => c.id === sourceColId);
       const destCol = newCols.find((c) => c.id === destColId);
       if (!sourceCol || !destCol) return;
+
+      if (!sourceCol.tasks[sourceIndex]) return;
+
+      const positionSnapshot = new Map<string, TaskPositionSnapshot>();
+      for (const column of currentCols) {
+        if (column.id !== sourceColId && column.id !== destColId) continue;
+        for (const task of column.tasks) {
+          const version = (taskPositionVersions.current.get(task.id) ?? 0) + 1;
+          taskPositionVersions.current.set(task.id, version);
+          positionSnapshot.set(task.id, {
+            column_id: column.id,
+            position: task.position,
+            version,
+            optimistic_column_id: column.id,
+            optimistic_position: task.position,
+          });
+        }
+      }
 
       const [movedTask] = sourceCol.tasks.splice(sourceIndex, 1);
       if (!movedTask) return;
@@ -240,9 +330,18 @@ export function useTaskOperations({
       if (!isPersistedRef.current) return;
 
       const tasksToUpdate: TaskPositionUpdate[] = [];
+      const editVersionsAtMove = new Map<string, number>();
       const affected =
         sourceColId === destColId ? [destCol] : [sourceCol, destCol];
       for (const col of affected) {
+        for (const task of col.tasks) {
+          const snapshot = positionSnapshot.get(task.id);
+          if (snapshot) {
+            snapshot.optimistic_column_id = col.id;
+            snapshot.optimistic_position = task.position;
+          }
+        }
+
         if (col.id.startsWith("local-")) continue;
         for (const task of col.tasks) {
           if (task.id.startsWith("local-")) continue;
@@ -251,6 +350,10 @@ export function useTaskOperations({
             column_id: col.id,
             position: task.position,
           });
+          editVersionsAtMove.set(
+            task.id,
+            taskEditVersions.current.get(task.id) ?? 0,
+          );
         }
       }
 
@@ -268,12 +371,34 @@ export function useTaskOperations({
             setColumns((current) =>
               current.map((col) => ({
                 ...col,
-                tasks: col.tasks.map((task) => savedById.get(task.id) ?? task),
+                tasks: col.tasks.map((task) => {
+                  const savedTask = savedById.get(task.id);
+                  if (!savedTask) return task;
+
+                  const editedAfterMoveStarted =
+                    (taskEditVersions.current.get(task.id) ?? 0) >
+                    (editVersionsAtMove.get(task.id) ?? 0);
+                  if (editedAfterMoveStarted) return task;
+
+                  return {
+                    ...task,
+                    title: savedTask.title,
+                    description: savedTask.description,
+                    priority: savedTask.priority,
+                    updated_at: savedTask.updated_at,
+                  };
+                }),
               })),
             );
             onMutationRef.current?.();
           } catch {
-            setColumns(snapshot);
+            setColumns((current) =>
+              restoreMovePositions(
+                current,
+                positionSnapshot,
+                taskPositionVersions.current,
+              ),
+            );
             showMutationError("move task");
           }
         });

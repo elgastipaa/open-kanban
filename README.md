@@ -62,9 +62,10 @@ pnpm install --frozen-lockfile
    * `010_batch_toggle_columns_collapse.sql`
    * `011_batch_size_guards.sql`
    * `012_harden_rpc_access.sql`
+   * `013_separate_task_edits_from_moves.sql`
 4. Copy the project URL and **publishable** key from the Connect dialog or Settings → API Keys.
 
-Do not expose the instance before migration 012 is applied. Apply these scripts only once to a new dedicated project; do not blindly rerun the full history on an existing database. Remote SQL execution requires the owner's approval.
+Do not expose the instance before migration 013 is applied. Apply these scripts only once to a new dedicated project; do not blindly rerun the full history on an existing database. Remote SQL execution requires the owner's approval.
 
 Keep Realtime and public channels enabled for the original Broadcast/Presence behavior. Auth, email, Storage, and Postgres Changes subscriptions are not required.
 

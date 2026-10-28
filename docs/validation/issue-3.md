@@ -11,6 +11,7 @@
 - La migración `013_separate_task_edits_from_moves.sql` reemplaza la mutación combinada por `edit_task_fields_p` y limita `update_task_positions_p` a `id`, `column_id` y `position`.
 - La edición recibe solo las claves explícitas. Una descripción omitida conserva su valor y `description: null` la borra.
 - El movimiento devuelve las filas actuales para que el cliente que partió de una vista desactualizada muestre el contenido más reciente después de mover.
+- La reconciliación preserva ediciones del mismo cliente iniciadas durante el movimiento; si falla, revierte únicamente posiciones que no hayan cambiado por una operación posterior.
 - El batch valida todas las entradas antes de actualizar; rechaza campos de contenido, tareas de otro tablero y batches inválidos sin aplicar cambios parciales.
 
 ## Evidencia
@@ -31,11 +32,14 @@ Se usaron dos páginas de Chromium contra la aplicación y Supabase locales, con
 2. La página B cambió título, descripción y prioridad desde el editor. La página A siguió mostrando los datos originales.
 3. Desde A, el teclado movió la tarea de `Source` a `Done`. El RPC registrado incluyó únicamente `{id, column_id, position}`. La interfaz de A mostró los campos editados más recientes y una lectura directa de la base confirmó esos campos con la nueva columna.
 4. En una ventana de 390 × 844, el control móvil `Move to` movió la misma tarea de vuelta a `Source`. Su RPC también incluyó únicamente `{id, column_id, position}`.
+5. En otra página, el servidor aplicó un movimiento y retuvo su respuesta. Antes de liberarla, la misma página editó título, descripción y prioridad. La edición quedó en cola; después de liberar la respuesta del movimiento, la interfaz y la base conservaron los nuevos campos en `Done`.
+6. Se retuvo el movimiento siguiente y se respondió con un 500 simulado. Mientras esperaba, la página editó la tarea. Al fallar el movimiento, la tarea volvió a `Source`; la edición encolada quedó visible y persistida.
 
 ## Verificaciones
 
 - `pnpm typecheck` — pasó.
 - `pnpm exec biome lint next.config.ts src/lib/types.ts src/lib/validations.ts src/lib/db/tasks.ts src/hooks/use-board/use-task-operations.ts` — pasó.
+- `pnpm exec biome check src/hooks/use-board/use-task-operations.ts --line-ending=crlf` — pasó.
 - `pnpm lint` — Biome revisó 74 archivos y pasó después de normalizar temporalmente los finales de texto rastreados a LF.
 - `pnpm build` — pasó con Next.js 16.4.2.
 - `scripts/test-db.sh` sobre clúster PostgreSQL descartable — pasó.

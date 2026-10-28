@@ -278,7 +278,6 @@ export function useTaskOperations({
       });
 
       const allPositionUpdates: TaskPositionUpdate[] = [];
-      const tasksToUpdate: TaskPositionUpdate[] = [];
       const affected =
         sourceColId === destColId ? [destCol] : [sourceCol, destCol];
       for (const col of affected) {
@@ -292,7 +291,6 @@ export function useTaskOperations({
 
           if (col.id.startsWith("local-")) continue;
           if (task.id.startsWith("local-")) continue;
-          tasksToUpdate.push(update);
         }
       }
 
@@ -304,7 +302,18 @@ export function useTaskOperations({
       const optimisticColumns = ledger.begin(intent, currentCols);
       setColumns(optimisticColumns);
 
-      if (!isPersistedRef.current || tasksToUpdate.length === 0) {
+      const includesLocalTask = allPositionUpdates.some((update) =>
+        update.id.startsWith("local-"),
+      );
+      const includesPersistedTask = allPositionUpdates.some(
+        (update) =>
+          !update.id.startsWith("local-") &&
+          !update.column_id?.startsWith("local-"),
+      );
+      if (
+        !isPersistedRef.current ||
+        (!includesPersistedTask && !includesLocalTask)
+      ) {
         setColumns(
           ledger.settle(intent.id, optimisticColumns, {
             kind: "positions-saved",
@@ -316,6 +325,20 @@ export function useTaskOperations({
 
       enqueue(async () => {
         try {
+          const tasksToUpdate = intent.updates.filter(
+            (update) =>
+              !update.id.startsWith("local-") &&
+              !update.column_id?.startsWith("local-"),
+          );
+          if (tasksToUpdate.length === 0) {
+            setColumns(
+              ledger.settle(intent.id, columnsRef.current ?? [], {
+                kind: "positions-saved",
+                tasks: [],
+              }),
+            );
+            return;
+          }
           const savedTasks = await updateTaskPositions(
             supabase,
             slug,

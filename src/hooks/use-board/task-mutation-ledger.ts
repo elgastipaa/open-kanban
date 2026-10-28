@@ -25,6 +25,18 @@ export type TaskMutationResult =
   | { kind: "positions-saved"; tasks: Task[] }
   | { kind: "task-deleted" };
 
+function compareTimestamps(left: string, right: string): number {
+  const millisecondDifference = Date.parse(left) - Date.parse(right);
+  if (millisecondDifference !== 0) return millisecondDifference;
+
+  const subMillisecondPart = (value: string) => {
+    const fraction = /\.(\d+)(?:Z|[+-]\d{2}(?::?\d{2})?)?$/.exec(value)?.[1];
+    return Number((fraction ?? "").padEnd(6, "0").slice(3, 6));
+  };
+
+  return subMillisecondPart(left) - subMillisecondPart(right);
+}
+
 /**
  * Keeps confirmed task rows separate from optimistic task intents. A failed
  * intent is discarded and the remaining intents are projected over confirmed
@@ -34,13 +46,25 @@ export type TaskMutationResult =
 export class TaskMutationLedger {
   private confirmedTasks = new Map<string, Task>();
   private pendingIntents: TaskMutationIntent[] = [];
+  private deletedTaskIds = new Set<string>();
 
   constructor(columns: ColumnWithTasks[]) {
     this.sync(columns, true);
   }
 
   sync(columns: ColumnWithTasks[], resetPending = false): ColumnWithTasks[] {
-    if (resetPending) this.pendingIntents = [];
+    if (resetPending) {
+      this.pendingIntents = [];
+      this.deletedTaskIds.clear();
+    } else {
+      const incomingIds = new Set(
+        columns.flatMap((column) => column.tasks.map((task) => task.id)),
+      );
+      for (const taskId of this.confirmedTasks.keys()) {
+        if (!incomingIds.has(taskId)) this.deletedTaskIds.add(taskId);
+      }
+      for (const taskId of incomingIds) this.deletedTaskIds.delete(taskId);
+    }
     this.confirmedTasks = new Map(
       columns.flatMap((column) =>
         column.tasks.map((task) => [task.id, { ...task }] as const),
@@ -84,6 +108,7 @@ export class TaskMutationLedger {
       }
     } else if (intent.kind === "delete" && saved?.kind === "task-deleted") {
       this.confirmedTasks.delete(intent.taskId);
+      this.deletedTaskIds.add(intent.taskId);
       columns = columns.map((column) => ({
         ...column,
         tasks: column.tasks.filter((task) => task.id !== intent.taskId),
@@ -102,23 +127,24 @@ export class TaskMutationLedger {
     columns: ColumnWithTasks[],
   ): ColumnWithTasks[] {
     this.confirmedTasks.delete(oldId);
+    this.deletedTaskIds.delete(oldId);
+    this.deletedTaskIds.delete(task.id);
     this.confirmedTasks.set(task.id, { ...task });
-    this.pendingIntents = this.pendingIntents.map((intent) => {
+    for (const intent of this.pendingIntents) {
       if (intent.kind === "move") {
-        return {
-          ...intent,
-          updates: intent.updates.map((update) =>
-            update.id === oldId ? { ...update, id: task.id } : update,
-          ),
-        };
+        for (const update of intent.updates) {
+          if (update.id === oldId) update.id = task.id;
+        }
+      } else if (intent.taskId === oldId) {
+        intent.taskId = task.id;
       }
-      return intent.taskId === oldId ? { ...intent, taskId: task.id } : intent;
-    });
+    }
     return this.project(columns);
   }
 
   forgetTask(taskId: string, columns: ColumnWithTasks[]): ColumnWithTasks[] {
     this.confirmedTasks.delete(taskId);
+    this.deletedTaskIds.delete(taskId);
     const retained: TaskMutationIntent[] = [];
     for (const intent of this.pendingIntents) {
       if (intent.kind === "move") {
@@ -143,10 +169,11 @@ export class TaskMutationLedger {
   }
 
   private confirmTask(task: Task): void {
+    if (this.deletedTaskIds.has(task.id)) return;
     const current = this.confirmedTasks.get(task.id);
     const currentFieldsAreNewer =
       current !== undefined &&
-      Date.parse(current.updated_at) > Date.parse(task.updated_at);
+      compareTimestamps(current.updated_at, task.updated_at) > 0;
     this.confirmedTasks.set(
       task.id,
       currentFieldsAreNewer

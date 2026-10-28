@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import {
   createBoard,
   deleteBoard as dbDeleteBoard,
@@ -28,9 +28,12 @@ export function useBoardSync({
   setColumns,
   taskMutationLedger,
 }: UseBoardSyncProps) {
+  const refreshGenerationRef = useRef(0);
+
   const refreshFromDB = useCallback(async () => {
+    const generation = ++refreshGenerationRef.current;
     const data = await getFullBoard(supabase, slug);
-    if (data) {
+    if (generation === refreshGenerationRef.current && data) {
       boardRef.current = data.board;
       isPersistedRef.current = true;
       setBoard(data.board);
@@ -67,6 +70,7 @@ export function useBoardSync({
         return;
       }
     }
+    refreshGenerationRef.current += 1;
     boardRef.current = null;
     isPersistedRef.current = false;
     setBoard(null);
@@ -83,6 +87,7 @@ export function useBoardSync({
 
   const replaceState = useCallback(
     (newBoard: Board | null, newColumns: ColumnWithTasks[]) => {
+      refreshGenerationRef.current += 1;
       boardRef.current = newBoard;
       isPersistedRef.current = newBoard !== null;
       setBoard(newBoard);

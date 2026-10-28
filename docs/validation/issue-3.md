@@ -12,6 +12,7 @@
 - La edición recibe solo las claves explícitas. Una descripción omitida conserva su valor y `description: null` la borra.
 - El movimiento devuelve las filas actuales para que el cliente que partió de una vista desactualizada muestre el contenido más reciente después de mover.
 - El ledger mantiene separadas las filas confirmadas y las intenciones optimistas pendientes. Al confirmar o fallar una petición, vuelve a proyectar solo las intenciones que siguen pendientes, sin restaurar snapshots de todo el tablero.
+- Las respuestas retrasadas no recuperan tareas borradas, los movimientos en cola incorporan las tareas que terminan de crearse antes de ejecutarse y los refreshes se aplican por orden de solicitud.
 - El batch valida todas las entradas antes de actualizar; rechaza campos de contenido, tareas de otro tablero y batches inválidos sin aplicar cambios parciales.
 
 ## Evidencia
@@ -42,6 +43,10 @@ Se usaron dos páginas de Chromium contra la aplicación y Supabase locales, con
 12. Se retuvo una edición que falló y se encoló un movimiento. El movimiento llegó después del fallo; la interfaz y la base conservaron los campos originales en `Done`.
 13. Se retuvo la respuesta de un movimiento después de que el servidor lo aplicó. Un segundo cliente editó la tarea y emitió realtime; la primera página actualizó sus campos mientras la respuesta seguía retenida. Al liberar la respuesta antigua, la interfaz y la base conservaron el título, descripción y prioridad más recientes en `Done`.
 14. Se retuvo un movimiento que falló mientras el borrado de una tarea hermana sí se completó. El rollback conservó `Fixture task` y `Third task` en `Source`; la tarea eliminada no reapareció.
+15. Se retuvo la respuesta de creación después de que el servidor guardó una tarea nueva. Antes de liberarla, se movió la tarjeta local a `Done`. El RPC de posiciones encolado incluyó el ID persistido de la tarea nueva y una consulta directa confirmó que quedó en `Done`.
+16. Se retuvo la respuesta exitosa de un movimiento y un segundo cliente borró esa tarea. La primera página la quitó al recibir realtime y no la recuperó al liberar la respuesta; la base confirmó que seguía borrada.
+17. Se retuvo el primer refresh realtime con una edición externa, luego se permitió completar el refresh de una segunda edición. Al liberar el primer resultado atrasado, la interfaz conservó la segunda edición.
+18. Se repitió la edición externa durante un movimiento retenido con respuestas de red que diferían únicamente en 1 μs (`.123455` y `.123456`) dentro del mismo milisegundo. La interfaz conservó el título y descripción recientes después de liberar la respuesta anterior; una lectura directa confirmó los campos en `Done`.
 
 ## Verificaciones
 

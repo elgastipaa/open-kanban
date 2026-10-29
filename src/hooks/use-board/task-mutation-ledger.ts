@@ -52,6 +52,7 @@ export class TaskMutationLedger {
   private confirmedTasks = new Map<string, Task>();
   private pendingIntents: TaskMutationIntent[] = [];
   private pendingCreations = new Map<string, PendingTaskCreation>();
+  private resolvedTaskIds = new Map<string, string>();
   private deletedTaskIds = new Set<string>();
   private deletedColumnIds = new Set<string>();
   private mutationRevision = 0;
@@ -121,6 +122,7 @@ export class TaskMutationLedger {
       creation !== undefined &&
       creation.syncRevision !== this.boardSyncRevision;
     if (creation?.deleteRequested) {
+      this.resolveTaskId(taskId, task.id);
       this.pendingCreations.delete(taskId);
       this.mutationRevision += 1;
       return {
@@ -138,7 +140,7 @@ export class TaskMutationLedger {
     ) {
       if (creation) {
         creation.persistedTaskId = task.id;
-        this.remapPendingTaskId(taskId, task.id);
+        this.resolveTaskId(taskId, task.id);
       }
       this.mutationRevision += 1;
       return {
@@ -180,6 +182,7 @@ export class TaskMutationLedger {
     const incomingColumns = columns;
     if (resetPending) {
       this.pendingIntents = [];
+      this.resolvedTaskIds.clear();
       this.deletedTaskIds.clear();
       this.deletedColumnIds.clear();
     } else {
@@ -188,13 +191,13 @@ export class TaskMutationLedger {
       );
       const incomingIds = new Set(
         incomingColumns.flatMap((column) =>
-          column.tasks.map((task) => task.id),
+          column.tasks.map((task) => this.resolveTaskIdFor(task.id)),
         ),
       );
       const missingIds = new Set(
         [...this.confirmedTasks.keys()].filter(
           (taskId) =>
-            !incomingIds.has(taskId) && !this.pendingCreations.has(taskId),
+            !incomingIds.has(taskId) && !this.hasPendingCreationFor(taskId),
         ),
       );
       for (const taskId of missingIds) {
@@ -215,7 +218,13 @@ export class TaskMutationLedger {
     }
     this.confirmedTasks = new Map(
       incomingColumns.flatMap((column) =>
-        column.tasks.map((task) => [task.id, { ...task }] as const),
+        column.tasks.map((task) => {
+          const resolvedId = this.resolveTaskIdFor(task.id);
+          return [
+            resolvedId,
+            resolvedId === task.id ? { ...task } : { ...task, id: resolvedId },
+          ] as const;
+        }),
       ),
     );
     this.mutationRevision += 1;
@@ -227,6 +236,13 @@ export class TaskMutationLedger {
     columns: ColumnWithTasks[],
   ): ColumnWithTasks[] {
     this.seedUntrackedTasks(columns);
+    if (intent.kind === "move") {
+      for (const update of intent.updates) {
+        update.id = this.resolveTaskIdFor(update.id);
+      }
+    } else {
+      intent.taskId = this.resolveTaskIdFor(intent.taskId);
+    }
     this.pendingIntents.push(intent);
     return this.project(columns);
   }
@@ -302,7 +318,7 @@ export class TaskMutationLedger {
     this.confirmedTasks.delete(oldId);
     this.deletedTaskIds.delete(oldId);
     this.confirmTask(savedTask);
-    this.remapPendingTaskId(oldId, task.id);
+    this.resolveTaskId(oldId, task.id);
     this.mutationRevision += 1;
     const columnsWithSavedTask = columns.map((column) => ({
       ...column,
@@ -340,9 +356,14 @@ export class TaskMutationLedger {
     return this.project(remappedColumns);
   }
 
-  forgetTask(taskId: string, columns: ColumnWithTasks[]): ColumnWithTasks[] {
+  forgetTask(
+    taskId: string,
+    columns: ColumnWithTasks[],
+    confirmedMissing = false,
+  ): ColumnWithTasks[] {
     this.confirmedTasks.delete(taskId);
-    this.deletedTaskIds.delete(taskId);
+    if (confirmedMissing) this.deletedTaskIds.add(taskId);
+    else this.deletedTaskIds.delete(taskId);
     columns = columns.map((column) => ({
       ...column,
       tasks: column.tasks.filter((task) => task.id !== taskId),
@@ -375,11 +396,40 @@ export class TaskMutationLedger {
     }
   }
 
+  private resolveTaskId(oldId: string, newId: string): void {
+    if (oldId === newId) return;
+    this.resolvedTaskIds.set(oldId, newId);
+    const oldTask = this.confirmedTasks.get(oldId);
+    if (oldTask) {
+      this.confirmedTasks.delete(oldId);
+      this.confirmTask({ ...oldTask, id: newId });
+    }
+    if (this.deletedTaskIds.delete(oldId)) this.deletedTaskIds.add(newId);
+    this.remapPendingTaskId(oldId, newId);
+  }
+
+  private resolveTaskIdFor(taskId: string): string {
+    return this.resolvedTaskIds.get(taskId) ?? taskId;
+  }
+
+  private hasPendingCreationFor(taskId: string): boolean {
+    for (const [temporaryId, creation] of this.pendingCreations) {
+      if (temporaryId === taskId || creation.persistedTaskId === taskId) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private seedUntrackedTasks(columns: ColumnWithTasks[]): void {
     for (const column of columns) {
       for (const task of column.tasks) {
-        if (!this.confirmedTasks.has(task.id)) {
-          this.confirmedTasks.set(task.id, { ...task });
+        const resolvedId = this.resolveTaskIdFor(task.id);
+        if (!this.confirmedTasks.has(resolvedId)) {
+          this.confirmedTasks.set(
+            resolvedId,
+            resolvedId === task.id ? { ...task } : { ...task, id: resolvedId },
+          );
         }
       }
     }
@@ -398,13 +448,17 @@ export class TaskMutationLedger {
   }
 
   private project(columns: ColumnWithTasks[]): ColumnWithTasks[] {
-    const currentTasks = new Map(
-      columns.flatMap((column) =>
-        column.tasks
-          .filter((task) => !this.deletedTaskIds.has(task.id))
-          .map((task) => [task.id, { ...task }] as const),
-      ),
-    );
+    const currentTasks = new Map<string, Task>();
+    for (const column of columns) {
+      for (const task of column.tasks) {
+        const resolvedId = this.resolveTaskIdFor(task.id);
+        if (this.deletedTaskIds.has(resolvedId)) continue;
+        currentTasks.set(
+          resolvedId,
+          resolvedId === task.id ? { ...task } : { ...task, id: resolvedId },
+        );
+      }
+    }
     const pendingDeletes = new Set(
       this.pendingIntents
         .filter((intent) => intent.kind === "delete")
@@ -413,7 +467,11 @@ export class TaskMutationLedger {
     const columnIds = new Set(columns.map((column) => column.id));
 
     for (const [taskId, confirmed] of this.confirmedTasks) {
-      if (!columnIds.has(confirmed.column_id) || pendingDeletes.has(taskId)) {
+      if (
+        !columnIds.has(confirmed.column_id) ||
+        pendingDeletes.has(taskId) ||
+        this.deletedTaskIds.has(taskId)
+      ) {
         continue;
       }
       currentTasks.set(taskId, { ...confirmed });

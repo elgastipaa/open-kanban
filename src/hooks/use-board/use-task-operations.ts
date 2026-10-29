@@ -98,6 +98,7 @@ export function useTaskOperations({
           columnsAfterDelete = ledger.forgetTask(
             persistedTaskId,
             columnsAfterDelete,
+            true,
           );
         }
         setColumns(columnsAfterDelete);
@@ -152,6 +153,37 @@ export function useTaskOperations({
       return creation;
     },
     [columnsRef, ledger, setColumns, slug, supabase],
+  );
+
+  const deleteCreatedTask = useCallback(
+    async (tempTaskId: string, task: Task, columns: ColumnWithTasks[]) => {
+      const deleteIntent: TaskMutationIntent = {
+        id: generateUUID(),
+        kind: "delete",
+        taskId: task.id,
+      };
+      const optimisticDelete = ledger.begin(deleteIntent, columns);
+      setColumns(optimisticDelete);
+      try {
+        await dbDeleteTask(supabase, slug, task.id);
+      } catch {
+        const rolledBack = ledger.settle(
+          deleteIntent.id,
+          columnsRef.current ?? optimisticDelete,
+        );
+        setColumns(ledger.replaceTaskId(tempTaskId, task, rolledBack));
+        showMutationError("delete task");
+        return;
+      }
+      const deletedColumns = ledger.settle(
+        deleteIntent.id,
+        columnsRef.current ?? optimisticDelete,
+        { kind: "task-deleted" },
+      );
+      setColumns(ledger.forgetTask(tempTaskId, deletedColumns));
+      onMutationRef.current?.();
+    },
+    [columnsRef, ledger, onMutationRef, setColumns, slug, supabase],
   );
 
   const addTask = useCallback(
@@ -237,7 +269,15 @@ export function useTaskOperations({
                     dbTask,
                     columnsRef.current ?? [],
                   );
-                  if (resolution) onMutationRef.current?.();
+                  if (resolution?.deleteRequested) {
+                    await deleteCreatedTask(
+                      tempTask.id,
+                      dbTask,
+                      resolution.columns,
+                    );
+                  } else if (resolution) {
+                    onMutationRef.current?.();
+                  }
                 } catch {
                   showTaskVerificationError(retryVerification);
                 }
@@ -257,34 +297,7 @@ export function useTaskOperations({
             }
           }
           if (creation.deleteRequested) {
-            const deleteIntent: TaskMutationIntent = {
-              id: generateUUID(),
-              kind: "delete",
-              taskId: dbTask.id,
-            };
-            const optimisticDelete = ledger.begin(
-              deleteIntent,
-              creation.columns,
-            );
-            setColumns(optimisticDelete);
-            try {
-              await dbDeleteTask(supabase, slug, dbTask.id);
-            } catch {
-              const rolledBack = ledger.settle(
-                deleteIntent.id,
-                columnsRef.current ?? optimisticDelete,
-              );
-              setColumns(ledger.replaceTaskId(tempTask.id, dbTask, rolledBack));
-              showMutationError("delete task");
-              return;
-            }
-            const deletedColumns = ledger.settle(
-              deleteIntent.id,
-              columnsRef.current ?? optimisticDelete,
-              { kind: "task-deleted" },
-            );
-            setColumns(ledger.forgetTask(tempTask.id, deletedColumns));
-            onMutationRef.current?.();
+            await deleteCreatedTask(tempTask.id, dbTask, creation.columns);
             return;
           }
 
@@ -312,6 +325,7 @@ export function useTaskOperations({
       setColumns,
       ledger,
       verifyTaskCreation,
+      deleteCreatedTask,
       enqueue,
       persistBoard,
       supabase,

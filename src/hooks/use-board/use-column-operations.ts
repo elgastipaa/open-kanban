@@ -248,8 +248,9 @@ export function useColumnOperations({
             setColumns(newCols);
             onMutationRef.current?.();
           } else {
-            ledger.restoreColumnAfterFailedDelete(columnId);
-            setColumns(snapshot);
+            setColumns(
+              ledger.restoreColumnAfterFailedDelete(columnId, snapshot),
+            );
           }
           showMutationError(
             deleteCommitted ? "reorder columns" : "delete column",

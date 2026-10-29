@@ -232,11 +232,12 @@ export function useTaskOperations({
                   return;
                 }
                 try {
-                  await verifyTaskCreation(
+                  const resolution = await verifyTaskCreation(
                     tempTask.id,
                     dbTask,
                     columnsRef.current ?? [],
                   );
+                  if (resolution) onMutationRef.current?.();
                 } catch {
                   showTaskVerificationError(retryVerification);
                 }

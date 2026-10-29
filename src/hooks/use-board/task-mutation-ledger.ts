@@ -94,8 +94,12 @@ export class TaskMutationLedger {
     this.mutationRevision += 1;
   }
 
-  restoreColumnAfterFailedDelete(columnId: string): void {
+  restoreColumnAfterFailedDelete(
+    columnId: string,
+    columns: ColumnWithTasks[],
+  ): ColumnWithTasks[] {
     if (this.deletedColumnIds.delete(columnId)) this.mutationRevision += 1;
+    return this.project(columns);
   }
 
   columnWasDeleted(columnId: string): boolean {
@@ -173,6 +177,7 @@ export class TaskMutationLedger {
 
   sync(columns: ColumnWithTasks[], resetPending = false): ColumnWithTasks[] {
     this.boardSyncRevision += 1;
+    const incomingColumns = columns;
     if (resetPending) {
       this.pendingIntents = [];
       this.deletedTaskIds.clear();
@@ -182,7 +187,9 @@ export class TaskMutationLedger {
         (column) => !this.deletedColumnIds.has(column.id),
       );
       const incomingIds = new Set(
-        columns.flatMap((column) => column.tasks.map((task) => task.id)),
+        incomingColumns.flatMap((column) =>
+          column.tasks.map((task) => task.id),
+        ),
       );
       const missingIds = new Set(
         [...this.confirmedTasks.keys()].filter(
@@ -207,7 +214,7 @@ export class TaskMutationLedger {
       }
     }
     this.confirmedTasks = new Map(
-      columns.flatMap((column) =>
+      incomingColumns.flatMap((column) =>
         column.tasks.map((task) => [task.id, { ...task }] as const),
       ),
     );
@@ -393,7 +400,9 @@ export class TaskMutationLedger {
   private project(columns: ColumnWithTasks[]): ColumnWithTasks[] {
     const currentTasks = new Map(
       columns.flatMap((column) =>
-        column.tasks.map((task) => [task.id, { ...task }] as const),
+        column.tasks
+          .filter((task) => !this.deletedTaskIds.has(task.id))
+          .map((task) => [task.id, { ...task }] as const),
       ),
     );
     const pendingDeletes = new Set(

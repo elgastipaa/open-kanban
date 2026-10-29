@@ -1,10 +1,10 @@
 # Issue #3: separar mover de editar una tarea
 
-**Fecha:** 2026-10-28
+**Fecha:** 2026-10-28–29
 
 **Base:** `1aea3ef2ebbfbc7b73d493c10b886daa2605775f`
 
-**Entorno:** Node.js 24.14.1, pnpm 11.25.0, Next.js 16.4.2, Chrome 155.0.8059.40 y PostgreSQL 17.11.
+**Entorno:** Node.js 24.14.1, pnpm 11.25.0, Next.js 16.4.2 y Chrome 155.0.8059.40. Las pruebas de navegador usaron Supabase local con PostgreSQL 17.11; la corrida final de `scripts/test-db.sh` usó PostgreSQL 16.15 en WSL.
 
 ## Resultado
 
@@ -20,7 +20,7 @@
 
 ### Base de datos
 
-`scripts/test-db.sh` se ejecutó como `postgres` desde una copia temporal dentro del contenedor local aislado y creó allí un clúster PostgreSQL descartable. Aplicó las migraciones 001–014. Pasaron las regresiones de edición/movimiento, descripción omitida y `null`, rechazo atómico de batches, límites entre tableros, RLS y concurrencia real.
+Antes de agregar la migración 014, las migraciones 001–013 y los escenarios de navegador se comprobaron contra el Supabase local aislado (PostgreSQL 17.11). La corrida final de `scripts/test-db.sh` aplicó 001–014 como `postgres` en un clúster descartable de PostgreSQL 16.15 en WSL. Para Bash se usó una copia LF temporal del runner, sin normalizar el archivo rastreado. Pasaron las regresiones de edición/movimiento, descripción omitida y `null`, rechazo atómico de batches, límites entre tableros, RLS y concurrencia real.
 
 La prueba concurrente retuvo el lock de una tarea en una transacción de edición mientras otra sesión iniciaba el RPC de movimiento. El movimiento esperó el lock; tras el commit de edición, ambas modificaciones quedaron presentes.
 
@@ -72,4 +72,4 @@ Se usaron dos páginas de Chromium contra la aplicación y Supabase locales, con
 - `pnpm build` — pasó con Next.js 16.4.2.
 - `scripts/test-db.sh` sobre clúster PostgreSQL descartable en PostgreSQL 16 — pasó, con la prueba de orden de escritura de `updated_at`.
 
-El checkout conserva sus finales de línea originales CRLF. Con `core.autocrlf=true`, se usó `--line-ending=crlf` para que Biome comprobara los finales presentes en Windows sin cambiar la configuración del repositorio. Para el runner Bash de base de datos se usó una copia LF temporal en PostgreSQL 16; el archivo rastreado no se normalizó.
+El checkout conserva sus finales de línea originales CRLF. Con `core.autocrlf=true`, se usó `--line-ending=crlf` para que Biome comprobara los finales presentes en Windows sin cambiar la configuración del repositorio. Para el runner Bash de base de datos se usó una copia LF temporal en PostgreSQL 16.15; el archivo rastreado no se normalizó.

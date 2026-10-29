@@ -139,4 +139,89 @@ END;
 $$;
 SQL
 echo 'PASS: concurrent task edit and move preserve current task fields.'
+
+# A transaction may start before an edit but reach its task update afterward.
+# updated_at must follow the row-write order, not transaction start time.
+write_order_dir="$test_dir/task-write-order-race"
+mkdir -- "$write_order_dir"
+write_order_mover_log="$write_order_dir/mover.log"
+
+"${psql[@]}" -q <<'SQL'
+INSERT INTO public.boards (id, slug) VALUES
+  ('10000000-0000-4000-8000-000000000002', 'task-write-order-race');
+INSERT INTO public.columns (id, board_id, title, position) VALUES
+  ('20000000-0000-4000-8000-000000000003', '10000000-0000-4000-8000-000000000002', 'Source', 0),
+  ('20000000-0000-4000-8000-000000000004', '10000000-0000-4000-8000-000000000002', 'Destination', 1);
+INSERT INTO public.tasks (id, column_id, title, description, priority, position) VALUES
+  ('30000000-0000-4000-8000-000000000002', '20000000-0000-4000-8000-000000000003', 'Order title', 'Order description', 'medium', 0);
+CREATE TABLE public.task_write_order_reference (
+  task_id uuid PRIMARY KEY,
+  edit_updated_at timestamptz NOT NULL
+);
+SQL
+
+PGAPPNAME=openkanban_write_order_mover "${psql[@]}" > "$write_order_mover_log" 2>&1 <<'SQL' &
+BEGIN;
+SELECT pg_sleep(6);
+SELECT public.update_task_positions_p(
+  'task-write-order-race',
+  '[{"id":"30000000-0000-4000-8000-000000000002","column_id":"20000000-0000-4000-8000-000000000004","position":0}]'::jsonb
+);
+COMMIT;
+SQL
+write_order_mover_pid=$!
+
+mover_transaction_open=false
+for _ in $(seq 1 100); do
+  mover_state=$("${psql[@]}" -At -c "SELECT state FROM pg_stat_activity WHERE application_name = 'openkanban_write_order_mover' AND state = 'active' AND query LIKE '%pg_sleep(6)%'")
+  if [[ "$mover_state" == active ]]; then
+    mover_transaction_open=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$mover_transaction_open" != true ]]; then
+  cat -- "$write_order_mover_log" >&2
+  echo 'The delayed mover transaction did not start.' >&2
+  exit 1
+fi
+
+"${psql[@]}" -q <<'SQL'
+SELECT public.edit_task_fields_p(
+  'task-write-order-race',
+  '30000000-0000-4000-8000-000000000002',
+  '{"title":"Edited before the delayed move","description":"Newer fields","priority":"high"}'::jsonb
+);
+INSERT INTO public.task_write_order_reference (task_id, edit_updated_at)
+SELECT id, updated_at FROM public.tasks
+WHERE id = '30000000-0000-4000-8000-000000000002';
+SQL
+
+wait "$write_order_mover_pid" || { cat -- "$write_order_mover_log" >&2; exit 1; }
+
+"${psql[@]}" -q <<'SQL'
+DO $$
+DECLARE
+  task public.tasks;
+  edit_updated_at timestamptz;
+BEGIN
+  SELECT * INTO task FROM public.tasks
+  WHERE id = '30000000-0000-4000-8000-000000000002';
+  SELECT reference.edit_updated_at INTO edit_updated_at
+  FROM public.task_write_order_reference AS reference
+  WHERE reference.task_id = task.id;
+
+  IF task.title IS DISTINCT FROM 'Edited before the delayed move'
+    OR task.description IS DISTINCT FROM 'Newer fields'
+    OR task.priority IS DISTINCT FROM 'high'
+    OR task.column_id IS DISTINCT FROM '20000000-0000-4000-8000-000000000004'::uuid
+    OR task.updated_at <= edit_updated_at THEN
+    RAISE EXCEPTION 'Delayed move did not advance the task version after the edit: %, prior edit timestamp %', row_to_json(task), edit_updated_at;
+  END IF;
+END;
+$$;
+DROP TABLE public.task_write_order_reference;
+SQL
+echo 'PASS: task updated_at follows write order after a delayed transaction start.'
+
 printf 'Database regression tests passed (disposable PostgreSQL).\n'

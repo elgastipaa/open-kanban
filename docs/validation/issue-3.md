@@ -11,17 +11,20 @@
 - La migración `013_separate_task_edits_from_moves.sql` reemplaza la mutación combinada por `edit_task_fields_p` y limita `update_task_positions_p` a `id`, `column_id` y `position`.
 - La edición recibe solo las claves explícitas. Una descripción omitida conserva su valor y `description: null` la borra.
 - El movimiento devuelve las filas actuales para que el cliente que partió de una vista desactualizada muestre el contenido más reciente después de mover.
-- El ledger mantiene separadas las filas confirmadas y las intenciones optimistas pendientes. Al confirmar o fallar una petición, vuelve a proyectar solo las intenciones que siguen pendientes, sin restaurar snapshots de todo el tablero.
+- El ledger mantiene separadas las filas confirmadas y las intenciones optimistas pendientes. Al confirmar o fallar una petición, vuelve a proyectar solo las intenciones que siguen pendientes, sin restaurar snapshots de todo el tablero. Las respuestas de refresh y de verificación de una creación usan revisiones para descartar resultados atrasados.
 - Las respuestas retrasadas no recuperan tareas borradas; las creaciones pendientes conservan su intención explícita de borrado, y los movimientos en cola remapean IDs temporales y quitan solo tareas borradas del batch. Los refreshes que cruzan un commit local se descartan.
+- La migración `014_monotonic_task_updated_at.sql` asigna a cada escritura de una tarea un `updated_at` posterior al valor anterior, incluso cuando la transacción que actualiza la tarea empezó antes que otra escritura concurrente.
 - El batch valida todas las entradas antes de actualizar; rechaza campos de contenido, tareas de otro tablero y batches inválidos sin aplicar cambios parciales.
 
 ## Evidencia
 
 ### Base de datos
 
-`scripts/test-db.sh` se ejecutó como `postgres` desde una copia temporal dentro del contenedor local aislado y creó allí un clúster PostgreSQL descartable. Aplicó las migraciones 001–013. Pasaron las regresiones de edición/movimiento, descripción omitida y `null`, rechazo atómico de batches, límites entre tableros, RLS y concurrencia real.
+`scripts/test-db.sh` se ejecutó como `postgres` desde una copia temporal dentro del contenedor local aislado y creó allí un clúster PostgreSQL descartable. Aplicó las migraciones 001–014. Pasaron las regresiones de edición/movimiento, descripción omitida y `null`, rechazo atómico de batches, límites entre tableros, RLS y concurrencia real.
 
 La prueba concurrente retuvo el lock de una tarea en una transacción de edición mientras otra sesión iniciaba el RPC de movimiento. El movimiento esperó el lock; tras el commit de edición, ambas modificaciones quedaron presentes.
+
+Una segunda prueba abrió primero una transacción que esperó seis segundos antes de mover la tarea. Durante la espera, otra sesión editó y confirmó título, descripción y prioridad. El movimiento conservó esos campos y dejó `updated_at` después del timestamp de la edición, según el orden efectivo de escritura.
 
 Resultado: `Database regression tests passed (disposable PostgreSQL).`
 
@@ -58,12 +61,15 @@ Se usaron dos páginas de Chromium contra la aplicación y Supabase locales, con
 27. Se retuvo la creación de una tarjeta temporal, se la movió a `Done` y otro cliente provocó un refresh antes de liberar la respuesta. La operación encolada usó el UUID persistido después del remapeo; la base confirmó la tarea en `Done`.
 28. Se borró explícitamente una tarjeta temporal mientras su creación estaba retenida. Un refresh de otro cliente mostró la fila ya confirmada; al liberar la creación, la intención de borrado emitió un único RPC, quitó la tarjeta de la interfaz y la base confirmó que no quedaba la fila.
 29. Se retuvo una edición para encolar un movimiento que incluía tres tareas. Otro cliente borró una hermana y emitió refresh antes de liberar la edición; el movimiento se envió con las dos tareas restantes y tuvo éxito. La base confirmó la tarea movida y la hermana borrada.
+30. Se retuvo la respuesta de creación después del commit. Otro cliente borró la tarea y actualizó el tablero; luego se retuvo la verificación autoritativa de la creación y un segundo refresh llegó primero. Al liberar la lectura anterior, la interfaz y la base mantuvieron la tarea borrada; el cliente creador no llamó al RPC de borrado.
+31. Se retuvo la respuesta de borrado de una tarea persistida después de que el servidor confirmó el commit. La tarjeta desapareció de inmediato, antes de liberar la respuesta; la respuesta fue 204 y una consulta directa confirmó cero filas.
+32. Se repitió la creación pendiente con borrado remoto, pero la lectura autoritativa posterior respondió 500. La tarea borrada no reapareció y el cliente creador no intentó borrarla de nuevo; la base confirmó cero filas.
 
 ## Verificaciones
 
 - `pnpm typecheck` — pasó.
 - `pnpm exec biome check . --line-ending=crlf` — pasó en los 75 archivos del checkout Windows.
 - `pnpm build` — pasó con Next.js 16.4.2.
-- `scripts/test-db.sh` sobre clúster PostgreSQL descartable — pasó.
+- `scripts/test-db.sh` sobre clúster PostgreSQL descartable en PostgreSQL 16 — pasó, con la prueba de orden de escritura de `updated_at`.
 
-El checkout conserva sus finales de línea originales CRLF. Con `core.autocrlf=true`, se usó `--line-ending=crlf` para que Biome comprobara los finales presentes en Windows sin cambiar la configuración del repositorio.
+El checkout conserva sus finales de línea originales CRLF. Con `core.autocrlf=true`, se usó `--line-ending=crlf` para que Biome comprobara los finales presentes en Windows sin cambiar la configuración del repositorio. Para el runner Bash de base de datos se usó una copia LF temporal en PostgreSQL 16; el archivo rastreado no se normalizó.

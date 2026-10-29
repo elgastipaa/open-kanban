@@ -1,7 +1,10 @@
 import type { ColumnWithTasks, Task, TaskPositionUpdate } from "@/lib/types";
 
 type EditableTaskFields = Pick<Task, "title" | "description" | "priority">;
-type PendingTaskCreation = { deleteRequested: boolean };
+type PendingTaskCreation = {
+  deleteRequested: boolean;
+  syncRevision: number;
+};
 
 export type TaskMutationIntent =
   | {
@@ -50,9 +53,14 @@ export class TaskMutationLedger {
   private pendingCreations = new Map<string, PendingTaskCreation>();
   private deletedTaskIds = new Set<string>();
   private mutationRevision = 0;
+  private boardSyncRevision = 0;
 
   get revision(): number {
     return this.mutationRevision;
+  }
+
+  get syncRevision(): number {
+    return this.boardSyncRevision;
   }
 
   constructor(columns: ColumnWithTasks[]) {
@@ -60,7 +68,10 @@ export class TaskMutationLedger {
   }
 
   beginTaskCreation(taskId: string): void {
-    this.pendingCreations.set(taskId, { deleteRequested: false });
+    this.pendingCreations.set(taskId, {
+      deleteRequested: false,
+      syncRevision: this.boardSyncRevision,
+    });
     this.mutationRevision += 1;
   }
 
@@ -76,15 +87,43 @@ export class TaskMutationLedger {
     taskId: string,
     task: Task,
     columns: ColumnWithTasks[],
-  ): { deleteRequested: boolean; columns: ColumnWithTasks[] } {
+    authoritativeTaskPresent = false,
+  ): {
+    deleteRequested: boolean;
+    needsVerification: boolean;
+    columns: ColumnWithTasks[];
+  } {
     const creation = this.pendingCreations.get(taskId);
-    this.pendingCreations.delete(taskId);
+    const refreshObserved =
+      creation !== undefined &&
+      creation.syncRevision !== this.boardSyncRevision;
     if (creation?.deleteRequested) {
+      this.pendingCreations.delete(taskId);
       this.mutationRevision += 1;
-      return { deleteRequested: true, columns: this.project(columns) };
+      return {
+        deleteRequested: true,
+        needsVerification: false,
+        columns: this.project(columns),
+      };
     }
+    if (
+      refreshObserved &&
+      !authoritativeTaskPresent &&
+      !columns.some((column) =>
+        column.tasks.some((candidate) => candidate.id === task.id),
+      )
+    ) {
+      this.mutationRevision += 1;
+      return {
+        deleteRequested: false,
+        needsVerification: true,
+        columns: this.project(columns),
+      };
+    }
+    this.pendingCreations.delete(taskId);
     return {
       deleteRequested: false,
+      needsVerification: false,
       columns: this.replaceTaskId(taskId, task, columns),
     };
   }
@@ -97,6 +136,7 @@ export class TaskMutationLedger {
   }
 
   sync(columns: ColumnWithTasks[], resetPending = false): ColumnWithTasks[] {
+    this.boardSyncRevision += 1;
     if (resetPending) {
       this.pendingIntents = [];
       this.deletedTaskIds.clear();
@@ -177,6 +217,16 @@ export class TaskMutationLedger {
         ...column,
         tasks: column.tasks.filter((task) => task.id !== intent.taskId),
       }));
+      for (const candidate of this.pendingIntents) {
+        if (candidate.kind !== "move") continue;
+        candidate.updates = candidate.updates.filter(
+          (update) => update.id !== intent.taskId,
+        );
+      }
+      this.pendingIntents = this.pendingIntents.filter(
+        (candidate) =>
+          candidate.kind !== "move" || candidate.updates.length > 0,
+      );
     }
 
     this.pendingIntents = this.pendingIntents.filter(

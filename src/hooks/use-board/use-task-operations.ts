@@ -4,6 +4,7 @@ import {
   createColumn,
   createTask,
   deleteTask as dbDeleteTask,
+  getFullBoard,
   updateTask,
   updateTaskPositions,
 } from "@/lib/db";
@@ -114,25 +115,83 @@ export function useTaskOperations({
           const dbTask = await createTask(supabase, slug, payload);
 
           const current = columnsRef.current ?? [];
-          const creation = ledger.completeTaskCreation(
+          let creation = ledger.completeTaskCreation(
             tempTask.id,
             dbTask,
             current,
           );
+          if (creation.needsVerification) {
+            const verificationSyncRevision = ledger.syncRevision;
+            try {
+              const latestBoard = await getFullBoard(supabase, slug);
+              const liveColumns = columnsRef.current ?? current;
+              if (ledger.syncRevision !== verificationSyncRevision) {
+                const liveTask = liveColumns
+                  .flatMap((column) => column.tasks)
+                  .find((task) => task.id === dbTask.id);
+                if (!liveTask) {
+                  ledger.failTaskCreation(tempTask.id);
+                  setColumns(ledger.forgetTask(tempTask.id, liveColumns));
+                  return;
+                }
+                creation = ledger.completeTaskCreation(
+                  tempTask.id,
+                  liveTask,
+                  liveColumns,
+                );
+              } else if (!latestBoard) {
+                ledger.failTaskCreation(tempTask.id);
+                setColumns(ledger.forgetTask(tempTask.id, liveColumns));
+                return;
+              } else {
+                const latestTask = latestBoard.columns
+                  .flatMap((column) => column.tasks)
+                  .find((task) => task.id === dbTask.id);
+                if (!latestTask) {
+                  ledger.failTaskCreation(tempTask.id);
+                  setColumns(ledger.forgetTask(tempTask.id, liveColumns));
+                  return;
+                }
+                creation = ledger.completeTaskCreation(
+                  tempTask.id,
+                  latestTask,
+                  liveColumns,
+                  true,
+                );
+              }
+            } catch {
+              showMutationError("verify task");
+              return;
+            }
+          }
           if (creation.deleteRequested) {
+            const deleteIntent: TaskMutationIntent = {
+              id: generateUUID(),
+              kind: "delete",
+              taskId: dbTask.id,
+            };
+            const optimisticDelete = ledger.begin(
+              deleteIntent,
+              creation.columns,
+            );
+            setColumns(optimisticDelete);
             try {
               await dbDeleteTask(supabase, slug, dbTask.id);
             } catch {
-              setColumns(ledger.replaceTaskId(tempTask.id, dbTask, current));
+              const rolledBack = ledger.settle(
+                deleteIntent.id,
+                columnsRef.current ?? optimisticDelete,
+              );
+              setColumns(ledger.replaceTaskId(tempTask.id, dbTask, rolledBack));
               showMutationError("delete task");
               return;
             }
-            setColumns(
-              ledger.forgetTask(
-                dbTask.id,
-                ledger.forgetTask(tempTask.id, creation.columns),
-              ),
+            const deletedColumns = ledger.settle(
+              deleteIntent.id,
+              columnsRef.current ?? optimisticDelete,
+              { kind: "task-deleted" },
             );
+            setColumns(ledger.forgetTask(tempTask.id, deletedColumns));
             onMutationRef.current?.();
             return;
           }

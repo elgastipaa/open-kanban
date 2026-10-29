@@ -76,6 +76,7 @@ export function useBoard({
     onMutationRef,
     persistBoard,
     enqueue,
+    ledger: taskMutationLedger,
   });
 
   const { addTask, editTask, removeTask, moveTask } = useTaskOperations({

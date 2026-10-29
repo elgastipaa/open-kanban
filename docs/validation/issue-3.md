@@ -64,12 +64,20 @@ Se usaron dos páginas de Chromium contra la aplicación y Supabase locales, con
 30. Se retuvo la respuesta de creación después del commit. Otro cliente borró la tarea y actualizó el tablero; luego se retuvo la verificación autoritativa de la creación y un segundo refresh llegó primero. Al liberar la lectura anterior, la interfaz y la base mantuvieron la tarea borrada; el cliente creador no llamó al RPC de borrado.
 31. Se retuvo la respuesta de borrado de una tarea persistida después de que el servidor confirmó el commit. La tarjeta desapareció de inmediato, antes de liberar la respuesta; la respuesta fue 204 y una consulta directa confirmó cero filas.
 32. Se repitió la creación pendiente con borrado remoto, pero la lectura autoritativa posterior respondió 500. La tarea borrada no reapareció y el cliente creador no intentó borrarla de nuevo; la base confirmó cero filas.
+33. Se retuvo la respuesta de creación después del commit, se canceló la tarjeta temporal y otro cliente provocó el refresh que la reemplazó por su UUID. Al liberar la creación, el cliente emitió el borrado esperado; se retuvo su respuesta tras el commit y la tarjeta ya estaba oculta. El DELETE fue 204 y la lectura directa confirmó que solo quedaban `Seed A` y el trigger de refresh.
+34. Se retuvo la llamada de creación antes del commit mientras otro cliente provocaba un refresh anterior a ella. Tras liberar el create exitoso, la primera verificación respondió 500. El toast indicó que el estado era incierto y ofreció `Volver a verificar`; esa acción solo leyó el tablero, mostró la tarea persistida y no repitió el RPC de creación (una llamada total).
+35. Se encoló un movimiento móvil de una tarjeta temporal a `Done`, se aplicó un refresh anterior al commit, y la verificación posterior al create respondió 500. El movimiento encolado se remapeó al UUID persistido y el RPC de posiciones respondió 200; luego `Volver a verificar` respondió 200. La lectura directa confirmó la tarea en `Done`, posición 0, con un solo RPC de creación.
+36. En un tablero nuevo se retuvo la creación de la columna inicial mientras otro cliente creó su propia columna y emitió refresh. Después de liberar la columna y crear la tarea local, la reconciliación consultó el tablero completo y mostró la tarjeta en su columna persistida; la lectura directa confirmó ambas tareas en sus columnas.
+37. Se retuvo la lectura de verificación que incluía una tarea en `Source`. Mientras esperaba, el mismo cliente borró esa columna y su DELETE respondió 204. Al liberar el snapshot anterior, no reaparecieron `Source` ni la tarea; la base confirmó que solo quedaba `Done` sin tareas.
+38. Se retuvo la verificación de una creación borrada por otro cliente y luego se forzó un 500 en esa lectura. Mientras estaba retenida, un refresh posterior confirmó la ausencia. Al liberar el error anterior, el cliente usó el estado del refresh vigente: no mostró la tarea ni ofreció una verificación innecesaria; la base confirmó cero filas y no hubo un RPC de borrado desde el creador.
 
 ## Verificaciones
 
 - `pnpm typecheck` — pasó.
 - `pnpm exec biome check . --line-ending=crlf` — pasó en los 75 archivos del checkout Windows.
 - `pnpm build` — pasó con Next.js 16.4.2.
-- `scripts/test-db.sh` sobre clúster PostgreSQL descartable en PostgreSQL 16 — pasó, con la prueba de orden de escritura de `updated_at`.
+- `scripts/test-db.sh` sobre clúster PostgreSQL descartable en PostgreSQL 16.15 — pasó, con la prueba de orden de escritura de `updated_at`.
 
 El checkout conserva sus finales de línea originales CRLF. Con `core.autocrlf=true`, se usó `--line-ending=crlf` para que Biome comprobara los finales presentes en Windows sin cambiar la configuración del repositorio. Para el runner Bash de base de datos se usó una copia LF temporal en PostgreSQL 16.15; el archivo rastreado no se normalizó.
+
+El resultado ambiguo del propio RPC `create_task_p` (el servidor podría confirmar la escritura y perderse su respuesta antes de devolver el UUID) sigue siendo antecedente para los tickets de idempotencia/captura #7 y conflicto #8. Este cambio reconcilia únicamente una creación cuyo RPC respondió exitosamente y cuya lectura posterior quedó incierta; no reintenta una creación sin conocer su UUID.

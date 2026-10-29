@@ -37,3 +37,12 @@ export function showMutationError(action: string) {
     description: "Your changes have been reverted. Please try again.",
   });
 }
+
+export function showTaskVerificationError(onVerify: () => void) {
+  toast.error("No pudimos verificar la tarea", {
+    description:
+      "Puede que ya esté guardada. Verifica su estado antes de crearla de nuevo.",
+    action: { label: "Volver a verificar", onClick: onVerify },
+    duration: 30_000,
+  });
+}

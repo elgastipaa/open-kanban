@@ -22,7 +22,7 @@ import type {
   TaskMutationLedger,
   TaskMutationResult,
 } from "./task-mutation-ledger";
-import { showMutationError } from "./utils";
+import { showMutationError, showTaskVerificationError } from "./utils";
 
 interface UseTaskOperationsProps {
   slug: string;
@@ -34,6 +34,30 @@ interface UseTaskOperationsProps {
   persistBoard: () => Promise<Board>;
   enqueue: (op: () => Promise<void>) => void;
   ledger: TaskMutationLedger;
+}
+
+type TaskCreationResolution = {
+  deleteRequested: boolean;
+  needsVerification: boolean;
+  columns: ColumnWithTasks[];
+} | null;
+
+function includeTaskColumn(
+  columns: ColumnWithTasks[],
+  task: Task,
+  authoritativeColumns: ColumnWithTasks[],
+  ledger: TaskMutationLedger,
+): ColumnWithTasks[] {
+  if (ledger.columnWasDeleted(task.column_id)) {
+    return columns.filter((column) => !ledger.columnWasDeleted(column.id));
+  }
+  if (columns.some((column) => column.id === task.column_id)) return columns;
+  const authoritativeColumn = authoritativeColumns.find(
+    (column) => column.id === task.column_id,
+  );
+  return authoritativeColumn
+    ? [...columns, { ...authoritativeColumn, tasks: [task] }]
+    : columns;
 }
 
 export function useTaskOperations({
@@ -48,6 +72,87 @@ export function useTaskOperations({
   ledger,
 }: UseTaskOperationsProps) {
   const localColumnIds = useRef(new Map<string, string>());
+
+  const verifyTaskCreation = useCallback(
+    async (
+      tempTaskId: string,
+      createdTask: Task,
+      previousColumns: ColumnWithTasks[],
+    ): Promise<TaskCreationResolution> => {
+      const verificationSyncRevision = ledger.syncRevision;
+      let latestBoard: Awaited<ReturnType<typeof getFullBoard>> = null;
+      let verificationError: unknown;
+      let verificationFailed = false;
+      try {
+        latestBoard = await getFullBoard(supabase, slug);
+      } catch (error) {
+        verificationFailed = true;
+        verificationError = error;
+      }
+      const liveColumns = columnsRef.current ?? previousColumns;
+      const discardConfirmedMissingTask = () => {
+        const persistedTaskId = ledger.pendingTaskCreationId(tempTaskId);
+        ledger.failTaskCreation(tempTaskId);
+        let columnsAfterDelete = ledger.forgetTask(tempTaskId, liveColumns);
+        if (persistedTaskId) {
+          columnsAfterDelete = ledger.forgetTask(
+            persistedTaskId,
+            columnsAfterDelete,
+          );
+        }
+        setColumns(columnsAfterDelete);
+      };
+
+      if (ledger.syncRevision !== verificationSyncRevision) {
+        const liveTask = liveColumns
+          .flatMap((column) => column.tasks)
+          .find((task) => task.id === createdTask.id);
+        if (!liveTask) {
+          discardConfirmedMissingTask();
+          return null;
+        }
+        const creation = ledger.completeTaskCreation(
+          tempTaskId,
+          liveTask,
+          liveColumns,
+          true,
+        );
+        setColumns(creation.columns);
+        return creation;
+      }
+
+      if (verificationFailed) throw verificationError;
+
+      if (!latestBoard) {
+        discardConfirmedMissingTask();
+        return null;
+      }
+
+      const latestTask = latestBoard.columns
+        .flatMap((column) => column.tasks)
+        .find((task) => task.id === createdTask.id);
+      if (!latestTask) {
+        discardConfirmedMissingTask();
+        return null;
+      }
+
+      const verifiedColumns = includeTaskColumn(
+        liveColumns,
+        latestTask,
+        latestBoard.columns,
+        ledger,
+      );
+      const creation = ledger.completeTaskCreation(
+        tempTaskId,
+        latestTask,
+        verifiedColumns,
+        true,
+      );
+      setColumns(creation.columns);
+      return creation;
+    },
+    [columnsRef, ledger, setColumns, slug, supabase],
+  );
 
   const addTask = useCallback(
     (columnId: string, title: string, priority: Priority = "medium") => {
@@ -121,46 +226,32 @@ export function useTaskOperations({
             current,
           );
           if (creation.needsVerification) {
-            const verificationSyncRevision = ledger.syncRevision;
+            const retryVerification = () => {
+              enqueue(async () => {
+                if (ledger.pendingTaskCreationId(tempTask.id) !== dbTask.id) {
+                  return;
+                }
+                try {
+                  await verifyTaskCreation(
+                    tempTask.id,
+                    dbTask,
+                    columnsRef.current ?? [],
+                  );
+                } catch {
+                  showTaskVerificationError(retryVerification);
+                }
+              });
+            };
             try {
-              const latestBoard = await getFullBoard(supabase, slug);
-              const liveColumns = columnsRef.current ?? current;
-              if (ledger.syncRevision !== verificationSyncRevision) {
-                const liveTask = liveColumns
-                  .flatMap((column) => column.tasks)
-                  .find((task) => task.id === dbTask.id);
-                if (!liveTask) {
-                  ledger.failTaskCreation(tempTask.id);
-                  setColumns(ledger.forgetTask(tempTask.id, liveColumns));
-                  return;
-                }
-                creation = ledger.completeTaskCreation(
-                  tempTask.id,
-                  liveTask,
-                  liveColumns,
-                );
-              } else if (!latestBoard) {
-                ledger.failTaskCreation(tempTask.id);
-                setColumns(ledger.forgetTask(tempTask.id, liveColumns));
-                return;
-              } else {
-                const latestTask = latestBoard.columns
-                  .flatMap((column) => column.tasks)
-                  .find((task) => task.id === dbTask.id);
-                if (!latestTask) {
-                  ledger.failTaskCreation(tempTask.id);
-                  setColumns(ledger.forgetTask(tempTask.id, liveColumns));
-                  return;
-                }
-                creation = ledger.completeTaskCreation(
-                  tempTask.id,
-                  latestTask,
-                  liveColumns,
-                  true,
-                );
-              }
+              const resolution = await verifyTaskCreation(
+                tempTask.id,
+                dbTask,
+                current,
+              );
+              if (!resolution) return;
+              creation = resolution;
             } catch {
-              showMutationError("verify task");
+              showTaskVerificationError(retryVerification);
               return;
             }
           }
@@ -219,6 +310,7 @@ export function useTaskOperations({
       columnsRef,
       setColumns,
       ledger,
+      verifyTaskCreation,
       enqueue,
       persistBoard,
       supabase,

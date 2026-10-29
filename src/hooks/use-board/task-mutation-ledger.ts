@@ -3,6 +3,7 @@ import type { ColumnWithTasks, Task, TaskPositionUpdate } from "@/lib/types";
 type EditableTaskFields = Pick<Task, "title" | "description" | "priority">;
 type PendingTaskCreation = {
   deleteRequested: boolean;
+  persistedTaskId?: string;
   syncRevision: number;
 };
 
@@ -52,6 +53,7 @@ export class TaskMutationLedger {
   private pendingIntents: TaskMutationIntent[] = [];
   private pendingCreations = new Map<string, PendingTaskCreation>();
   private deletedTaskIds = new Set<string>();
+  private deletedColumnIds = new Set<string>();
   private mutationRevision = 0;
   private boardSyncRevision = 0;
 
@@ -81,6 +83,23 @@ export class TaskMutationLedger {
     creation.deleteRequested = true;
     this.mutationRevision += 1;
     return true;
+  }
+
+  pendingTaskCreationId(taskId: string): string | undefined {
+    return this.pendingCreations.get(taskId)?.persistedTaskId;
+  }
+
+  markColumnDeleted(columnId: string): void {
+    this.deletedColumnIds.add(columnId);
+    this.mutationRevision += 1;
+  }
+
+  restoreColumnAfterFailedDelete(columnId: string): void {
+    if (this.deletedColumnIds.delete(columnId)) this.mutationRevision += 1;
+  }
+
+  columnWasDeleted(columnId: string): boolean {
+    return this.deletedColumnIds.has(columnId);
   }
 
   completeTaskCreation(
@@ -113,6 +132,10 @@ export class TaskMutationLedger {
         column.tasks.some((candidate) => candidate.id === task.id),
       )
     ) {
+      if (creation) {
+        creation.persistedTaskId = task.id;
+        this.remapPendingTaskId(taskId, task.id);
+      }
       this.mutationRevision += 1;
       return {
         deleteRequested: false,
@@ -131,6 +154,19 @@ export class TaskMutationLedger {
   failTaskCreation(taskId: string): boolean {
     const creation = this.pendingCreations.get(taskId);
     this.pendingCreations.delete(taskId);
+    if (creation?.persistedTaskId) {
+      for (const intent of this.pendingIntents) {
+        if (intent.kind !== "move") continue;
+        intent.updates = intent.updates.filter(
+          (update) => update.id !== creation.persistedTaskId,
+        );
+      }
+      this.pendingIntents = this.pendingIntents.filter((intent) =>
+        intent.kind === "move"
+          ? intent.updates.length > 0
+          : intent.taskId !== creation.persistedTaskId,
+      );
+    }
     this.mutationRevision += 1;
     return creation?.deleteRequested ?? false;
   }
@@ -140,7 +176,11 @@ export class TaskMutationLedger {
     if (resetPending) {
       this.pendingIntents = [];
       this.deletedTaskIds.clear();
+      this.deletedColumnIds.clear();
     } else {
+      columns = columns.filter(
+        (column) => !this.deletedColumnIds.has(column.id),
+      );
       const incomingIds = new Set(
         columns.flatMap((column) => column.tasks.map((task) => task.id)),
       );
@@ -255,15 +295,7 @@ export class TaskMutationLedger {
     this.confirmedTasks.delete(oldId);
     this.deletedTaskIds.delete(oldId);
     this.confirmTask(savedTask);
-    for (const intent of this.pendingIntents) {
-      if (intent.kind === "move") {
-        for (const update of intent.updates) {
-          if (update.id === oldId) update.id = task.id;
-        }
-      } else if (intent.taskId === oldId) {
-        intent.taskId = task.id;
-      }
-    }
+    this.remapPendingTaskId(oldId, task.id);
     this.mutationRevision += 1;
     const columnsWithSavedTask = columns.map((column) => ({
       ...column,
@@ -322,6 +354,18 @@ export class TaskMutationLedger {
     );
     this.mutationRevision += 1;
     return this.project(columns);
+  }
+
+  private remapPendingTaskId(oldId: string, newId: string): void {
+    for (const intent of this.pendingIntents) {
+      if (intent.kind === "move") {
+        for (const update of intent.updates) {
+          if (update.id === oldId) update.id = newId;
+        }
+      } else if (intent.taskId === oldId) {
+        intent.taskId = newId;
+      }
+    }
   }
 
   private seedUntrackedTasks(columns: ColumnWithTasks[]): void {

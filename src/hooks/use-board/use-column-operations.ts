@@ -8,6 +8,7 @@ import {
   updateColumnPositions,
 } from "@/lib/db";
 import type { Board, Column, ColumnWithTasks } from "@/lib/types";
+import type { TaskMutationLedger } from "./task-mutation-ledger";
 import { makeLocalColumn, showMutationError } from "./utils";
 
 interface UseColumnOperationsProps {
@@ -19,6 +20,7 @@ interface UseColumnOperationsProps {
   onMutationRef: React.RefObject<(() => void) | undefined>;
   persistBoard: () => Promise<Board>;
   enqueue: (op: () => Promise<void>) => void;
+  ledger: TaskMutationLedger;
 }
 
 export function useColumnOperations({
@@ -30,6 +32,7 @@ export function useColumnOperations({
   onMutationRef,
   persistBoard,
   enqueue,
+  ledger,
 }: UseColumnOperationsProps) {
   const addColumn = useCallback(
     (title = "Untitled") => {
@@ -215,6 +218,9 @@ export function useColumnOperations({
       const newCols = filtered.map((col, i) => ({ ...col, position: i }));
 
       // Optimistic UI update
+      if (isPersistedRef.current && !columnId.startsWith("local-")) {
+        ledger.markColumnDeleted(columnId);
+      }
       setColumns(newCols);
 
       if (!isPersistedRef.current || columnId.startsWith("local-")) return;
@@ -229,15 +235,25 @@ export function useColumnOperations({
       }));
 
       enqueue(async () => {
+        let deleteCommitted = false;
         try {
           await dbDeleteColumn(supabase, slug, columnId);
+          deleteCommitted = true;
           if (colUpdates.length > 0) {
             await updateColumnPositions(supabase, slug, colUpdates);
           }
           onMutationRef.current?.();
         } catch {
-          setColumns(snapshot);
-          showMutationError("delete column");
+          if (deleteCommitted) {
+            setColumns(newCols);
+            onMutationRef.current?.();
+          } else {
+            ledger.restoreColumnAfterFailedDelete(columnId);
+            setColumns(snapshot);
+          }
+          showMutationError(
+            deleteCommitted ? "reorder columns" : "delete column",
+          );
         }
       });
     },
@@ -249,6 +265,7 @@ export function useColumnOperations({
       supabase,
       slug,
       onMutationRef,
+      ledger,
     ],
   );
 

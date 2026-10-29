@@ -171,7 +171,7 @@ export function useTaskOperations({
           deleteIntent.id,
           columnsRef.current ?? optimisticDelete,
         );
-        setColumns(ledger.replaceTaskId(tempTaskId, task, rolledBack));
+        setColumns(ledger.restoreTaskAfterFailedDelete(task, rolledBack));
         showMutationError("delete task");
         return;
       }
@@ -352,10 +352,10 @@ export function useTaskOperations({
       const optimisticColumns = ledger.begin(intent, columnsRef.current ?? []);
       setColumns(optimisticColumns);
 
-      if (!isPersistedRef.current || taskId.startsWith("local-")) {
+      if (!isPersistedRef.current || intent.taskId.startsWith("local-")) {
         const task = optimisticColumns
           .flatMap((column) => column.tasks)
-          .find((candidate) => candidate.id === taskId);
+          .find((candidate) => candidate.id === intent.taskId);
         const saved: TaskMutationResult | undefined = task
           ? { kind: "task-saved", task: { ...task, ...updates } }
           : undefined;
@@ -366,7 +366,7 @@ export function useTaskOperations({
       enqueue(async () => {
         try {
           const savedTask = await updateTask(supabase, slug, {
-            id: taskId,
+            id: intent.taskId,
             ...updates,
           });
           setColumns(
@@ -396,9 +396,9 @@ export function useTaskOperations({
 
   const removeTask = useCallback(
     (taskId: string) => {
-      if (taskId.startsWith("local-")) {
+      const pendingCreationDeleteRequested =
+        taskId.startsWith("local-") &&
         ledger.requestTaskCreationDeletion(taskId);
-      }
       const intent: TaskMutationIntent = {
         id: generateUUID(),
         kind: "delete",
@@ -407,16 +407,25 @@ export function useTaskOperations({
       const optimisticColumns = ledger.begin(intent, columnsRef.current ?? []);
       setColumns(optimisticColumns);
 
-      if (!isPersistedRef.current || taskId.startsWith("local-")) {
+      if (!isPersistedRef.current) {
         setColumns(
           ledger.settle(intent.id, optimisticColumns, { kind: "task-deleted" }),
         );
         return;
       }
 
+      if (
+        pendingCreationDeleteRequested ||
+        intent.taskId.startsWith("local-")
+      ) {
+        ledger.hidePendingCreationDelete(intent.taskId);
+        setColumns(ledger.settle(intent.id, optimisticColumns));
+        return;
+      }
+
       enqueue(async () => {
         try {
-          await dbDeleteTask(supabase, slug, taskId);
+          await dbDeleteTask(supabase, slug, intent.taskId);
           setColumns(
             ledger.settle(intent.id, columnsRef.current ?? [], {
               kind: "task-deleted",

@@ -12,7 +12,7 @@
 - La edición recibe solo las claves explícitas. Una descripción omitida conserva su valor y `description: null` la borra.
 - El movimiento devuelve las filas actuales para que el cliente que partió de una vista desactualizada muestre el contenido más reciente después de mover.
 - El ledger mantiene separadas las filas confirmadas y las intenciones optimistas pendientes. Al confirmar o fallar una petición, vuelve a proyectar solo las intenciones que siguen pendientes, sin restaurar snapshots de todo el tablero.
-- Las respuestas retrasadas no recuperan tareas borradas, los movimientos en cola incorporan tareas y columnas temporales que terminan de crearse antes de ejecutarse, y los refreshes previos a un commit local se descartan.
+- Las respuestas retrasadas no recuperan tareas borradas; las creaciones pendientes conservan su intención explícita de borrado, y los movimientos en cola remapean IDs temporales y quitan solo tareas borradas del batch. Los refreshes que cruzan un commit local se descartan.
 - El batch valida todas las entradas antes de actualizar; rechaza campos de contenido, tareas de otro tablero y batches inválidos sin aplicar cambios parciales.
 
 ## Evidencia
@@ -53,6 +53,11 @@ Se usaron dos páginas de Chromium contra la aplicación y Supabase locales, con
 22. Se retuvo una respuesta de creación después del commit y otro cliente provocó un refresh que sustituyó la tarjeta temporal por su fila persistida. Al liberar la respuesta, no se llamó al RPC de borrado; la interfaz conservó una sola tarjeta y la consulta directa confirmó la fila.
 23. En móvil se retuvo y falló la creación de una tarjeta temporal mientras se movía una tarea persistida de `Source` a `Done`. La petición de posiciones posterior incluyó dos IDs persistidos y ninguno temporal; la base confirmó `Move B` en `Done`.
 24. Se creó una tarea sin refresh concurrente. La interfaz reemplazó el ID temporal por uno persistido y mostró exactamente una tarjeta.
+25. Se retuvo un movimiento ya aplicado, otro cliente movió la misma tarea de vuelta a `Source` y su refresh terminó primero. Al liberar la respuesta de movimiento anterior, la interfaz y la base conservaron la columna más reciente.
+26. En un tablero nuevo se retuvo la primera creación después de persistir la columna local. La tarjeta siguió visible tras sustituir el ID de columna; se añadió una segunda tarjeta antes de liberar la primera respuesta. Una consulta directa confirmó posiciones 0 y 1, sin duplicados.
+27. Se retuvo la creación de una tarjeta temporal, se la movió a `Done` y otro cliente provocó un refresh antes de liberar la respuesta. La operación encolada usó el UUID persistido después del remapeo; la base confirmó la tarea en `Done`.
+28. Se borró explícitamente una tarjeta temporal mientras su creación estaba retenida. Un refresh de otro cliente mostró la fila ya confirmada; al liberar la creación, la intención de borrado emitió un único RPC, quitó la tarjeta de la interfaz y la base confirmó que no quedaba la fila.
+29. Se retuvo una edición para encolar un movimiento que incluía tres tareas. Otro cliente borró una hermana y emitió refresh antes de liberar la edición; el movimiento se envió con las dos tareas restantes y tuvo éxito. La base confirmó la tarea movida y la hermana borrada.
 
 ## Verificaciones
 

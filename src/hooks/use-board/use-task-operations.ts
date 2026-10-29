@@ -95,14 +95,12 @@ export function useTaskOperations({
               localColumnIds.current.set(columnId, newCol.id);
               localColumnIds.current.set(oldColumnId, newCol.id);
               targetColumnId = newCol.id;
-              const withSavedColumn = (columnsRef.current ?? []).map(
-                (column) =>
-                  column.id === oldColumnId
-                    ? { ...column, id: newCol.id }
-                    : column,
-              );
               setColumns(
-                ledger.replaceColumnId(oldColumnId, newCol.id, withSavedColumn),
+                ledger.replaceColumnId(
+                  oldColumnId,
+                  newCol.id,
+                  columnsRef.current ?? [],
+                ),
               );
             }
           }

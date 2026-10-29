@@ -77,6 +77,7 @@ Se usaron dos páginas de Chromium contra la aplicación y Supabase locales, con
 43. Se repitió el remapeo con el modal abierto y se borró la tarjeta desde él. `delete_task_p` recibió el UUID persistido y respondió 204; PostgreSQL confirmó cero filas.
 44. Se retuvo un create, se provocó el refresh anterior al commit y falló la verificación; luego se solicitó borrar desde el modal. El retry de lectura respondió 200 y el primer delete falló con 500; la tarjeta reapareció. Un segundo borrado respondió 204 y PostgreSQL confirmó cero filas, conservando cualquier ausencia que hubiese confirmado un refresh posterior.
 45. Se retuvo la respuesta de un create ya confirmado, se solicitó cancelar la tarjeta temporal y otra página sincronizó primero la fila persistida y luego su borrado. Al liberar la respuesta, el cleanup local usó el UUID y falló con 500; la lectura de la otra página había confirmado la ausencia y la tarjeta permaneció oculta tras el rollback.
+46. En un tablero nuevo se retuvo el RPC inicial de creación del tablero, se borró la tarjeta temporal desde su modal y luego se liberó el tablero. La creación de la tarea respondió 200 y el DELETE de cleanup falló con 500. Antes del fix, la tarjeta quedaba oculta por un tombstone confirmado prematuramente; con la cancelación modelada como ocultamiento optimista, reapareció una sola vez con UUID persistido.
 
 ## Verificaciones
 

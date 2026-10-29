@@ -407,6 +407,12 @@ export function useTaskOperations({
       const optimisticColumns = ledger.begin(intent, columnsRef.current ?? []);
       setColumns(optimisticColumns);
 
+      if (pendingCreationDeleteRequested) {
+        ledger.hidePendingCreationDelete(intent.taskId);
+        setColumns(ledger.settle(intent.id, optimisticColumns));
+        return;
+      }
+
       if (!isPersistedRef.current) {
         setColumns(
           ledger.settle(intent.id, optimisticColumns, { kind: "task-deleted" }),
@@ -414,10 +420,7 @@ export function useTaskOperations({
         return;
       }
 
-      if (
-        pendingCreationDeleteRequested ||
-        intent.taskId.startsWith("local-")
-      ) {
+      if (intent.taskId.startsWith("local-")) {
         ledger.hidePendingCreationDelete(intent.taskId);
         setColumns(ledger.settle(intent.id, optimisticColumns));
         return;

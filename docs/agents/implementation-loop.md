@@ -4,7 +4,7 @@ Fecha: 28/10/2026. **LP-0.2 activa por el Goal explícito del usuario.** GPT Lun
 
 Objetivo: completar la spec#2 y todas las33 P/E mediante los51 tickets publicados, con evidencia. El padre no se considera terminado por agotar lo que un agente puede hacer automáticamente. Contexto: [Continuidad](../specs/CONTINUIDAD-SPEC.md), [mapa real](../specs/TICKETS-PUBLICADOS-1.0.md), [diseño](../specs/DISENO-TECNICO-MVP-1.0.md) y [trazabilidad](../specs/MATRIZ-TRAZABILIDAD-1.0.md).
 
-## 1. Acuerdo propuesto para el arranque
+## 1. Acuerdo vigente
 
 | Regla | Recomendación |
 | --- | --- |
@@ -17,7 +17,7 @@ Objetivo: completar la spec#2 y todas las33 P/E mediante los51 tickets publicado
 | Comunicación | Registrar cada entrega en su ticket; dar al usuario un resumen cada cinco tickets y al terminar. Avisar de inmediato decisiones humanas o riesgos confirmados. Evitar avisos repetidos del mismo bloqueo. |
 | Límite | Main, merge final, despliegue y migración de producción quedan para aprobación específica. #53 no forma parte del avance automático autorizado por defecto. |
 
-El comando de arranque de §8 acepta LP-0.2 y habilita las operaciones de Git/tracker indicadas para implementación y pruebas aisladas, conservando los límites de main/producción. Si el usuario limita permisos al arrancar, su alcance explícito prevalece. Este turno solo prepara instrucciones: no crea Goal, scheduler ni chat, no cambia el modelo de la conversación ni modifica configuración global.
+El comando de arranque de §8 acepta LP-0.2 y habilita las operaciones de Git/tracker indicadas para implementación y pruebas aisladas, conservando los límites de main/producción. Si el usuario limita permisos al arrancar, su alcance explícito prevalece. El usuario ya activó el Goal del run actual; revalidar estado y checkpoint antes de reanudar. La edición de estas reglas no cambia el modelo de la conversación ni la configuración global.
 
 ## 1.1 Skills y modelo obligatorios
 
@@ -118,7 +118,7 @@ El objetivo incluye todos los tickets hasta #53 y todas las P/E. No marcar el Go
 
 ## 8. Arranque y controles del Goal
 
-Comando preparado y contexto de uso: [iniciar el Goal de implementación](./start-implementation-goal.md). Ejecutarlo en el chat de este checkout, tras seleccionar GPT Luna y Max. Esa acción futura inicia la ejecución; esta edición no la inició.
+Comando y contexto de uso: [iniciar el Goal de implementación](./start-implementation-goal.md). Para una ejecución nueva, enviarlo en el chat del checkout de integración tras seleccionar GPT Luna y Max. Para el Goal existente, consultar su estado y reanudar desde el checkpoint sin duplicar la ejecución.
 
 Según [OpenAI Docs: Goals](https://developers.openai.com/cookbook/examples/codex/using_goals_in_codex), /goal mantiene un objetivo entre turnos y continúa mientras esté activo y dentro de sus límites. Permite inspeccionar con /goal, pausar con /goal pause y reanudar una pausa con /goal resume. Un bloqueo real, pausa/interrupción o límite puede detener el avance; no prometer “sin parar” contra esos estados. La guía de [comandos de Codex](https://developers.openai.com/blog/mastering-codex-remote-for-engineering) documenta /goal y aclara que disponibilidad depende del entorno.
 

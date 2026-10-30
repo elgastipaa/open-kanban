@@ -2,7 +2,7 @@
 
 Fecha: 30/10/2026. Issue: «Entrar con Google a una aplicación cerrada». Rama local: `codex/issue-4`. Base fija de revisión: `d7ebc632a5df207afda34273f6850bce68b3f146`. Código revisado: `94fa29a97fd2e4aae50a358a7d68538ed3c03f8f` (`fix(auth): respect Supabase Realtime ownership (#4)`). Este informe se registra en un commit documental posterior; la revisión se fija al HEAD de código indicado.
 
-No se guardaron correos, secretos ni datos reales de las cuentas de prueba.
+No se copiaron correos ni secretos a este repositorio, a la documentación ni a GitHub. En la nueva instancia local aislada existe una fila de acceso `pending` con `is_admin=true` para la identidad que el usuario eligió; el valor de identidad no se reproduce aquí. No se creó una sesión de Google ni un usuario Auth real todavía.
 
 ## Alcance implementado
 
@@ -27,7 +27,7 @@ Los tableros previos sin propietario quedan inaccesibles y con `owner_id` nulo. 
 | Supabase local real (CLI 2.122.0; PostgreSQL 17.11; Realtime 2.147.1), migración limpia | Pasa. Se aplican 001–015. En la tabla gestionada `realtime.messages`, owner=`supabase_realtime_admin`, RLS sigue activo y existen las políticas SELECT/INSERT de OpenKanban para `authenticated`. SHA-256 del archivo 015 coincide entre worktree e instancia aislada: `863163A76C849CE2194C646B5FADD8183FD4A47DD37ACFE9AEF744C598EA94A7`. |
 | Realtime privado en el tenant local aislado | Se habilitó `private_only=true` en el único tenant de la instancia vacía y se confirmó con lectura. Un cliente `@supabase/supabase-js` con anon key y canal `private:false` fue rechazado con `PrivateOnly`. Esta setting corresponde al tenant local; no es una migración de la app ni evidencia de configuración de producción. [Settings](https://supabase.com/docs/guides/realtime/settings) · [respuesta del equipo Supabase sobre `private_only` local](https://github.com/orgs/supabase/discussions/22484#discussioncomment-11170948). |
 | Auth/RLS real local con claims sintéticos | Pasa dentro de transacciones revertidas sobre el esquema Auth/Postgres real de Supabase: identidad habilitada puede acceder a su topic privado, identidad no habilitada, sin sesión y no-propietario no pueden. No se creó ni se usó una cuenta Google real; esto no prueba OAuth/Auth server. |
-| Auth real de Supabase y login Google en navegador | Pendiente de interacción manual; las pruebas SQL definen tablas/funciones Auth simuladas y no acreditan esta integración. El `302` del proveedor a `accounts.google.com` tampoco la acredita. |
+| Auth real de Supabase y login Google en navegador | Pendiente de interacción manual; las pruebas SQL definen tablas/funciones Auth simuladas y no acreditan esta integración. El `302` del proveedor a `accounts.google.com` tampoco la acredita. La fila local `pending` de administrador debe activarse y ligarse a la identidad Auth/Google al completar el primer login. |
 
 ### Lint global
 
@@ -122,10 +122,10 @@ El revisor detectó que la evidencia del HEAD de código todavía apuntaba a `6d
 
 ## Handoff manual
 
-1. En el entorno aislado de prueba, completar manualmente en navegador el selector/inicio de sesión de Google con la identidad elegida; no compartir sus credenciales ni correos. El coordinador prepara el mapeo de administrador como fixture local explícita; no usar el primer login.
-2. Obtener el `auth.users.id` y el `provider_id` Google solo dentro del entorno aislado para mapear explícitamente una identidad habilitada y, por separado, otra válida no habilitada. No habilitar por correo ni ejecutar este paso en producción.
+1. En el entorno aislado de prueba, completar manualmente en navegador el selector/inicio de sesión de Google con la identidad elegida; no compartir credenciales ni volver a copiar la identidad a mensajes. La fila local ya está preparada como administrador pendiente; el flujo debe ligarla a la identidad Auth/Google y activarla. Esto no es admisión automática del primer visitante: la fila fue creada explícitamente antes del login.
+2. Verificar en la DB aislada, sin imprimir datos personales, que se hayan vinculado el `auth.users.id` y el `provider_id` Google. La segunda identidad válida de prueba no tiene fila de acceso y debe quedar denegada. No habilitarla por correo ni ejecutar estos pasos en producción.
 3. Verificar con una identidad habilitada, otra válida pero no habilitada y sin sesión: la primera llega a sus tableros; la segunda queda denegada; la tercera no lee ni crea datos. Probar logout/cambio de cuenta/suspensión y que el contenido desaparece al confirmar denegación; comprobar el aviso ante pérdida temporal de red.
 4. La instancia local aislada ya tiene `private_only=true`; la lectura lo confirma y un cliente público recibió `PrivateOnly`. Mantener el setting durante la verificación de login.
-5. Resolver por separado la asignación de tableros legacy mediante inventario autorizado y asignación explícita a su propietario. Hasta entonces el issue permanece abierto y `ready-for-human`.
+5. Resolver por separado la asignación de tableros legacy mediante inventario autorizado y asignación explícita a su propietario. Hasta completar Auth real y los recorridos pendientes, el issue permanece abierto y `ready-for-human`.
 
 Esta entrega es local en `codex/issue-4`; no se hizo push, merge ni operación en producción.

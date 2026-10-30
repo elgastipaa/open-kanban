@@ -33,3 +33,11 @@ Revisión final en paralelo, solo lectura, HEAD `94fa29a` contra base fija:
 - **Spec:** el manejo de `realtime.messages` es correcto, sin cambios de ownership ni scope creep. Auth/Google real sigue pendiente. Tableros legacy siguen sin propietario y no se exponen hasta inventario autorizado y asignación explícita, conforme D-07/C-98.
 
 #4 permanece abierto y `ready-for-human`. Handoff pendiente: completar manualmente el selector/login Google en navegador aislado y probar identidad habilitada, identidad válida no habilitada y sesión ausente contra Auth real; la selección de cuentas no se automatiza. Confirmar logout/cambio de cuenta/suspensión y errores temporales con el recorrido real. `private_only=true` y rechazo público ya quedaron verificados en el tenant local aislado. Resolver por separado propietarios de tableros legacy. No publicar correos/secretos, no tocar producción, no hacer push ni merge.
+
+## Actualización del entorno local de #4 — 29/10/2026
+
+- La instancia antigua `C:\Users\gasto\.codex\test-envs\open-kanban-goal-20261028` se detuvo con sus volúmenes preservados. Antes de detenerla se confirmó que contiene 1 tablero, 2 columnas y 3 tareas; no se aplicaron migraciones ni se modificaron esos registros porque su propiedad no está confirmada.
+- Para Auth se creó y arrancó la instancia nueva y vacía `C:\Users\gasto\.codex\test-envs\open-kanban-auth-issue-4`. Aplicó las migraciones 001–015; RLS/políticas de Realtime y `private_only=true` quedaron verificados solo en este tenant local.
+- La identidad de prueba elegida por el usuario tiene una fila local explícita `pending`, `is_admin=true`, todavía sin `auth_user_id` ni sujeto Google vinculado. El valor de identidad no se copia a documentos, repo ni GitHub. La otra cuenta de prueba no tiene fila de acceso.
+- Next.js está ejecutándose con la configuración local aislada en `http://127.0.0.1:3000`; GET `/` devolvió HTTP 200. Aún falta que el usuario complete manualmente «Continuar con Google» y el selector de cuenta. No se afirma que OAuth real esté probado hasta validar la fila activada y los recorridos de acceso/denegación.
+- El secreto OAuth permanece fuera del repositorio. No leer ni mostrar `.env`; las claves del entorno local tampoco deben imprimirse.

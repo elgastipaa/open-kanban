@@ -1,5 +1,21 @@
 \set ON_ERROR_STOP on
 
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_class AS relation
+    JOIN pg_catalog.pg_namespace AS schema
+      ON schema.oid = relation.relnamespace
+    WHERE schema.nspname = 'realtime'
+      AND relation.relname = 'messages'
+      AND relation.relrowsecurity
+  ) THEN
+    RAISE EXCEPTION 'Realtime message authorization must keep RLS enabled';
+  END IF;
+END;
+$$;
+
 BEGIN;
 SET LOCAL ROLE anon;
 DO $$

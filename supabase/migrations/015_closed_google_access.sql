@@ -533,7 +533,22 @@ AS $$
     );
 $$;
 
-ALTER TABLE realtime.messages ENABLE ROW LEVEL SECURITY;
+-- Supabase owns this relation and enables RLS before user policies are managed.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_class AS relation
+    JOIN pg_catalog.pg_namespace AS schema
+      ON schema.oid = relation.relnamespace
+    WHERE schema.nspname = 'realtime'
+      AND relation.relname = 'messages'
+      AND relation.relrowsecurity
+  ) THEN
+    RAISE EXCEPTION 'Supabase Realtime must provide RLS on realtime.messages';
+  END IF;
+END;
+$$;
 DROP POLICY IF EXISTS "openkanban_private_board_read" ON realtime.messages;
 DROP POLICY IF EXISTS "openkanban_private_board_send" ON realtime.messages;
 CREATE POLICY "openkanban_private_board_read" ON realtime.messages

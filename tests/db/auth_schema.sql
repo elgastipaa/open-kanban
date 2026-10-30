@@ -31,6 +31,8 @@ CREATE TABLE realtime.messages (
   topic text NOT NULL,
   payload jsonb NOT NULL DEFAULT '{}'::jsonb
 );
+-- Supabase manages this table and enables RLS before user policies are added.
+ALTER TABLE realtime.messages ENABLE ROW LEVEL SECURITY;
 CREATE FUNCTION realtime.topic() RETURNS text
 LANGUAGE sql STABLE
 AS $$

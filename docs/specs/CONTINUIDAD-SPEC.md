@@ -1,6 +1,6 @@
 # Continuidad — OpenKanban Personal
 
-Checkpoint: 2026-10-29. Goal autorizado por instrucción explícita del usuario conforme LP-0.2: GPT Luna Max, loop continuo secuencial, implement-spec coordinador e implement por ticket. Autorizados trabajo/pruebas aisladas, ramas codex/, commits/push a esas ramas, PR acumulada en borrador y seguimiento/cierre de hijos con evidencia. El usuario pidió «Seguí» tras una interrupción por uso; se reanudó el mismo implementador. La API del Goal seguía informando `usageLimited`, así que no se afirma continuidad automática ni se crea otro Goal. El usuario autorizó específicamente publicar la corrección aislada de Vercel; el estado de publicación y el límite de esa comprobación están en el [checkpoint del run](../agents/implementation-run.md). #3 está completado en integración y #4 espera configuración humana de OAuth de prueba. Main, producción y el corte #53 conservan aprobación específica. Las33 P/E y51 tickets mantienen el alcance completo.
+Checkpoint: 2026-10-30. Goal autorizado por instrucción explícita del usuario conforme LP-0.2: GPT Luna Max, loop continuo secuencial, implement-spec coordinador e implement por ticket. Autorizados trabajo/pruebas aisladas, ramas codex/, commits/push a esas ramas, PR acumulada en borrador y seguimiento/cierre de hijos con evidencia. La API del Goal informa `usageLimited`; esta sesión continúa manualmente con la autorización previa, sin afirmar continuidad automática ni crear otro Goal. El usuario autorizó específicamente publicar la corrección aislada de Vercel; el estado de publicación y el límite de esa comprobación están en el [checkpoint del run](../agents/implementation-run.md). #3 está completado en integración; el usuario confirmó que añadió dos test users de Google a Audience y #4 queda listo para implementación, con pruebas Auth reales aún pendientes. Main, producción y el corte #53 conservan aprobación específica. Las33 P/E y51 tickets mantienen el alcance completo.
 
 ## Ubicación y alcance
 
@@ -72,9 +72,9 @@ La [matriz de trazabilidad](./MATRIZ-TRAZABILIDAD-1.0.md) indexa las 33 P/E y 63
 
 La incorporación de las33 propuestas, el cierre funcional C-112 y TT-0.1 están documentados. TT-0.1 publicó 51 issues #3–#53 con cobertura de33 P/E y63 escenarios. Mantener el padre #2 abierto; #53 conserva aprobación específica de corte.
 
-El usuario activó el Goal el28/10 y confirmó LP-0.2. El run actual completó #3 y dejó una PR acumulada en borrador. La frontera vigente, la verificación de despliegues y el prerrequisito humano de #4 están en el [checkpoint del run](../agents/implementation-run.md). No duplicar Goal, no inferir que `usageLimited` se reanudó automáticamente y no cambiar main/producción.
+El usuario activó el Goal el28/10 y confirmó LP-0.2. El run actual completó #3 y dejó una PR acumulada en borrador. La frontera vigente, la verificación de despliegues y el estado de #4 están en el [checkpoint del run](../agents/implementation-run.md). No duplicar Goal, no inferir que `usageLimited` se reanudó automáticamente y no cambiar main/producción.
 
-Al responder el prerrequisito OAuth, reconciliar de nuevo la configuración del entorno aislado y el grafo de dependencias. Hasta entonces #4 está en `ready-for-human` y los demás tickets abiertos conservan bloqueadores abiertos. G01–G08 siguen separando diseño de verificaciones pendientes; el run no declara listo el MVP.
+El usuario confirmó que agregó dos test users al cliente Google. La configuración aislada y el grafo se revalidaron; #4 queda elegible para implementación y las pruebas Auth reales siguen pendientes. Los demás tickets abiertos conservan bloqueadores. G01–G08 siguen separando diseño de verificaciones pendientes; el run no declara listo el MVP.
 
 Esta consolidación y diseño no ejecutaron pruebas funcionales ni accedieron a infraestructura; los gates no se declaran cumplidos.
 

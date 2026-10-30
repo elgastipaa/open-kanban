@@ -4,8 +4,7 @@ import { Logo } from "@/components/ui/logo";
 
 export const metadata: Metadata = {
   title: "OpenKanban - Terms of Service",
-  description:
-    "Read the terms of service for OpenKanban. Understand our ephemeral data policy and frictionless manifesto.",
+  description: "Terms for using the private OpenKanban application.",
 };
 
 export default function TermsPage() {
@@ -47,28 +46,26 @@ export default function TermsPage() {
 
           <section>
             <h2 className="mb-4 font-bold font-display text-2xl text-white">
-              2. The Manifesto of "No Friction"
+              2. Account and Board Access
             </h2>
             <p className="mb-4">
-              OpenKanban operates without traditional user accounts, passwords,
-              or emails. Access to any board is dictated entirely by knowledge
-              of the specific URL slug.
+              OpenKanban uses Google authentication and explicit application
+              admission. A board belongs to its owner account, and its URL alone
+              does not grant access.
             </p>
             <ul className="mt-2 list-disc space-y-2 pl-5">
               <li>
                 <strong>
-                  You are entirely responsible for keeping your board URL
-                  private.
-                </strong>{" "}
-                We cannot recover lost URLs.
+                  You are responsible for using your account only for authorized
+                  purposes.
+                </strong>
               </li>
               <li>
-                Anyone with the URL can read, write, and delete contents on that
-                board.
+                Application administrators can manage admission but cannot read
+                board content solely because of their administrator role.
               </li>
               <li>
-                Security is derived through URL obscurity and your imagination
-                in choosing complex board names.
+                Board access is checked against the authenticated account.
               </li>
             </ul>
           </section>

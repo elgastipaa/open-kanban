@@ -1,6 +1,5 @@
 import { z } from "zod/v4";
 import {
-  createBoard,
   createColumn,
   createTask,
   deleteColumn,
@@ -92,7 +91,7 @@ export async function importBoard(
   const supabase = createClient();
 
   // Get or create the board
-  let board = await getBoard(supabase, slug);
+  const board = await getBoard(supabase, slug);
 
   if (board) {
     // Clear existing columns (cascade deletes tasks)
@@ -101,7 +100,7 @@ export async function importBoard(
       await deleteColumn(supabase, slug, col.id);
     }
   } else {
-    board = await createBoard(supabase, slug);
+    throw new Error("This board is no longer available.");
   }
 
   // Create columns and tasks from import data

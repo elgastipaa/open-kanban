@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
+import { notFound, redirect } from "next/navigation";
 import { Board } from "@/components/board/board";
 import { Unavailable } from "@/components/board/Unavailable";
+import { resolveApplicationAccess } from "@/lib/auth";
 import { getFullBoard } from "@/lib/db";
 import { createClient } from "@/lib/supabase/server";
 
@@ -11,10 +13,10 @@ interface BoardPageProps {
 export async function generateMetadata({
   params,
 }: BoardPageProps): Promise<Metadata> {
-  const { slug } = await params;
+  await params;
   return {
-    title: `${slug}`,
-    description: `Private, real-time Kanban board for ${slug}.`,
+    title: "Tablero privado",
+    description: "Tablero privado de OpenKanban.",
     robots: {
       index: false,
       follow: false,
@@ -26,22 +28,30 @@ export async function generateMetadata({
 export default async function BoardPage({ params }: BoardPageProps) {
   const { slug } = await params;
   const supabase = await createClient();
+  const { data: authData } = await supabase.auth.getUser();
+  if (!authData.user) {
+    redirect(`/login?next=${encodeURIComponent(`/${slug}`)}`);
+  }
+
+  const access = await resolveApplicationAccess(supabase);
+  if (access.status !== "active") redirect("/");
 
   let boardData = null;
 
   try {
     boardData = await getFullBoard(supabase, slug);
-  } catch (error) {
-    console.error(`[BoardPage] Failed to fetch board data for ${slug}:`, error);
-
-    return <Unavailable slug={slug} />;
+  } catch {
+    return <Unavailable />;
   }
+
+  if (!boardData) notFound();
 
   return (
     <Board
       slug={slug}
-      initialBoard={boardData?.board ?? null}
-      initialColumns={boardData?.columns ?? []}
+      initialBoard={boardData.board}
+      initialColumns={boardData.columns}
+      ownerAuthUserId={authData.user.id}
     />
   );
 }

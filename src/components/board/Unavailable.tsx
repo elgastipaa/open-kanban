@@ -2,11 +2,7 @@ import { IconCloudOff } from "@tabler/icons-react";
 import Link from "next/link";
 import { Logo } from "@/components/ui/logo";
 
-interface UnavailableProps {
-  slug: string;
-}
-
-export function Unavailable({ slug }: UnavailableProps) {
+export function Unavailable() {
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-black p-4 text-white selection:bg-accent selection:text-black">
       {/* Top Branding */}
@@ -21,34 +17,27 @@ export function Unavailable({ slug }: UnavailableProps) {
           </div>
 
           <h2 className="mb-4 font-bold font-display text-3xl text-white tracking-tight md:text-4xl">
-            Connection Offline.
+            No se pudo cargar el tablero
           </h2>
 
           <p className="mb-10 max-w-sm font-sans text-lg text-zinc-400 leading-relaxed">
-            We're unable to connect to our database nodes at the moment. This is
-            likely a temporary interruption. Please re-visit in a few hours.
+            El servicio no respondió. Puedes volver a tus tableros e intentarlo
+            de nuevo más tarde.
           </p>
 
           <div className="flex w-full flex-col gap-4 sm:flex-row sm:justify-center">
-            <a
-              href={`/${slug}`}
+            <Link
+              href="/"
               className="group relative flex h-14 items-center justify-center overflow-hidden rounded-2xl bg-accent px-8 font-bold text-black transition-all hover:scale-[1.02] active:scale-[0.98] sm:min-w-[160px]"
             >
               <div className="absolute inset-0 bg-white opacity-0 transition-opacity group-hover:opacity-20" />
-              Try again
-            </a>
-
-            <Link
-              href="/"
-              className="flex h-14 items-center justify-center rounded-2xl border border-white/10 bg-white/5 px-8 font-medium text-white transition-all hover:bg-white/10 active:scale-[0.98] sm:min-w-[160px]"
-            >
-              Return to home
+              Volver al inicio
             </Link>
           </div>
 
           <div className="mt-12 flex items-center gap-3 font-medium text-[10px] text-zinc-600 uppercase tracking-[0.2em]">
             <span className="h-px w-8 bg-zinc-800" />
-            Node Status: Sync Interrupted
+            Servicio no disponible
             <span className="h-px w-8 bg-zinc-800" />
           </div>
         </div>

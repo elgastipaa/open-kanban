@@ -20,11 +20,10 @@ const bricolage = Bricolage_Grotesque({
 export const metadata: Metadata = {
   metadataBase: siteUrl,
   title: {
-    default: "OpenKanban - Your Board, Your URL",
+    default: "OpenKanban - Tableros privados",
     template: "%s | OpenKanban",
   },
-  description:
-    "A sleek, real-time Kanban board with no signup required. Just type a URL and start organizing instantly across devices.",
+  description: "Acceso privado a tus tableros de OpenKanban.",
   alternates: {
     canonical: "/",
   },
@@ -33,37 +32,36 @@ export const metadata: Metadata = {
     "project management",
     "realtime",
     "board",
-    "no signup kanban",
-    "ephemeral boards",
+    "private kanban",
+    "closed kanban",
     "productivity utility",
     "open source kanban",
   ],
   openGraph: {
-    title: "OpenKanban - Realtime Kanban Boards",
-    description:
-      "Instantly create realtime Kanban boards with zero signup. If you know the URL, you have the keys.",
+    title: "OpenKanban - Tableros privados",
+    description: "Acceso privado a tus tableros de OpenKanban.",
     url: "/",
     siteName: "OpenKanban",
-    locale: "en_US",
+    locale: "es",
     type: "website",
     images: [
       {
         url: "/og.png",
         width: 1200,
         height: 630,
-        alt: "OpenKanban - Real-time Ephemeral Kanban Boards",
+        alt: "OpenKanban - tableros privados",
       },
     ],
   },
   twitter: {
     card: "summary_large_image",
-    title: "OpenKanban - Realtime Boards",
-    description: "Instantly create realtime Kanban boards with zero signup.",
+    title: "OpenKanban - Tableros privados",
+    description: "Acceso privado a tus tableros de OpenKanban.",
     images: ["/og.png"],
   },
   robots: {
-    index: true,
-    follow: true,
+    index: false,
+    follow: false,
   },
 };
 
@@ -73,7 +71,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark">
+    <html lang="es" className="dark">
       <body
         className={`${inter.variable} ${bricolage.variable} bg-black font-sans text-white antialiased`}
       >
@@ -85,8 +83,7 @@ export default function RootLayout({
               "@context": "https://schema.org",
               "@type": "SoftwareApplication",
               name: "OpenKanban",
-              description:
-                "A sleek, real-time Kanban board with no signup required. Just type a URL and start organizing instantly across devices.",
+              description: "Acceso privado a tus tableros de OpenKanban.",
               applicationCategory: "ProductivityApplication",
               operatingSystem: "Any",
               offers: {

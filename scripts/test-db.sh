@@ -39,6 +39,9 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 SQL
 
 for migration in "$repo_dir"/supabase/migrations/*.sql; do
+  if [[ "$(basename -- "$migration")" == '015_closed_google_access.sql' ]]; then
+    break
+  fi
   printf 'Applying %s\n' "$(basename -- "$migration")"
   "${psql[@]}" -q -f "$migration"
 done
@@ -224,4 +227,9 @@ DROP TABLE public.task_write_order_reference;
 SQL
 echo 'PASS: task updated_at follows write order after a delayed transaction start.'
 
+"${psql[@]}" -q -f "$repo_dir/tests/db/auth_schema.sql"
+"${psql[@]}" -q -f "$repo_dir/supabase/migrations/015_closed_google_access.sql"
+"${psql[@]}" -f "$repo_dir/tests/fixtures/google-access.sql"
+"${psql[@]}" -f "$repo_dir/tests/db/closed_access.sql"
+"${psql[@]}" -f "$repo_dir/tests/db/authentication.sql"
 printf 'Database regression tests passed (disposable PostgreSQL).\n'

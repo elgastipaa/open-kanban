@@ -6,8 +6,8 @@ import {
   IconUpload,
   IconUsers,
 } from "@tabler/icons-react";
+import { BoardSignOutButton } from "@/components/auth/board-sign-out-button";
 import { Button } from "@/components/ui/button";
-
 import { Logo } from "@/components/ui/logo";
 
 interface BoardToolbarProps {
@@ -95,6 +95,7 @@ export function BoardToolbar({
           <IconTrash size={16} />
           <span className="hidden sm:inline">Delete</span>
         </Button>
+        <BoardSignOutButton />
       </div>
     </header>
   );

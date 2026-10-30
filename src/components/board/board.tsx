@@ -1,8 +1,10 @@
 "use client";
 
 import { DragDropContext, type DropResult } from "@hello-pangea/dnd";
+import type { AuthChangeEvent, Session } from "@supabase/supabase-js";
 import { LayoutGroup } from "motion/react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AddColumn } from "@/components/board/add-column";
 import { BoardToolbar } from "@/components/board/board-toolbar";
@@ -16,17 +18,154 @@ import { useDevice } from "@/hooks/use-device";
 import { useHotKeys } from "@/hooks/use-hotkeys";
 import { usePresence } from "@/hooks/use-presence";
 import { useRealtime } from "@/hooks/use-realtime";
+import { resolveApplicationAccess } from "@/lib/auth";
 import { exportBoard } from "@/lib/export";
 import { importBoard } from "@/lib/import";
+import {
+  abortPendingSessionRequests,
+  createClient,
+} from "@/lib/supabase/client";
 import type { Board as BoardType, ColumnWithTasks, Task } from "@/lib/types";
 
 interface BoardProps {
   slug: string;
-  initialBoard: BoardType | null;
+  initialBoard: BoardType;
   initialColumns: ColumnWithTasks[];
+  ownerAuthUserId: string;
 }
 
-export function Board({ slug, initialBoard, initialColumns }: BoardProps) {
+type BoardWorkspaceProps = Omit<BoardProps, "ownerAuthUserId"> & {
+  isSessionStale: boolean;
+};
+
+type SessionStatus = "checking" | "active" | "stale" | "denied";
+
+export function Board({
+  slug,
+  initialBoard,
+  initialColumns,
+  ownerAuthUserId,
+}: BoardProps) {
+  const router = useRouter();
+  const [sessionStatus, setSessionStatus] = useState<SessionStatus>("checking");
+
+  useEffect(() => {
+    let disposed = false;
+    let checking = false;
+    let denied = false;
+    let verificationGeneration = 0;
+    const supabase = createClient();
+
+    const denySession = () => {
+      if (disposed || denied) return;
+      denied = true;
+      verificationGeneration += 1;
+      abortPendingSessionRequests();
+      setSessionStatus("denied");
+      router.replace("/");
+    };
+
+    const preserveSessionData = () => {
+      if (!disposed && !denied) setSessionStatus("stale");
+    };
+
+    const verifySession = async () => {
+      if (disposed || checking || denied) return;
+      checking = true;
+      const generation = ++verificationGeneration;
+      try {
+        const { data, error } = await supabase.auth.getUser();
+        if (error) {
+          preserveSessionData();
+          return;
+        }
+        if (!data.user || data.user.id !== ownerAuthUserId) {
+          denySession();
+          return;
+        }
+
+        const access = await resolveApplicationAccess(supabase);
+        if (access.status === "error") {
+          preserveSessionData();
+          return;
+        }
+        if (access.status !== "active") {
+          denySession();
+          return;
+        }
+
+        if (!disposed && generation === verificationGeneration) {
+          setSessionStatus("active");
+        }
+      } catch {
+        preserveSessionData();
+      } finally {
+        checking = false;
+      }
+    };
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(
+      (_event: AuthChangeEvent, session: Session | null) => {
+        if (!session || session.user.id !== ownerAuthUserId) {
+          denySession();
+          return;
+        }
+        window.setTimeout(() => void verifySession(), 0);
+      },
+    );
+
+    const onFocus = () => void verifySession();
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") void verifySession();
+    };
+
+    void verifySession();
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible") void verifySession();
+    }, 30_000);
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      disposed = true;
+      subscription.unsubscribe();
+      window.clearInterval(interval);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [ownerAuthUserId, router]);
+
+  if (sessionStatus === "checking" || sessionStatus === "denied") {
+    return (
+      <output
+        className="flex h-dvh items-center justify-center bg-surface-base"
+        aria-live="polite"
+      >
+        <span className="sr-only">Verificando el acceso al tablero…</span>
+        <span className="board-spinner block" aria-hidden="true" />
+      </output>
+    );
+  }
+
+  return (
+    <BoardWorkspace
+      slug={slug}
+      initialBoard={initialBoard}
+      initialColumns={initialColumns}
+      isSessionStale={sessionStatus === "stale"}
+    />
+  );
+}
+
+function BoardWorkspace({
+  slug,
+  initialBoard,
+  initialColumns,
+  isSessionStale,
+}: BoardWorkspaceProps) {
+  const router = useRouter();
   const { isMobile, isReady } = useDevice();
 
   // Ref to hold refreshFromDB - avoids circular dependency between hooks
@@ -39,7 +178,7 @@ export function Board({ slug, initialBoard, initialColumns }: BoardProps) {
 
   // Realtime: broadcast sync after every mutation, refetch on incoming sync
   const { broadcastSync, broadcastBoardDeleted } = useRealtime({
-    slug,
+    boardId: initialBoard.id,
     onSync: () => {
       refreshRef.current?.();
     },
@@ -48,6 +187,7 @@ export function Board({ slug, initialBoard, initialColumns }: BoardProps) {
         description: "Another user has deleted this board.",
       });
       replaceStateRef.current?.(null, []); // This resets the board to initial To Do state
+      router.push("/");
     },
   });
 
@@ -101,7 +241,7 @@ export function Board({ slug, initialBoard, initialColumns }: BoardProps) {
   useHotKeys(hotKeyBindings);
 
   // Presence
-  const { viewerCount, isConnected } = usePresence(slug);
+  const { viewerCount, isConnected } = usePresence(initialBoard.id);
 
   // Task modal state
   const [editingTask, setEditingTask] = useState<Task | null>(null);
@@ -142,9 +282,11 @@ export function Board({ slug, initialBoard, initialColumns }: BoardProps) {
   async function handleDeleteBoard() {
     setIsDeletingBoard(true);
     try {
-      await removeBoard();
+      const deleted = await removeBoard();
+      if (!deleted) return;
       // Notify other users looking at this board
       broadcastBoardDeleted();
+      router.push("/");
     } finally {
       setIsDeletingBoard(false);
       setShowDeleteBoard(false);
@@ -212,6 +354,15 @@ export function Board({ slug, initialBoard, initialColumns }: BoardProps) {
 
   return (
     <div className="flex h-dvh flex-col bg-surface-base">
+      {isSessionStale && (
+        <output
+          className="block border-border border-b bg-surface-raised px-4 py-2 text-center text-priority-medium text-sm"
+          aria-live="polite"
+        >
+          No se pudo confirmar el acceso. Se muestran los últimos datos
+          cargados; verifica tu conexión.
+        </output>
+      )}
       <BoardToolbar
         slug={slug}
         viewerCount={viewerCount}

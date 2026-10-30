@@ -4,14 +4,14 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import type { WebSocketStatus } from "@/lib/types";
-import { generateUUID, getChannelTopic } from "@/lib/utils";
+import { generateUUID } from "@/lib/utils";
 
 /**
  * Tracks the number of viewers on a board using Supabase Presence.
  * Each viewer gets a random ID on mount and is tracked/untracked on the channel.
  * Gracefully degrades on subscription or tracking errors.
  */
-export function usePresence(slug: string) {
+export function usePresence(boardId: string) {
   const [viewerCount, setViewerCount] = useState(1);
   const [isConnected, setIsConnected] = useState(true);
 
@@ -20,9 +20,9 @@ export function usePresence(slug: string) {
 
   useEffect(() => {
     const supabase = createClient();
-    const topic = getChannelTopic("board", slug);
+    const topic = `board:${boardId}`;
     const ch = supabase.channel(topic, {
-      config: { presence: { key: generateUUID() } },
+      config: { private: true, presence: { key: generateUUID() } },
     });
 
     ch.on("presence", { event: "sync" }, () => {
@@ -57,7 +57,7 @@ export function usePresence(slug: string) {
       ch.untrack();
       supabase.removeChannel(ch);
     };
-  }, [slug]);
+  }, [boardId]);
 
   return { viewerCount, isConnected };
 }

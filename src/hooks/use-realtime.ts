@@ -5,10 +5,9 @@ import { useCallback, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import type { WebSocketStatus } from "@/lib/types";
-import { getChannelTopic } from "@/lib/utils";
 
 interface UseRealtimeOptions {
-  slug: string;
+  boardId: string;
   /** Called when another client mutates the board */
   onSync: () => void;
   /** Called when another client deletes the board */
@@ -26,7 +25,7 @@ interface UseRealtimeOptions {
  * so the mutating client never triggers its own refetch.
  */
 export function useRealtime({
-  slug,
+  boardId,
   onSync,
   onBoardDeleted,
 }: UseRealtimeOptions) {
@@ -41,8 +40,8 @@ export function useRealtime({
 
   useEffect(() => {
     const supabase = createClient();
-    const topic = getChannelTopic("board-sync", slug);
-    const ch = supabase.channel(topic);
+    const topic = `board-sync:${boardId}`;
+    const ch = supabase.channel(topic, { config: { private: true } });
 
     ch.on("broadcast", { event: "sync" }, () => {
       onSyncRef.current();
@@ -73,7 +72,7 @@ export function useRealtime({
       supabase.removeChannel(ch);
       channelRef.current = null;
     };
-  }, [slug]);
+  }, [boardId]);
 
   /** Tell every other viewer to refetch */
   const broadcastSync = useCallback(() => {

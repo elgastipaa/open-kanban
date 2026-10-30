@@ -1,10 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { useCallback, useRef } from "react";
-import {
-  createBoard,
-  deleteBoard as dbDeleteBoard,
-  getFullBoard,
-} from "@/lib/db";
+import { deleteBoard as dbDeleteBoard, getFullBoard } from "@/lib/db";
+import { getSessionEpoch } from "@/lib/supabase/client";
 import type { Board, ColumnWithTasks } from "@/lib/types";
 import type { TaskMutationLedger } from "./task-mutation-ledger";
 import { getInitialLocalColumn, showMutationError } from "./utils";
@@ -33,8 +30,16 @@ export function useBoardSync({
   const refreshFromDB = useCallback(async () => {
     const generation = ++refreshGenerationRef.current;
     const ledgerRevision = taskMutationLedger.revision;
-    const data = await getFullBoard(supabase, slug);
+    const sessionEpoch = getSessionEpoch();
+    let data: Awaited<ReturnType<typeof getFullBoard>>;
+    try {
+      data = await getFullBoard(supabase, slug);
+    } catch (error) {
+      if (sessionEpoch !== getSessionEpoch()) return;
+      throw error;
+    }
     if (
+      sessionEpoch === getSessionEpoch() &&
       generation === refreshGenerationRef.current &&
       ledgerRevision === taskMutationLedger.revision &&
       data
@@ -58,13 +63,8 @@ export function useBoardSync({
 
   const persistBoard = useCallback(async (): Promise<Board> => {
     if (boardRef.current) return boardRef.current;
-
-    const newBoard = await createBoard(supabase, slug);
-    isPersistedRef.current = true;
-    boardRef.current = newBoard;
-    setBoard(newBoard);
-    return newBoard;
-  }, [slug, supabase, boardRef, isPersistedRef, setBoard]);
+    throw new Error("This board is no longer available.");
+  }, [boardRef]);
 
   const removeBoard = useCallback(async () => {
     if (boardRef.current && isPersistedRef.current) {
@@ -72,7 +72,7 @@ export function useBoardSync({
         await dbDeleteBoard(supabase, slug, boardRef.current.id);
       } catch {
         showMutationError("delete board");
-        return;
+        return false;
       }
     }
     refreshGenerationRef.current += 1;
@@ -80,6 +80,7 @@ export function useBoardSync({
     isPersistedRef.current = false;
     setBoard(null);
     setColumns(taskMutationLedger.sync([getInitialLocalColumn()], true));
+    return true;
   }, [
     supabase,
     slug,

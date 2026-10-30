@@ -1,6 +1,6 @@
 # Issue #4 — evidencia de implementación y revisión
 
-Fecha: 30/10/2026. Issue: «Entrar con Google a una aplicación cerrada». Rama local: `codex/issue-4`. Base fija de revisión: `d7ebc632a5df207afda34273f6850bce68b3f146`. Código revisado: `6d0d8748e39016cd9152c5e584ef62513e18635d` (`feat(auth): add closed Google access (#4)`). El commit de este informe se agrega después del código revisado y no cambia su alcance.
+Fecha: 30/10/2026. Issue: «Entrar con Google a una aplicación cerrada». Rama local: `codex/issue-4`. Base fija de revisión: `d7ebc632a5df207afda34273f6850bce68b3f146`. Código revisado: `94fa29a97fd2e4aae50a358a7d68538ed3c03f8f` (`fix(auth): respect Supabase Realtime ownership (#4)`). Este informe se registra en un commit documental posterior; la revisión se fija al HEAD de código indicado.
 
 No se guardaron correos, secretos ni datos reales de las cuentas de prueba.
 
@@ -9,6 +9,7 @@ No se guardaron correos, secretos ni datos reales de las cuentas de prueba.
 - Inicio de sesión Google por OAuth/PKCE, callback de retorno interno, controles de Auth y admisión en servidor/proxy/RPC, pantallas de acceso y administración.
 - Admisión explícita ligada a la identidad Auth y al `sub` estable del proveedor; bootstrap administrador solo por fixture, nunca por ser el primer visitante.
 - Lectura, escritura y Realtime privados por identidad/propiedad de tablero; sin sesión, sin habilitación, suspensión, URL conocida o permisos alternativos no conceden acceso.
+- La migración 015 no cambia el ownership de `realtime.messages`: verifica que Supabase ya haya habilitado RLS y luego administra solo las políticas de OpenKanban.
 - La página de tablero comprueba identidad y estado de admisión; logout, otra identidad o denegación confirmada abortan fetches, desmontan el estado privado y redirigen. Respuestas de refresco de una época anterior se descartan.
 - Fallos temporales de Auth/RPC dejan los últimos datos cargados con un aviso accesible de información desactualizada. Revalidar al volver al foco conserva la pantalla mientras espera una confirmación.
 - La interfaz y el idioma del documento parten en español.
@@ -23,11 +24,14 @@ Los tableros previos sin propietario quedan inaccesibles y con `owner_id` nulo. 
 | `pnpm typecheck` | Pasa. |
 | `pnpm build` | Pasa con Next.js 16.4.2; rutas `/`, `/[slug]`, `/admin/access`, `/auth/callback` y `/login` compiladas. |
 | `pnpm test:db` | Pasa contra PostgreSQL descartable. Incluye no sesión, acceso habilitado/no habilitado, bootstrap por fixture, identidad Google ligada a Auth estable, propiedad, aislamiento, suspensión, cambios de `sub`, RLS/Realtime y regresiones previas. |
+| Supabase local real (CLI 2.122.0; PostgreSQL 17.11; Realtime 2.147.1), migración limpia | Pasa. Se aplican 001–015. En la tabla gestionada `realtime.messages`, owner=`supabase_realtime_admin`, RLS sigue activo y existen las políticas SELECT/INSERT de OpenKanban para `authenticated`. SHA-256 del archivo 015 coincide entre worktree e instancia aislada: `863163A76C849CE2194C646B5FADD8183FD4A47DD37ACFE9AEF744C598EA94A7`. |
+| Realtime privado en el tenant local aislado | Se habilitó `private_only=true` en el único tenant de la instancia vacía y se confirmó con lectura. Un cliente `@supabase/supabase-js` con anon key y canal `private:false` fue rechazado con `PrivateOnly`. Esta setting corresponde al tenant local; no es una migración de la app ni evidencia de configuración de producción. [Settings](https://supabase.com/docs/guides/realtime/settings) · [respuesta del equipo Supabase sobre `private_only` local](https://github.com/orgs/supabase/discussions/22484#discussioncomment-11170948). |
+| Auth/RLS real local con claims sintéticos | Pasa dentro de transacciones revertidas sobre el esquema Auth/Postgres real de Supabase: identidad habilitada puede acceder a su topic privado, identidad no habilitada, sin sesión y no-propietario no pueden. No se creó ni se usó una cuenta Google real; esto no prueba OAuth/Auth server. |
 | Auth real de Supabase y login Google en navegador | Pendiente de interacción manual; las pruebas SQL definen tablas/funciones Auth simuladas y no acreditan esta integración. El `302` del proveedor a `accounts.google.com` tampoco la acredita. |
 
 ### Lint global
 
-`pnpm lint --reporter=json` falla con 60 diagnósticos de categoría `format` en 60 archivos sin cambios; `warnings=0`. Los 24 archivos del diff pasan el check dirigido y ninguno aparece en este conjunto. No se reformatearon archivos ajenos.
+`pnpm lint` falla con 60 errores de categoría `format` en 60 archivos sin cambios. El check dirigido de Biome pasa en los 24 archivos de código compatibles del diff; las tres SQL modificadas no son formatos que Biome procese (`Checked 0 files` para ellas) y se validaron con `pnpm test:db` y la instancia local real. Ningún archivo del check dirigido aparece entre los 60 errores. No se reformatearon archivos ajenos.
 
 Rutas exactas del baseline:
 
@@ -96,30 +100,32 @@ vercel.json
 
 ## Revisión reproducible
 
-Revisores de solo lectura sobre el commit de código `6d0d8748e39016cd9152c5e584ef62513e18635d`, contra la base fija. Comandos capturados:
+Dos revisores independientes de solo lectura revisaron el HEAD de código `94fa29a97fd2e4aae50a358a7d68538ed3c03f8f` contra la base fija. Comandos capturados:
 
 ```sh
-git diff d7ebc632a5df207afda34273f6850bce68b3f146...6d0d8748e39016cd9152c5e584ef62513e18635d
-git log d7ebc632a5df207afda34273f6850bce68b3f146..6d0d8748e39016cd9152c5e584ef62513e18635d --oneline
+git diff d7ebc632a5df207afda34273f6850bce68b3f146...94fa29a97fd2e4aae50a358a7d68538ed3c03f8f
+git log d7ebc632a5df207afda34273f6850bce68b3f146..94fa29a97fd2e4aae50a358a7d68538ed3c03f8f --oneline
 ```
+
+Commits del diff: `6d0d874 feat(auth): add closed Google access (#4)`, `e644a7e docs: record issue #4 verification`, `94fa29a fix(auth): respect Supabase Realtime ownership (#4)`.
 
 ### Standards
 
-Sin infracciones de estándares documentados. Heurísticas posibles de código duplicado: `src/components/auth/sign-out-button.tsx` y `board-sign-out-button.tsx` repiten el formulario y botón de cierre de sesión, con diferencias justificadas de estilo y frontera Server/Client; `src/app/auth/callback/route.ts` y `src/proxy.ts` aplican encabezados privados similares, con necesidades distintas del Proxy. Ninguna es hallazgo material.
+El revisor detectó que la evidencia del HEAD de código todavía apuntaba a `6d0d874`; este informe y `docs/agents/implementation-run.md` se actualizan en el commit documental siguiente, resolviendo ese hallazgo de proceso. No se encontraron infracciones adicionales de estándares en código. Juicios no materiales de posible código duplicado: formularios de sign-out en dos componentes; encabezados privados compartidos entre callback y Proxy; guarda `relrowsecurity` repetida en migración y test para probar la salvaguarda; verificación `verifySession()` llamada tanto al hacerse visible la página como desde el intervalo.
 
 ### Spec
 
-- Resueltos: cambio de identidad aborta requests, limpia el workspace privado y descarta respuestas de épocas previas (DT-0.1 §9); un fallo transitorio conserva contenido con aviso y revalidar al volver al foco no lo oculta (Estados y errores §1, DT-0.1 §9); el documento declara `lang="es"` (P12).
-- Parcial: la migración cierra tableros legacy sin propietario, pero su inventario y asignación explícita siguen pendientes por D-07/C-98; no hay apropiación por URL.
-- Evidencia pendiente: inicio de sesión con Supabase Auth/Google real, identidad habilitada y otra no habilitada en navegador. Las fixtures sintéticas no cumplen este criterio.
-- No se reporta scope creep ni implementación incorrecta adicional.
+- **Realtime: correcto.** La migración no cambia el ownership de `realtime.messages`, verifica RLS prehabilitado y conserva las políticas ajenas al recrear solo las dos de OpenKanban. El revisor no encontró defecto de código ni scope creep.
+- **Parcial — tableros legacy.** Los registros sin `owner_id` siguen inaccesibles hasta inventario y asignación explícitos, como exige D-07/C-98; no se asigna propietario por URL ni por primer login.
+- **Evidencia pendiente — Auth real.** Claims/identidades SQL sintéticos y el rechazo del cliente público con `PrivateOnly` no prueban el login real de Google ni producción. P26 exige trazar reglas a escenarios/evidencia. El revisor señaló también que el informe anterior aún describía la evidencia Realtime como futura; esta versión registra los resultados de `94fa29a`.
+- No se reporta otra implementación incorrecta.
 
 ## Handoff manual
 
-1. En el entorno aislado de prueba, completar en navegador el selector/inicio de sesión de Google con una identidad de prueba; no compartir sus credenciales ni correos.
-2. Obtener el `auth.users.id` y el `provider_id` Google de esa identidad desde el entorno aislado y usar una fixture autorizada para habilitarla explícitamente y, por separado, mapear una identidad administradora. No habilitar por correo, no usar primer login y no ejecutar este paso en producción.
+1. En el entorno aislado de prueba, completar manualmente en navegador el selector/inicio de sesión de Google con la identidad elegida; no compartir sus credenciales ni correos. El coordinador prepara el mapeo de administrador como fixture local explícita; no usar el primer login.
+2. Obtener el `auth.users.id` y el `provider_id` Google solo dentro del entorno aislado para mapear explícitamente una identidad habilitada y, por separado, otra válida no habilitada. No habilitar por correo ni ejecutar este paso en producción.
 3. Verificar con una identidad habilitada, otra válida pero no habilitada y sin sesión: la primera llega a sus tableros; la segunda queda denegada; la tercera no lee ni crea datos. Probar logout/cambio de cuenta/suspensión y que el contenido desaparece al confirmar denegación; comprobar el aviso ante pérdida temporal de red.
-4. Confirmar en Realtime de la instancia aislada que «Allow public access to channels» está desactivado y que los topics privados siguen aislados.
+4. La instancia local aislada ya tiene `private_only=true`; la lectura lo confirma y un cliente público recibió `PrivateOnly`. Mantener el setting durante la verificación de login.
 5. Resolver por separado la asignación de tableros legacy mediante inventario autorizado y asignación explícita a su propietario. Hasta entonces el issue permanece abierto y `ready-for-human`.
 
 Esta entrega es local en `codex/issue-4`; no se hizo push, merge ni operación en producción.

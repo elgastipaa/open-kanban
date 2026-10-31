@@ -1,5 +1,4 @@
 import type {
-  Column,
   ColumnWithTasks,
   TaskOrderCommand,
   TaskPositionUpdate,
@@ -8,31 +7,6 @@ import type {
 export interface TaskOrderMovePlan {
   command: TaskOrderCommand;
   optimisticUpdates: TaskPositionUpdate[];
-}
-
-/** Keep task contents local while adopting monotonic order versions read from the server. */
-export function mergeAuthoritativeOrderVersions(
-  columns: ColumnWithTasks[],
-  authoritativeColumns: Pick<Column, "id" | "task_order_version">[],
-): ColumnWithTasks[] {
-  const versionsById = new Map(
-    authoritativeColumns.map(({ id, task_order_version }) => [
-      id,
-      task_order_version,
-    ]),
-  );
-  return columns.map((column) => {
-    const authoritativeVersion = versionsById.get(column.id);
-    return authoritativeVersion === undefined
-      ? column
-      : {
-          ...column,
-          task_order_version: Math.max(
-            column.task_order_version,
-            authoritativeVersion,
-          ),
-        };
-  });
 }
 
 /** Build a position-only command from the current visible order. */

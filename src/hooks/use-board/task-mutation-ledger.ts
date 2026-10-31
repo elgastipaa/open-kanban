@@ -1,4 +1,9 @@
-import type { ColumnWithTasks, Task, TaskPositionUpdate } from "@/lib/types";
+import type {
+  ColumnWithTasks,
+  Task,
+  TaskOrderCommand,
+  TaskPositionUpdate,
+} from "@/lib/types";
 
 type EditableTaskFields = Pick<Task, "title" | "description" | "priority">;
 type PendingTaskCreation = {
@@ -18,6 +23,7 @@ export type TaskMutationIntent =
       id: string;
       kind: "move";
       updates: TaskPositionUpdate[];
+      orderCommand: TaskOrderCommand;
     }
   | {
       id: string;
@@ -257,6 +263,7 @@ export class TaskMutationLedger {
       for (const update of intent.updates) {
         update.id = this.resolveTaskIdFor(update.id);
       }
+      this.remapOrderCommand(intent.orderCommand);
     } else {
       intent.taskId = this.resolveTaskIdFor(intent.taskId);
     }
@@ -361,6 +368,16 @@ export class TaskMutationLedger {
       for (const update of intent.updates) {
         if (update.column_id === oldId) update.column_id = newId;
       }
+      const expectedVersion =
+        intent.orderCommand.expected_order_versions[oldId];
+      if (expectedVersion !== undefined) {
+        delete intent.orderCommand.expected_order_versions[oldId];
+        intent.orderCommand.expected_order_versions[newId] = expectedVersion;
+      }
+      for (const move of intent.orderCommand.moves) {
+        if (move.source_column_id === oldId) move.source_column_id = newId;
+        if (move.column_id === oldId) move.column_id = newId;
+      }
     }
     this.mutationRevision += 1;
     const remappedColumns = columns.map((column) => ({
@@ -409,8 +426,30 @@ export class TaskMutationLedger {
         for (const update of intent.updates) {
           if (update.id === oldId) update.id = newId;
         }
+        this.remapOrderCommand(intent.orderCommand, oldId, newId);
       } else if (intent.taskId === oldId) {
         intent.taskId = newId;
+      }
+    }
+  }
+
+  private remapOrderCommand(
+    command: TaskOrderCommand,
+    oldId?: string,
+    newId?: string,
+  ): void {
+    for (const move of command.moves) {
+      move.id = this.resolveTaskIdFor(move.id);
+      if (move.before_task_id) {
+        move.before_task_id = this.resolveTaskIdFor(move.before_task_id);
+      }
+      if (move.after_task_id) {
+        move.after_task_id = this.resolveTaskIdFor(move.after_task_id);
+      }
+      if (oldId && newId) {
+        if (move.id === oldId) move.id = newId;
+        if (move.before_task_id === oldId) move.before_task_id = newId;
+        if (move.after_task_id === oldId) move.after_task_id = newId;
       }
     }
   }

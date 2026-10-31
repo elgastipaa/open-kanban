@@ -25,6 +25,7 @@ export interface Column {
   title: string;
   position: number;
   is_collapsed: boolean;
+  task_order_version: number;
   created_at: string;
 }
 
@@ -102,6 +103,38 @@ export interface TaskPositionUpdate {
   column_id?: string;
   position: number;
 }
+
+export interface TaskOrderMove {
+  id: string;
+  source_column_id: string;
+  column_id: string;
+  before_task_id: string | null;
+  after_task_id: string | null;
+}
+
+export interface TaskOrderCommand {
+  operation_id: string;
+  moves: TaskOrderMove[];
+  expected_order_versions: Record<string, number>;
+}
+
+export interface TaskOrderColumnSnapshot {
+  id: string;
+  task_order_version: number;
+  tasks: Task[];
+}
+
+export type TaskOrderResult =
+  | {
+      status: "confirmed" | "conflict";
+      operation_id: string;
+      columns: TaskOrderColumnSnapshot[];
+    }
+  | { status: "retryable" | "expired_unknown"; operation_id: string }
+  | {
+      status: "uncertain" | "unavailable" | "rejected" | "access_denied";
+      operation_id: string;
+    };
 
 /** Payload for creating a new column */
 export interface CreateColumnPayload {

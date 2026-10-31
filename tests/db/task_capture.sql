@@ -49,6 +49,9 @@ DECLARE
   v_replay jsonb;
   v_second_intent jsonb;
   v_task_id uuid;
+  v_source_order_version bigint;
+  v_target_order_version bigint;
+  v_move_result jsonb;
   v_other_board record;
   v_other_board_id uuid;
   v_other_column_id uuid;
@@ -393,14 +396,28 @@ BEGIN
 
   SELECT id INTO v_target_column_id
   FROM public.create_column_p(v_board_slug, v_board_id, 'Destino de captura', 1);
-  PERFORM public.update_task_positions_p(
+  SELECT task_order_version INTO v_source_order_version
+  FROM public.columns WHERE id = v_column_id;
+  SELECT task_order_version INTO v_target_order_version
+  FROM public.columns WHERE id = v_target_column_id;
+  v_move_result := public.update_task_positions_p(
+    'a7777777-0000-4000-8000-000000000004',
     v_board_slug,
     jsonb_build_array(jsonb_build_object(
       'id', v_task_id,
+      'source_column_id', v_column_id,
       'column_id', v_target_column_id,
-      'position', 0
-    ))
+      'before_task_id', NULL,
+      'after_task_id', NULL
+    )),
+    jsonb_build_object(
+      v_column_id::text, v_source_order_version,
+      v_target_column_id::text, v_target_order_version
+    )
   );
+  IF v_move_result->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'A same-board task move should confirm: %', v_move_result;
+  END IF;
 
   v_result := public.get_task_creation_result_p(
     v_operation_id,

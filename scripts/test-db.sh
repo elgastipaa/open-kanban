@@ -492,6 +492,152 @@ fi
 echo 'PASS: two authenticated editors concurrently save different fields using independent versions'
 
 "${psql[@]}" -q -f "$repo_dir/tests/db/task_field_versions_assertions.sql"
+"${psql[@]}" -q -f "$repo_dir/tests/db/task_ordering.sql"
+
+# Two authenticated actors submit the same multi-column batch against one
+# order-version snapshot. Exactly one may commit; the stale request must return
+# a reviewable conflict without partially applying either move.
+task_order_race_dir="$test_dir/task-order-same-version-race"
+mkdir -- "$task_order_race_dir"
+task_order_race_holder_log="$task_order_race_dir/lock-holder.log"
+task_order_race_first_log="$task_order_race_dir/actor-a.log"
+task_order_race_second_log="$task_order_race_dir/actor-b.log"
+task_order_race_board_id=$("${psql[@]}" -At -c "SELECT board_id FROM public.issue9_order_fixture WHERE purpose = 'main'")
+task_order_race_slug=$("${psql[@]}" -At -c "SELECT board_slug FROM public.issue9_order_fixture WHERE purpose = 'main'")
+task_order_race_source_id=$("${psql[@]}" -At -c "SELECT source_column_id FROM public.issue9_order_fixture WHERE purpose = 'main'")
+task_order_race_target_id=$("${psql[@]}" -At -c "SELECT target_column_id FROM public.issue9_order_fixture WHERE purpose = 'main'")
+task_order_race_second_source_id=$("${psql[@]}" -At -c "SELECT second_source_column_id FROM public.issue9_order_fixture WHERE purpose = 'main'")
+task_order_race_second_target_id=$("${psql[@]}" -At -c "SELECT second_target_column_id FROM public.issue9_order_fixture WHERE purpose = 'main'")
+task_order_race_task_b=$("${psql[@]}" -At -c "SELECT task_b FROM public.issue9_order_fixture WHERE purpose = 'main'")
+task_order_race_task_d=$("${psql[@]}" -At -c "SELECT task_d FROM public.issue9_order_fixture WHERE purpose = 'main'")
+task_order_race_target_before=$("${psql[@]}" -At -c "SELECT target_before_id FROM public.issue9_order_fixture WHERE purpose = 'main'")
+task_order_race_source_version=$("${psql[@]}" -At -c "SELECT task_order_version FROM public.columns WHERE id = '$task_order_race_source_id'")
+task_order_race_target_version=$("${psql[@]}" -At -c "SELECT task_order_version FROM public.columns WHERE id = '$task_order_race_target_id'")
+task_order_race_second_source_version=$("${psql[@]}" -At -c "SELECT task_order_version FROM public.columns WHERE id = '$task_order_race_second_source_id'")
+task_order_race_second_target_version=$("${psql[@]}" -At -c "SELECT task_order_version FROM public.columns WHERE id = '$task_order_race_second_target_id'")
+PGAPPNAME=openkanban_task_order_lock_holder "${psql[@]}" > "$task_order_race_holder_log" 2>&1 <<SQL &
+BEGIN;
+SELECT id FROM public.boards WHERE id = '$task_order_race_board_id' FOR UPDATE;
+SELECT pg_sleep(3);
+COMMIT;
+SQL
+task_order_race_holder_pid=$!
+task_order_race_holder_active=false
+for _ in $(seq 1 100); do
+  holder_state=$("${psql[@]}" -At -c "SELECT state FROM pg_stat_activity WHERE application_name = 'openkanban_task_order_lock_holder' AND state = 'active' AND query LIKE '%pg_sleep(3)%'")
+  if [[ "$holder_state" == active ]]; then
+    task_order_race_holder_active=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$task_order_race_holder_active" != true ]]; then
+  cat -- "$task_order_race_holder_log" >&2
+  echo 'Task-order race lock holder did not start.' >&2
+  exit 1
+fi
+
+for actor in a b; do
+  if [[ "$actor" == a ]]; then
+    actor_id='40000000-0000-4000-8000-000000000002'
+    operation_id='f9999999-0000-4000-8000-000000000201'
+    target_log="$task_order_race_first_log"
+  else
+    actor_id='40000000-0000-4000-8000-000000000005'
+    operation_id='f9999999-0000-4000-8000-000000000202'
+    target_log="$task_order_race_second_log"
+  fi
+  PGAPPNAME="openkanban_task_order_actor_$actor" "${psql[@]}" -qAt \
+    -v actor_id="$actor_id" -v operation_id="$operation_id" \
+    -v board_slug="$task_order_race_slug" \
+    -v task_b="$task_order_race_task_b" -v task_d="$task_order_race_task_d" \
+    -v target_id="$task_order_race_target_id" \
+    -v second_source_id="$task_order_race_second_source_id" \
+    -v target_before="$task_order_race_target_before" \
+    -v source_id="$task_order_race_source_id" \
+    -v second_target_id="$task_order_race_second_target_id" \
+    -v source_version="$task_order_race_source_version" \
+    -v target_version="$task_order_race_target_version" \
+    -v second_source_version="$task_order_race_second_source_version" \
+    -v second_target_version="$task_order_race_second_target_version" \
+    > "$target_log" 2>&1 <<'SQL' &
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', :'actor_id', true) \gset
+WITH response AS (
+  SELECT public.update_task_positions_p(
+    :'operation_id'::uuid,
+    :'board_slug',
+    jsonb_build_array(
+      jsonb_build_object(
+        'id', :'task_b'::uuid,
+        'source_column_id', :'source_id'::uuid,
+        'column_id', :'target_id'::uuid,
+        'before_task_id', NULL,
+        'after_task_id', :'target_before'::uuid
+      ),
+      jsonb_build_object(
+        'id', :'task_d'::uuid,
+        'source_column_id', :'second_target_id'::uuid,
+        'column_id', :'second_source_id'::uuid,
+        'before_task_id', NULL,
+        'after_task_id', NULL
+      )
+    ),
+    jsonb_build_object(
+      :'source_id', :'source_version'::bigint,
+      :'target_id', :'target_version'::bigint,
+      :'second_source_id', :'second_source_version'::bigint,
+      :'second_target_id', :'second_target_version'::bigint
+    )
+  ) AS result
+)
+SELECT result->>'status' FROM response;
+COMMIT;
+SQL
+  if [[ "$actor" == a ]]; then
+    task_order_race_first_pid=$!
+  else
+    task_order_race_second_pid=$!
+  fi
+done
+
+task_order_race_both_waiting=false
+for _ in $(seq 1 100); do
+  waiting_count=$("${psql[@]}" -At -c "SELECT count(*) FROM pg_stat_activity WHERE application_name IN ('openkanban_task_order_actor_a', 'openkanban_task_order_actor_b') AND wait_event_type = 'Lock'")
+  if [[ "$waiting_count" == 2 ]]; then
+    task_order_race_both_waiting=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$task_order_race_both_waiting" != true ]]; then
+  cat -- "$task_order_race_first_log" "$task_order_race_second_log" >&2
+  echo 'Both task-order requests did not wait on the board lock.' >&2
+  "${psql[@]}" -q -c "SELECT pg_cancel_backend(pid) FROM pg_stat_activity WHERE application_name = 'openkanban_task_order_lock_holder'" >/dev/null
+  wait "$task_order_race_holder_pid" || true
+  wait "$task_order_race_first_pid" || true
+  wait "$task_order_race_second_pid" || true
+  exit 1
+fi
+wait "$task_order_race_holder_pid" || { cat -- "$task_order_race_holder_log" >&2; exit 1; }
+wait "$task_order_race_first_pid" || { cat -- "$task_order_race_first_log" >&2; exit 1; }
+wait "$task_order_race_second_pid" || { cat -- "$task_order_race_second_log" >&2; exit 1; }
+task_order_first_status=$(grep -E '^(confirmed|conflict)$' "$task_order_race_first_log" | tail -n 1)
+task_order_second_status=$(grep -E '^(confirmed|conflict)$' "$task_order_race_second_log" | tail -n 1)
+if [[ ! ( "$task_order_first_status" == confirmed && "$task_order_second_status" == conflict ) \
+  && ! ( "$task_order_first_status" == conflict && "$task_order_second_status" == confirmed ) ]]; then
+  echo 'Concurrent same-version task ordering must produce one confirmation and one reviewable conflict.' >&2
+  cat -- "$task_order_race_first_log" "$task_order_race_second_log" >&2
+  exit 1
+fi
+task_order_race_state=$("${psql[@]}" -AtF '|' -c "SELECT (SELECT count(*) FROM public.tasks WHERE id = '$task_order_race_task_b' AND column_id = '$task_order_race_target_id'), (SELECT count(*) FROM public.tasks WHERE id = '$task_order_race_task_d' AND column_id = '$task_order_race_second_source_id'), (SELECT count(*) FROM public.tasks WHERE id = '$task_order_race_task_b' AND column_id = '$task_order_race_source_id'), (SELECT count(*) FROM public.tasks WHERE id = '$task_order_race_task_d' AND column_id = '$task_order_race_second_target_id')")
+if [[ "$task_order_race_state" != '1|1|0|0' ]]; then
+  echo "Concurrent task-order batch was partially applied: $task_order_race_state" >&2
+  cat -- "$task_order_race_first_log" "$task_order_race_second_log" >&2
+  exit 1
+fi
+echo 'PASS: concurrent same-version ordering yields one atomic batch and one reviewable conflict'
 
 # A reconciliation locks the actor's active membership before looking up its
 # receipt. If revocation wins the membership row first, the resolver must wait

@@ -39,9 +39,11 @@ export function useBoard({
   const queueRef = useRef<Promise<void>>(Promise.resolve());
 
   const enqueue = useCallback((operation: () => Promise<void>) => {
-    queueRef.current = queueRef.current.then(operation).catch((err) => {
+    const queued = queueRef.current.then(operation).catch((err) => {
       console.error("Mutation queue error:", err);
     });
+    queueRef.current = queued;
+    return queued;
   }, []);
 
   const supabase = createClient();

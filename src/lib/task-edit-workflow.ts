@@ -31,6 +31,16 @@ export type TaskEditSaveOutcome =
   | "error"
   | "reconciliation";
 export type TaskEditSaveFollowUp = "none" | "close" | "confirm-delete";
+export type TaskMoveChoice = "save" | "discard" | "cancel";
+
+/** A requested move follows only an explicit discard or a confirmed save. */
+export function taskMoveFollowUp(
+  choice: TaskMoveChoice,
+  saveOutcome?: TaskEditSaveOutcome,
+): "move" | "none" {
+  if (choice === "discard") return "move";
+  return choice === "save" && saveOutcome === "confirmed" ? "move" : "none";
+}
 
 /** Destructive follow-up is allowed only after the save itself is confirmed. */
 export function taskEditSaveFollowUp(

@@ -5,7 +5,9 @@ import type {
   Task,
   TaskEditConflicts,
   TaskEditResult,
-  TaskPositionUpdate,
+  TaskOrderColumnSnapshot,
+  TaskOrderCommand,
+  TaskOrderResult,
   UpdateTaskPayload,
 } from "@/lib/types";
 import { createTaskSchema, updateTaskSchema } from "@/lib/validations";
@@ -56,6 +58,21 @@ export class TaskEditError extends Error {
   constructor(readonly reason: TaskEditErrorReason) {
     super(reason);
     this.name = "TaskEditError";
+  }
+}
+
+export type TaskOrderErrorReason =
+  | "uncertain"
+  | "retryable"
+  | "expired_unknown"
+  | "unavailable"
+  | "rejected"
+  | "access_denied";
+
+export class TaskOrderError extends Error {
+  constructor(readonly reason: TaskOrderErrorReason) {
+    super(reason);
+    this.name = "TaskOrderError";
   }
 }
 
@@ -482,6 +499,49 @@ function isTaskEditConflicts(value: unknown): value is TaskEditConflicts {
   );
 }
 
+function isTaskOrderColumnSnapshot(
+  value: unknown,
+): value is TaskOrderColumnSnapshot {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "id" in value &&
+    typeof value.id === "string" &&
+    "task_order_version" in value &&
+    typeof value.task_order_version === "number" &&
+    "tasks" in value &&
+    Array.isArray(value.tasks) &&
+    value.tasks.every(isTaskRecord)
+  );
+}
+
+function isTaskOrderResult(value: unknown): value is TaskOrderResult {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("status" in value) ||
+    !("operation_id" in value) ||
+    typeof value.operation_id !== "string"
+  ) {
+    return false;
+  }
+  if (value.status === "confirmed" || value.status === "conflict") {
+    return (
+      "columns" in value &&
+      Array.isArray(value.columns) &&
+      value.columns.every(isTaskOrderColumnSnapshot)
+    );
+  }
+  return [
+    "retryable",
+    "expired_unknown",
+    "uncertain",
+    "unavailable",
+    "rejected",
+    "access_denied",
+  ].includes(String(value.status));
+}
+
 /** Delete a task */
 export async function deleteTask(
   supabase: SupabaseClient,
@@ -498,34 +558,39 @@ export async function deleteTask(
 /** Maximum batch size for position updates (Finding #4) */
 const MAX_BATCH_SIZE = 200;
 
-/** Batch update only task positions and optional column assignments. */
+/** Apply a retry-safe, versioned ordering command. */
 export async function updateTaskPositions(
   supabase: SupabaseClient,
   slug: string,
-  updates: TaskPositionUpdate[],
-): Promise<Task[]> {
-  if (updates.length === 0) return [];
-
-  // Deduplicate by ID to prevent updating the same row twice in one batch
-  const uniqueUpdates = Array.from(
-    new Map(updates.map((item) => [item.id, item])).values(),
-  );
-
-  // Finding #4: Client-side batch size guard
-  if (uniqueUpdates.length > MAX_BATCH_SIZE) {
-    throw new Error(`Batch size exceeds maximum of ${MAX_BATCH_SIZE} items`);
+  command: TaskOrderCommand,
+): Promise<TaskOrderResult> {
+  if (command.moves.length === 0) {
+    return { status: "rejected", operation_id: command.operation_id };
   }
-
-  const payload = uniqueUpdates.map((task) => ({
-    id: task.id,
-    ...(task.column_id !== undefined && { column_id: task.column_id }),
-    position: task.position,
-  }));
-
+  if (command.moves.length > MAX_BATCH_SIZE) {
+    throw new TaskOrderError("rejected");
+  }
   const { data, error } = await supabase.rpc("update_task_positions_p", {
+    p_operation_id: command.operation_id,
     p_slug: slug,
-    p_updates: payload,
+    p_moves: command.moves,
+    p_expected_order_versions: command.expected_order_versions,
   });
-  if (error) handleSupabaseError(error);
-  return (data as Task[]) ?? [];
+  if (error) {
+    console.error("[Supabase Error]", error);
+    if (error.code === "42501") throw new TaskOrderError("access_denied");
+    if (
+      error.code === "22023" ||
+      error.code === "22P02" ||
+      error.code === "23514"
+    ) {
+      throw new TaskOrderError("rejected");
+    }
+    throw new TaskOrderError("uncertain");
+  }
+  if (!isTaskOrderResult(data)) throw new TaskOrderError("uncertain");
+  if (data.operation_id !== command.operation_id) {
+    throw new TaskOrderError("uncertain");
+  }
+  return data;
 }

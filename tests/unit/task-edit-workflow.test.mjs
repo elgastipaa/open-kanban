@@ -8,6 +8,7 @@ import {
   retryTaskEditSave,
   startTaskEditSave,
   taskEditSaveFollowUp,
+  taskMoveFollowUp,
 } from "../../src/lib/task-edit-workflow.ts";
 
 const initialDraft = {
@@ -86,4 +87,13 @@ test("delete confirmation follows only a confirmed save", () => {
   assert.equal(taskEditSaveFollowUp("delete", "reconciliation"), "none");
   assert.equal(taskEditSaveFollowUp("close", "confirmed"), "close");
   assert.equal(taskEditSaveFollowUp("stay", "confirmed"), "none");
+});
+
+test("a move follows only a confirmed save or an explicit discard", () => {
+  assert.equal(taskMoveFollowUp("save", "confirmed"), "move");
+  assert.equal(taskMoveFollowUp("save", "conflict"), "none");
+  assert.equal(taskMoveFollowUp("save", "error"), "none");
+  assert.equal(taskMoveFollowUp("save", "reconciliation"), "none");
+  assert.equal(taskMoveFollowUp("discard"), "move");
+  assert.equal(taskMoveFollowUp("cancel"), "none");
 });

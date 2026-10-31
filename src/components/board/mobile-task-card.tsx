@@ -117,7 +117,7 @@ export function MobileTaskCard({
           <DropdownMenu open={showMoveMenu} onOpenChange={setShowMoveMenu}>
             <DropdownMenuTrigger className="flex items-center gap-1 rounded-md px-1.5 py-1 text-text-muted text-xs transition-colors hover:bg-surface-overlay hover:text-text-secondary">
               <IconArrowsRightLeft size={14} className="opacity-70" />
-              <span>Move to</span>
+              <span>Mover a</span>
               <IconChevronDown size={12} />
             </DropdownMenuTrigger>
             <DropdownMenuContent side="top" align="start">
@@ -157,7 +157,7 @@ export function MobileTaskCard({
               onMoveUp(task.id);
             }}
             className="flex h-7 w-7 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-surface-overlay hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-30"
-            aria-label="Move task up"
+            aria-label={`Subir tarea: ${task.title}`}
           >
             <IconChevronUp size={15} stroke={2.5} />
           </button>
@@ -169,7 +169,7 @@ export function MobileTaskCard({
               onMoveDown(task.id);
             }}
             className="flex h-7 w-7 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-surface-overlay hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-30"
-            aria-label="Move task down"
+            aria-label={`Bajar tarea: ${task.title}`}
           >
             <IconChevronDown size={15} stroke={2.5} />
           </button>
@@ -186,10 +186,10 @@ export function MobileTaskCard({
             onDelete(task.id);
           }}
           className="flex items-center gap-1 rounded-md px-1.5 py-1 text-text-muted text-xs transition-colors hover:bg-red-500/10 hover:text-red-400"
-          aria-label="Delete task"
+          aria-label={`Eliminar tarea: ${task.title}`}
         >
           <IconTrash size={13} />
-          <span>Delete</span>
+          <span>Eliminar</span>
         </button>
       </div>
     </motion.div>

@@ -41,7 +41,12 @@ import {
   selectTaskFocusTarget,
   type TaskFocusOrigin,
 } from "@/lib/task-edit-focus";
-import type { Board as BoardType, ColumnWithTasks, Task } from "@/lib/types";
+import type {
+  Board as BoardType,
+  ColumnWithTasks,
+  Task,
+  TaskOrderResult,
+} from "@/lib/types";
 
 interface BoardProps {
   slug: string;
@@ -309,6 +314,32 @@ function BoardWorkspace({
     );
     setEditingTaskId(task.id);
   }
+
+  const moveTaskFromEditor = useCallback(
+    (
+      taskId: string,
+      destinationColumnId: string,
+    ): Promise<TaskOrderResult | null> => {
+      const sourceColumn = columns.find((column) =>
+        column.tasks.some((task) => task.id === taskId),
+      );
+      const destinationColumn = columns.find(
+        (column) => column.id === destinationColumnId,
+      );
+      if (!sourceColumn || !destinationColumn) return Promise.resolve(null);
+      const sourceIndex = sourceColumn.tasks.findIndex(
+        (task) => task.id === taskId,
+      );
+      if (sourceIndex === -1) return Promise.resolve(null);
+      return moveTask(
+        sourceColumn.id,
+        destinationColumn.id,
+        sourceIndex,
+        destinationColumn.tasks.length,
+      );
+    },
+    [columns, moveTask],
+  );
 
   function restoreTaskFocus() {
     const origin = taskOriginRef.current;
@@ -583,6 +614,7 @@ function BoardWorkspace({
                   onAddTask={addTask}
                   onEditTask={openTaskDetail}
                   onDeleteTask={requestDeleteTask}
+                  onMoveTask={moveTask}
                 />
               ))}
               <AddColumn onAdd={addColumn} openSignal={openColumnFormSignal} />
@@ -596,6 +628,7 @@ function BoardWorkspace({
       <TaskModal
         key={editingTask?.id ?? "closed"}
         task={editingTask}
+        columns={columns}
         contextLabel={`${board?.name ?? initialBoard.name} · ${taskOriginRef.current?.columnTitle ?? "Columna"}`}
         open={editingTaskId !== null && editingTask !== null}
         isOnline={isOnline}
@@ -603,6 +636,7 @@ function BoardWorkspace({
         onAfterClose={handleTaskEditorAfterClose}
         onReconcileTask={refreshTaskForEdit}
         onSave={editTask}
+        onMoveTask={moveTaskFromEditor}
         onDelete={handleRequestEditorTaskDelete}
       />
 

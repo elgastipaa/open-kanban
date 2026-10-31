@@ -1,7 +1,12 @@
 "use client";
 
 import { Draggable } from "@hello-pangea/dnd";
-import { IconGripVertical, IconTrash } from "@tabler/icons-react";
+import {
+  IconChevronDown,
+  IconChevronUp,
+  IconGripVertical,
+  IconTrash,
+} from "@tabler/icons-react";
 import type { MouseEvent } from "react";
 import { createPortal } from "react-dom";
 import type { Priority, Task } from "@/lib/types";
@@ -11,6 +16,10 @@ interface TaskCardProps {
   index: number;
   onEdit: (task: Task, opener: HTMLButtonElement) => void;
   onDelete: (taskId: string) => void;
+  isFirst: boolean;
+  isLast: boolean;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
 }
 
 const priorityConfig: Record<Priority, { label: string; className: string }> = {
@@ -26,7 +35,16 @@ const priorityConfig: Record<Priority, { label: string; className: string }> = {
   },
 };
 
-export function TaskCard({ task, index, onEdit, onDelete }: TaskCardProps) {
+export function TaskCard({
+  task,
+  index,
+  onEdit,
+  onDelete,
+  isFirst,
+  isLast,
+  onMoveUp,
+  onMoveDown,
+}: TaskCardProps) {
   const priority = priorityConfig[task.priority];
 
   return (
@@ -95,6 +113,33 @@ export function TaskCard({ task, index, onEdit, onDelete }: TaskCardProps) {
                 </span>
               </div>
             </button>
+
+            <div className="flex items-center justify-end gap-1 border-border border-t px-2 py-1">
+              <button
+                type="button"
+                disabled={isFirst}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onMoveUp();
+                }}
+                className="flex h-8 w-8 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-surface-overlay hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-30"
+                aria-label={`Subir tarea: ${task.title}`}
+              >
+                <IconChevronUp size={16} />
+              </button>
+              <button
+                type="button"
+                disabled={isLast}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onMoveDown();
+                }}
+                className="flex h-8 w-8 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-surface-overlay hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-30"
+                aria-label={`Bajar tarea: ${task.title}`}
+              >
+                <IconChevronDown size={16} />
+              </button>
+            </div>
 
             {/* Delete button is a sibling of the detail trigger, never nested inside it. */}
             <button

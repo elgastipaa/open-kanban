@@ -14,6 +14,7 @@ export function makeLocalColumn(
     title,
     position,
     is_collapsed: false,
+    task_order_version: 1,
     created_at: new Date().toISOString(),
     tasks: [],
   };

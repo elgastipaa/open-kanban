@@ -74,6 +74,9 @@ DECLARE
   v_result jsonb;
   v_replay jsonb;
   v_versions jsonb;
+  v_order_version bigint;
+  v_order_result jsonb;
+  v_neighbor_task_id uuid;
   v_denied boolean := false;
   v_task_id uuid;
 BEGIN
@@ -118,13 +121,25 @@ BEGIN
     RAISE EXCEPTION 'A replay or rejected key collision changed field revisions';
   END IF;
 
-  PERFORM public.update_task_positions_p(
+  SELECT task_order_version INTO v_order_version
+  FROM public.columns WHERE id = v_fixture.column_id;
+  SELECT task_id INTO v_neighbor_task_id
+  FROM public.issue8_task_field_fixture WHERE purpose = 'same-field';
+  v_order_result := public.update_task_positions_p(
+    'e8888888-0000-4000-8000-000000000005',
     v_fixture.board_slug,
     jsonb_build_array(jsonb_build_object(
       'id', v_fixture.task_id,
-      'position', 0
-    ))
+      'source_column_id', v_fixture.column_id,
+      'column_id', v_fixture.column_id,
+      'before_task_id', NULL,
+      'after_task_id', v_neighbor_task_id
+    )),
+    jsonb_build_object(v_fixture.column_id::text, v_order_version)
   );
+  IF v_order_result->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'A same-column reorder should confirm: %', v_order_result;
+  END IF;
   SELECT task.field_versions INTO v_versions
   FROM public.get_tasks_by_board_p(v_fixture.board_id) AS task
   WHERE task.id = v_fixture.task_id;

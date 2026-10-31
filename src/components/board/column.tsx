@@ -36,6 +36,12 @@ interface ColumnProps {
   ) => Promise<void>;
   onEditTask: (task: Task, opener: HTMLButtonElement) => void;
   onDeleteTask: (taskId: string) => void;
+  onMoveTask: (
+    sourceColumnId: string,
+    destinationColumnId: string,
+    sourceIndex: number,
+    destinationIndex: number,
+  ) => unknown;
 }
 
 export function Column({
@@ -51,6 +57,7 @@ export function Column({
   onAddTask,
   onEditTask,
   onDeleteTask,
+  onMoveTask,
 }: ColumnProps) {
   if (column.is_collapsed) {
     return (
@@ -142,6 +149,14 @@ export function Column({
                   index={index}
                   onEdit={onEditTask}
                   onDelete={onDeleteTask}
+                  isFirst={index === 0}
+                  isLast={index === column.tasks.length - 1}
+                  onMoveUp={() =>
+                    onMoveTask(column.id, column.id, index, index - 1)
+                  }
+                  onMoveDown={() =>
+                    onMoveTask(column.id, column.id, index, index + 1)
+                  }
                 />
               ))}
               {provided.placeholder}

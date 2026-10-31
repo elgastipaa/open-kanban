@@ -55,11 +55,13 @@ export function useColumnOperations({
           });
 
           setColumns((prev) =>
-            prev.map((col) =>
-              col.id === tempCol.id
-                ? { ...dbCol, tasks: [], board_id: board.id }
-                : col,
-            ),
+            ledger
+              .replaceColumnId(tempCol.id, dbCol.id, prev)
+              .map((col) =>
+                col.id === dbCol.id
+                  ? { ...dbCol, board_id: board.id, tasks: col.tasks }
+                  : col,
+              ),
           );
           onMutationRef.current?.();
         } catch {
@@ -76,6 +78,7 @@ export function useColumnOperations({
       supabase,
       slug,
       onMutationRef,
+      ledger,
     ],
   );
 
@@ -208,6 +211,7 @@ export function useColumnOperations({
         title: col.title,
         position: col.position,
         is_collapsed: col.is_collapsed,
+        task_order_version: col.task_order_version,
         created_at: col.created_at,
       }));
 
@@ -269,6 +273,7 @@ export function useColumnOperations({
         title: col.title,
         position: col.position,
         is_collapsed: col.is_collapsed,
+        task_order_version: col.task_order_version,
         created_at: col.created_at,
       }));
 

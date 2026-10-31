@@ -77,4 +77,5 @@ El smoke de #5 reveló hidratación fallida en login: `src/app/login/page.tsx` e
 - Pasaron `pnpm typecheck`, `pnpm build`, Biome dirigido para `src/app/login/page.tsx` y `git diff --check`.
 - Spec y Standards revisaron el HEAD de código `d810d45` contra `b8b6bb3`: sin hallazgos; Standards no encontró infracciones ni smells accionables.
 - #4 sigue OPEN/`ready-for-human`; OAuth/Auth real con identidad habilitada y no habilitada, logout y cambio de cuenta aún requieren recorrido manual. Este hotfix no satisface esos criterios.
+- Evidencia comentada en el issue #4: https://github.com/elgastipaa/open-kanban/issues/4#issuecomment-6547402399.
 - No se hizo push ni se operó main/producción. Se preservan `docs/VALIDATION.md` y `.scratch/` ajenos.

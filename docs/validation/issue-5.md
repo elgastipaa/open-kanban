@@ -59,4 +59,4 @@ docker exec supabase_db_supabase-local-issue5-2026-10-31 psql -X -U postgres -d 
 - Suspensión de propietarios queda diferida al issue #19: la implementación la rechaza hasta la resolución íntegra de propiedad; no ofrece una acción de transferencia ni lee tableros privados para administradores.
 - El smoke local usa filas `auth.users`/`auth.identities` y claims SQL sintéticos. Es integración con el esquema Auth/Postgres local, no login en el servicio Auth ni evidencia de cuentas Google.
 
-No se modificó el issue, no se hizo push, merge ni operación remota. #5 permanece abierto hasta resolver el bloqueo OAuth heredado de #4 y ejecutar el recorrido manual requerido.
+El issue remoto se actualizó con el comentario de arranque y la evidencia de entrega; permanece abierto, asignado y etiquetado ready-for-human, con la relación Blocked by #4 intacta. El código se integró por fast-forward local en codex/openkanban-1-0 en 85ef1e7656bc7f19c9fd8a60f0cfc93e5cf4e1bf. No hubo push, cambios a main ni operaciones de producción. #5 queda pendiente del bloqueo heredado de OAuth de #4, la UI admin autenticada y la verificación futura de C-81/A-04 cuando existan esos modelos.

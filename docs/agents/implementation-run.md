@@ -53,3 +53,18 @@ El usuario pidió seguir avanzando sin completar el inicio manual de Google OAut
 - Esta excepción no autoriza main, producción ni migraciones remotas. En este checkpoint no se publicó ni se hizo push. Se preservan los cambios locales ajenos en docs/VALIDATION.md y .scratch/.
 
 Base de la próxima rama de trabajo: la punta de codex/openkanban-1-0 luego de este checkpoint. Reconciliar nuevamente el tracker y registrar la excepción en el comentario inicial de #5.
+
+## Entrega local de #5 — 2026-10-31
+
+La implementación de «Administrar habilitación global» se revisó y se integró por fast-forward en codex/openkanban-1-0. El HEAD de código/revisión es 85ef1e7656bc7f19c9fd8a60f0cfc93e5cf4e1bf, basado en 34a73e7f442d05978085d7d52d91d77f946b16d8. Evidencia reproducible en docs/validation/issue-5.md.
+
+- TDD rojo-verde y validación con PostgreSQL descartable y Supabase local separado #5 (migraciones 001–016), solo identidades/claims sintéticos; no se tocó la instancia #4.
+- Pasaron pnpm test:db, pnpm typecheck, pnpm build y Biome dirigido. La matriz global de lint informa 83 diagnósticos preexistentes en archivos fuera del diff.
+- Revisiones Spec y Standards sobre el HEAD final: sin hallazgos materiales ni infracciones hard. Se corrigió la revalidación de admin antes/después de locks, incluyendo prueba de no contención para no-admin.
+- Navegación sin sesión a /admin/access redirige a login sin revelar el listado. No se realizó OAuth ni se probó la vista con admin autenticado.
+- GitHub #5 permanece OPEN, asignado a elgastipaa, ready-for-human y con Blocked by #4 intacto. Inicio y evidencia registrados en comentarios de #5; evidencia de entrega: https://github.com/elgastipaa/open-kanban/issues/5#issuecomment-6547286317.
+- #4 permanece OPEN y ready-for-human por OAuth/Auth real pendiente. Se observó un error de hidratación en /login por enlaces anidados, fuera del diff de #5; informar y resolver dentro de #4 antes de su recorrido autenticado.
+- C-81/A-04 queda parcialmente verificable: aún no hay modelos de membresías, roles, asignaciones y avisos. La suspensión de dueños de tableros se rechaza hasta resolver propiedad conforme a #19.
+- No hubo push. Se preservan docs/VALIDATION.md y .scratch/ ajenos; main y producción no se tocaron.
+
+Próximo paso humano cuando el usuario esté en la computadora: continuar OAuth real de #4 en Chrome local, corregir primero el error de hidratación si se reproduce y verificar identidades habilitada/no habilitada/sin sesión. Luego repetir la vista admin autenticada de #5. La excepción de secuencia no convierte este trabajo local en aceptación de OAuth ni permite cerrar #4/#5.

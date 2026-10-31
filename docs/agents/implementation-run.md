@@ -81,3 +81,14 @@ El smoke de #5 reveló hidratación fallida en login: `src/app/login/page.tsx` e
 - No se hizo push ni se operó main/producción. Se preservan `docs/VALIDATION.md` y `.scratch/` ajenos.
 
 Integración final de #4: el fast-forward local desde b8b6bb32524070b4cd829ce11302e5a8124c3602 dejó codex/issue-4 y codex/openkanban-1-0 en 5711755888a59d44845d3fb6d2de8ac68c8712ee (corrección de código d810d45, evidencia c0698f1, comentario de issue 5711755). No se hizo push; #4 permanece abierto/ready-for-human hasta OAuth real.
+
+## Extensión de secuencia por instrucción del usuario — 2026-10-31
+
+El usuario pidió continuar cuanto se pueda hasta completar el objetivo sin requerir su presencia local. Se amplía la excepción de secuencia de #5 a los descendientes alcanzables para implementación, sin alterar el contrato del producto:
+
+- Se permite iniciar el siguiente ticket abierto especificado aunque sus dependencias anteriores sigan OPEN/ready-for-human, siempre que el trabajo pueda verificarse con interfaces aprobadas en entornos locales aislados y actores/claims sintéticos.
+- Mantener intactas las relaciones Blocked by del tracker y no cerrar ni marcar como aceptados tickets cuyos criterios requieran OAuth/Auth real, UI autenticada no validada, hardware/personas, modelos aún no implementados u otra condición humana. Registrar evidencia parcial y pasar al siguiente trabajo técnicamente independiente cuando sea seguro.
+- No agregar rutas, flags, credenciales ni otros bypasses al producto. Sin Google OAuth automatizado, datos reales, main, push a main, migración o despliegue de producción. La aprobación especial del corte #53 continúa vigente.
+- Aplicar LP-0.2: menor número de ticket alcanzable por esta excepción, un único implementador activo, skills implement-spec/implement/TDD/code-review, rama y worktree aislados, revisiones y fast-forward local; push queda desactivado para este tramo por el pedido de avanzar sin intervención local.
+
+Siguiente ticket: #6 «Crear y encontrar tableros privados», contrato C-93/C-96; P01/P07/P10/P12/P16. GitHub conserva Blocked by #4; su avance se autoriza solo como implementación y verificación local. #4/#5 siguen abiertos y su aceptación manual no se infiere.

@@ -27,6 +27,15 @@ import {
   createClient,
 } from "@/lib/supabase/client";
 import {
+  cancelTaskDelete,
+  confirmTaskDelete,
+  createTaskDeleteFlow,
+  finishTaskEditorClose,
+  requestCardTaskDelete,
+  requestEditorTaskDelete,
+  type TaskDeleteFlow,
+} from "@/lib/task-delete-flow";
+import {
   captureTaskFocusOrigin,
   selectTaskFocusTarget,
   type TaskFocusOrigin,
@@ -350,7 +359,14 @@ function BoardWorkspace({
   const [deletingColumnId, setDeletingColumnId] = useState<string | null>(null);
 
   // Delete task confirmation
-  const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null);
+  const [taskDeleteFlow, setTaskDeleteFlow] =
+    useState<TaskDeleteFlow>(createTaskDeleteFlow);
+  const taskDeleteFlowRef = useRef(taskDeleteFlow);
+
+  function storeTaskDeleteFlow(nextFlow: TaskDeleteFlow) {
+    taskDeleteFlowRef.current = nextFlow;
+    setTaskDeleteFlow(nextFlow);
+  }
 
   // Drag & drop handler (desktop only)
   const onDragEnd = useCallback(
@@ -399,18 +415,49 @@ function BoardWorkspace({
 
   // Task delete handler
   async function handleDeleteTask() {
-    if (!deletingTaskId) return;
-    await removeTask(deletingTaskId);
+    const taskId = taskDeleteFlow.deletingTaskId;
+    if (!taskId) return;
+    await removeTask(taskId);
     // Close modal if the deleted task was being edited
-    if (editingTaskId === deletingTaskId) {
+    if (editingTaskId === taskId) {
       setEditingTaskId(null);
     }
-    setDeletingTaskId(null);
+    storeTaskDeleteFlow(confirmTaskDelete(taskDeleteFlowRef.current));
   }
 
   // Request task deletion (opens confirmation dialog)
   function requestDeleteTask(taskId: string) {
-    setDeletingTaskId(taskId);
+    storeTaskDeleteFlow(
+      requestCardTaskDelete(taskDeleteFlowRef.current, taskId),
+    );
+  }
+
+  function handleRequestEditorTaskDelete(taskId: string) {
+    storeTaskDeleteFlow(
+      requestEditorTaskDelete(taskDeleteFlowRef.current, taskId),
+    );
+    setEditingTaskId(null);
+  }
+
+  function handleTaskEditorAfterClose() {
+    const previousFlow = taskDeleteFlowRef.current;
+    storeTaskDeleteFlow(finishTaskEditorClose(previousFlow));
+    if (!previousFlow.waitingForEditorCloseTaskId) restoreTaskFocus();
+  }
+
+  function handleCancelTaskDelete() {
+    const taskId = taskDeleteFlowRef.current.deletingTaskId;
+    const taskStillExists = Boolean(
+      taskId &&
+        columns.some((column) =>
+          column.tasks.some((task) => task.id === taskId),
+        ),
+    );
+    const result = cancelTaskDelete(taskDeleteFlowRef.current, taskStillExists);
+    storeTaskDeleteFlow(result.flow);
+    if (result.reopenEditorTaskId) {
+      setEditingTaskId(result.reopenEditorTaskId);
+    }
   }
 
   // Export handler
@@ -546,12 +593,10 @@ function BoardWorkspace({
         open={editingTaskId !== null && editingTask !== null}
         isOnline={isOnline}
         onClose={() => setEditingTaskId(null)}
-        onAfterClose={restoreTaskFocus}
+        onAfterClose={handleTaskEditorAfterClose}
         onReconcileTask={refreshTaskForEdit}
         onSave={editTask}
-        onDelete={(taskId) => {
-          requestDeleteTask(taskId);
-        }}
+        onDelete={handleRequestEditorTaskDelete}
       />
 
       {/* Delete board confirmation */}
@@ -577,8 +622,8 @@ function BoardWorkspace({
 
       {/* Delete task confirmation */}
       <ConfirmDialog
-        open={deletingTaskId !== null}
-        onClose={() => setDeletingTaskId(null)}
+        open={taskDeleteFlow.deletingTaskId !== null}
+        onClose={handleCancelTaskDelete}
         onConfirm={handleDeleteTask}
         title="Delete Task"
         description="Are you sure you want to delete this task? This action cannot be undone."

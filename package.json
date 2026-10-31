@@ -12,7 +12,7 @@
     "start": "next start",
     "lint": "biome check",
     "typecheck": "tsc --noEmit",
-    "test:unit": "node --experimental-strip-types --test tests/unit/private-board-intent.test.mjs tests/unit/task-capture-state.test.mjs tests/unit/task-edit-focus.test.mjs tests/unit/task-edit-read.test.mjs tests/unit/task-edit-workflow.test.mjs",
+    "test:unit": "node --experimental-strip-types --test tests/unit/private-board-intent.test.mjs tests/unit/task-capture-state.test.mjs tests/unit/task-delete-flow.test.mjs tests/unit/task-edit-focus.test.mjs tests/unit/task-edit-read.test.mjs tests/unit/task-edit-workflow.test.mjs",
     "test:db": "bash scripts/test-db.sh",
     "format": "biome format --write"
   },

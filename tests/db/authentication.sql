@@ -27,6 +27,7 @@ DECLARE
   v_column_id uuid;
   v_pending_removed boolean;
   v_admin_count integer := 0;
+  v_invalid_email_message text;
 BEGIN
   v_access := public.resolve_application_access();
   IF v_access->>'status' <> 'active' OR v_access->>'is_admin' <> 'true' THEN
@@ -63,6 +64,17 @@ BEGIN
     WHERE email = 'pending-target@example.test' AND state = 'pending' AND NOT linked
   ) THEN
     RAISE EXCEPTION 'Administrator could not leave a pending authorization for later management';
+  END IF;
+
+  BEGIN
+    PERFORM public.admin_enable_access('invalid-address');
+    RAISE EXCEPTION 'Invalid email address was accepted';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_invalid_email_message = MESSAGE_TEXT;
+  END;
+  IF v_invalid_email_message IS DISTINCT FROM 'Enter a valid Google email address' THEN
+    RAISE EXCEPTION 'Invalid email address did not return its expected validation error: %',
+      v_invalid_email_message;
   END IF;
 
   PERFORM public.admin_enable_access('peña@example.test');

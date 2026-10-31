@@ -111,7 +111,6 @@ export function AccessManager({ entries }: { entries: AccessEntry[] }) {
   async function addAccess(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const address = email.trim();
-    if (!address) return;
     if (await mutateAccess("admin_enable_access", address)) setEmail("");
   }
 
@@ -126,7 +125,8 @@ export function AccessManager({ entries }: { entries: AccessEntry[] }) {
             Correo de Google
           </span>
           <input
-            type="email"
+            type="text"
+            inputMode="email"
             autoComplete="email"
             required
             value={email}

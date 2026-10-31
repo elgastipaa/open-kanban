@@ -7,6 +7,7 @@ import {
 
 test("an access denial is distinct from recoverable database outcomes", () => {
   assert.equal(taskCaptureErrorReasonFromCode("42501"), "access_denied");
+  assert.equal(taskCaptureErrorReasonFromCode("23514"), "conflict");
   assert.equal(taskCaptureErrorReasonFromCode("55000"), null);
 });
 

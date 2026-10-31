@@ -351,8 +351,11 @@ BEGIN
       v_payload_hash
     );
     IF v_existing_result->>'status' = 'not_found' THEN
-      RAISE EXCEPTION 'Task creation result is unavailable; reconcile before retrying'
-        USING ERRCODE = '55000';
+      -- The actor-scoped unique key may belong to another board. Keep the
+      -- resolver board-scoped for privacy, but report the collision as a
+      -- deterministic payload conflict without exposing the other receipt.
+      RAISE EXCEPTION 'This task creation operation was already used with different details'
+        USING ERRCODE = '23514';
     END IF;
     RETURN v_existing_result;
   END IF;

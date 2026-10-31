@@ -56,6 +56,9 @@ DECLARE
   v_create_whitespace_rejected boolean := false;
   v_query_whitespace_rejected boolean := false;
   v_whitespace_receipt_missing boolean := false;
+  v_conflict_message text;
+  v_conflict_detail text;
+  v_conflict_hint text;
   v_task_count integer;
 BEGIN
   SELECT board_id, column_id, board_slug
@@ -177,6 +180,68 @@ BEGIN
     'Otra captura',
     0
   );
+
+  -- Operation ids are actor-scoped, so reusing an existing key with a payload
+  -- for another authorized board must be a deterministic payload conflict.
+  v_rejected := false;
+  BEGIN
+    PERFORM public.create_task_p(
+      v_operation_id,
+      v_other_board_id,
+      v_other_column_id,
+      'Comprar leche'
+    );
+  EXCEPTION WHEN check_violation THEN
+    v_rejected := true;
+    GET STACKED DIAGNOSTICS
+      v_conflict_message = MESSAGE_TEXT,
+      v_conflict_detail = PG_EXCEPTION_DETAIL,
+      v_conflict_hint = PG_EXCEPTION_HINT;
+  END;
+  IF NOT v_rejected
+    OR v_conflict_message IS DISTINCT FROM 'This task creation operation was already used with different details'
+    OR COALESCE(v_conflict_detail, '') <> ''
+    OR COALESCE(v_conflict_hint, '') <> '' THEN
+    RAISE EXCEPTION 'A cross-board operation collision did not return a generic payload conflict';
+  END IF;
+
+  v_result := public.get_task_creation_result_p(
+    v_operation_id,
+    v_other_board_id,
+    v_other_column_id,
+    'Comprar leche',
+    NULL,
+    'medium'
+  );
+  IF v_result->>'status' IS DISTINCT FROM 'not_found'
+    OR v_result ? 'task'
+    OR v_result ? 'task_id'
+    OR v_result ? 'board_id' THEN
+    RAISE EXCEPTION 'A cross-board query exposed the original task: %', v_result;
+  END IF;
+
+  v_result := public.get_task_creation_result_p(
+    v_operation_id,
+    v_board_id,
+    v_column_id,
+    'Comprar leche',
+    NULL,
+    'medium'
+  );
+  SELECT count(*) INTO v_task_count
+  FROM public.tasks AS task
+  JOIN public.columns AS column_row ON column_row.id = task.column_id
+  WHERE column_row.board_id = v_board_id AND task.title = 'Comprar leche';
+  IF v_result->>'status' IS DISTINCT FROM 'confirmed'
+    OR (v_result->'task'->>'id')::uuid IS DISTINCT FROM v_task_id
+    OR v_task_count <> 2
+    OR EXISTS (
+      SELECT 1 FROM public.tasks AS task
+      JOIN public.columns AS column_row ON column_row.id = task.column_id
+      WHERE column_row.board_id = v_other_board_id
+    ) THEN
+    RAISE EXCEPTION 'A cross-board payload conflict changed either board: %', v_result;
+  END IF;
 
   v_rejected := false;
   BEGIN
@@ -366,7 +431,7 @@ BEGIN
 END;
 $$;
 COMMIT;
-\echo 'PASS: capture replay, explicit intent, payload conflict, append, and board validation'
+\echo 'PASS: capture replay, explicit intent, same-/cross-board payload conflict, append, and board validation'
 
 -- A revoked collaborator cannot distinguish existing and unknown operation ids
 -- through either reconciliation or create replay.

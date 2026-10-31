@@ -162,3 +162,17 @@ La integración de código `cd868c322c13ba0ffa71034dfe657e21fc4b7868` avanzó po
 - La PR se mantuvo en borrador y con base `main`; no se hizo merge ni se tocó `main`.
 
 Se preservan los cambios ajenos de `docs/VALIDATION.md` con SHA-256 `B8669EAAFEA1A6D41C1342470E49324D2FAA50BED03DCCCFE7E94AF17D51FD9C` y `.scratch/` sin seguimiento. No hacer force-push, ejecutar SQL remoto ni desplegar producción.
+
+## Entrega local de #10 — 2026-10-31
+
+La implementación de «Completar, agrupar y reabrir tareas» parte de la base fija a374ade3f47991be2a2d5594d082318bfc3b2f2a en la rama aislada codex/issue-10. HEAD de código revisado: bc1313999bcfdcb2f7170f35c3b520f718e38067; evidencia reproducible por criterio en docs/validation/issue-10.md. La entrega de código y evidencia quedó integrada por fast-forward y push ordinario en codex/openkanban-1-0.
+
+- TDD con PostgreSQL 16.15 descartable y actores Auth sintéticos. pnpm test:db aplica migraciones 001–021; cubre estado deseado, reintentos/recibos, permisos, conservación de columna y campos, y una carrera real de completar/reabrir en dos sesiones.
+- pnpm test:unit pasó 28/28; también pnpm typecheck, pnpm build (Next 16.4.2), Biome dirigido, bash -n scripts/test-db.sh y git diff --check.
+- Reviews finales sobre HEAD de código bc13139 contra base fija a374ade: Spec sin hallazgos accionables; Standards sin infracciones duras. Quedan dos smells heurísticos menores: validación/mapeo repetidos en el adaptador DB y controles locales del grupo completado repetidos entre column.tsx y mobile-board.tsx; no fueron material findings.
+- Auth/PostgREST HTTP y validación humana de DOM/foco, móvil, teclado, accesibilidad, dos navegadores y los recorridos de conflicto/borrador C-95 siguen parciales o pendientes. No se instaló runner ni se usaron OAuth, cuentas/datos reales, .env, CUA/IAB, bypass de permisos, migraciones remotas ni producción.
+- GitHub #10 permanece OPEN, asignado a elgastipaa, ready-for-human y con Blocked by #8 intacto. Evidencia comentada: https://github.com/elgastipaa/open-kanban/issues/10#issuecomment-6550847738. #8 permanece OPEN/ready-for-human; no se infiere aceptación manual ni se cierra ningún issue.
+- PR acumulada #54 continúa OPEN/draft, base main, head codex/openkanban-1-0; body actualizado con #10, su evidencia y los pendientes humanos. No se hizo merge ni se tocó main o producción.
+- Se preservan docs/VALIDATION.md con SHA-256 B8669EAAFEA1A6D41C1342470E49324D2FAA50BED03DCCCFE7E94AF17D51FD9C y .scratch/ local sin seguimiento, sin stage/commit.
+
+Siguiente trabajo alcanzable: consultar la secuencia y dependencia vigente antes de seleccionar otro issue. #10 requiere recorrido humano local autorizado y resolución del bloqueador #8 antes de aceptación/cierre.

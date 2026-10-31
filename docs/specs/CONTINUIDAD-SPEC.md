@@ -72,9 +72,7 @@ La [matriz de trazabilidad](./MATRIZ-TRAZABILIDAD-1.0.md) indexa las 33 P/E y 63
 
 La incorporación de las33 propuestas, el cierre funcional C-112 y TT-0.1 están documentados. TT-0.1 publicó 51 issues #3–#53 con cobertura de33 P/E y63 escenarios. Mantener el padre #2 abierto; #53 conserva aprobación específica de corte.
 
-El usuario activó el Goal el28/10 y confirmó LP-0.2. El run actual completó #3 y dejó una PR acumulada en borrador. La frontera vigente, la verificación de despliegues y el estado de #4 están en el [checkpoint del run](../agents/implementation-run.md). No duplicar Goal, no inferir que `usageLimited` se reanudó automáticamente y no cambiar main/producción.
-
-El usuario confirmó que agregó dos test users al cliente Google. La configuración aislada y el grafo se revalidaron; #4 queda elegible para implementación y las pruebas Auth reales siguen pendientes. Los demás tickets abiertos conservan bloqueadores. G01–G08 siguen separando diseño de verificaciones pendientes; el run no declara listo el MVP.
+El usuario activó el Goal el 28/10 y confirmó LP-0.2. La rama codex/openkanban-1-0 y la PR acumulada #54 en borrador incluyen hasta #10, integrado por fast-forward desde la base fija indicada en el checkpoint del run. #10 continúa OPEN/ready-for-human con Blocked by #8; #8 sigue OPEN/ready-for-human. La frontera vigente, evidencia, reviews y bloqueos humanos están en el [checkpoint del run](../agents/implementation-run.md). No duplicar Goal, no inferir que usageLimited se reanudó automáticamente y no cambiar main/producción.
 
 Esta consolidación y diseño no ejecutaron pruebas funcionales ni accedieron a infraestructura; los gates no se declaran cumplidos.
 

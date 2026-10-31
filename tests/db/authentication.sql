@@ -4,12 +4,18 @@ INSERT INTO auth.users (id, email, email_confirmed_at, raw_app_meta_data) VALUES
   ('40000000-0000-4000-8000-000000000001', 'bootstrap-admin@example.test', now(), '{"provider":"google"}'),
   ('40000000-0000-4000-8000-000000000002', 'enabled-user@example.test', now(), '{"provider":"google"}'),
   ('40000000-0000-4000-8000-000000000003', 'denied-user@example.test', now(), '{"provider":"google"}'),
-  ('40000000-0000-4000-8000-000000000004', 'email-only@example.test', now(), '{"provider":"google"}');
+  ('40000000-0000-4000-8000-000000000004', 'email-only@example.test', now(), '{"provider":"google"}'),
+  ('40000000-0000-4000-8000-000000000005', 'revocation-user@example.test', now(), '{"provider":"google"}'),
+  ('40000000-0000-4000-8000-000000000006', 'second-admin@example.test', now(), '{"provider":"google"}'),
+  ('40000000-0000-4000-8000-000000000007', 'unverified-user@example.test', now(), '{"provider":"google"}');
 INSERT INTO auth.identities (id, user_id, provider, provider_id, identity_data, created_at) VALUES
   ('50000000-0000-4000-8000-000000000001', '40000000-0000-4000-8000-000000000001', 'google', 'google-subject-admin', '{"email":"bootstrap-admin@example.test","email_verified":true}', now()),
   ('50000000-0000-4000-8000-000000000002', '40000000-0000-4000-8000-000000000002', 'google', 'google-subject-enabled', '{"email":"enabled-user@example.test","email_verified":true}', now()),
   ('50000000-0000-4000-8000-000000000003', '40000000-0000-4000-8000-000000000003', 'google', 'google-subject-denied', '{"email":"denied-user@example.test","email_verified":true}', now()),
-  ('50000000-0000-4000-8000-000000000004', '40000000-0000-4000-8000-000000000004', 'email', 'email-only@example.test', '{"email":"email-only@example.test","email_verified":true}', now());
+  ('50000000-0000-4000-8000-000000000004', '40000000-0000-4000-8000-000000000004', 'email', 'email-only@example.test', '{"email":"email-only@example.test","email_verified":true}', now()),
+  ('50000000-0000-4000-8000-000000000005', '40000000-0000-4000-8000-000000000005', 'google', 'google-subject-revocation', '{"email":"revocation-user@example.test","email_verified":true}', now()),
+  ('50000000-0000-4000-8000-000000000006', '40000000-0000-4000-8000-000000000006', 'google', 'google-subject-second-admin', '{"email":"second-admin@example.test","email_verified":true}', now()),
+  ('50000000-0000-4000-8000-000000000007', '40000000-0000-4000-8000-000000000007', 'google', 'google-subject-unverified', '{"email":"unverified-user@example.test","email_verified":false}', now());
 
 BEGIN;
 SET LOCAL ROLE authenticated;
@@ -49,6 +55,30 @@ BEGIN
   v_pending_removed := public.admin_remove_pending_access('another-user@example.test');
   IF NOT v_pending_removed THEN
     RAISE EXCEPTION 'Administrator could not withdraw pending authorization';
+  END IF;
+
+  PERFORM public.admin_enable_access('pending-target@example.test');
+  IF NOT EXISTS (
+    SELECT 1 FROM public.admin_list_access()
+    WHERE email = 'pending-target@example.test' AND state = 'pending' AND NOT linked
+  ) THEN
+    RAISE EXCEPTION 'Administrator could not leave a pending authorization for later management';
+  END IF;
+
+  PERFORM public.admin_enable_access('peña@example.test');
+  PERFORM public.admin_enable_access('pena@example.test');
+  PERFORM public.admin_enable_access('anita.café@example.test');
+  PERFORM public.admin_enable_access('anita.cafe@example.test');
+  IF (
+    SELECT count(*) FROM public.admin_list_access() AS access
+    WHERE access.email IN (
+      'peña@example.test',
+      'pena@example.test',
+      'anita.café@example.test',
+      'anita.cafe@example.test'
+    )
+  ) <> 4 THEN
+    RAISE EXCEPTION 'Email admission incorrectly normalized accents or ñ';
   END IF;
 
   BEGIN
@@ -219,6 +249,22 @@ $$;
 COMMIT;
 \echo 'PASS: a non-Google identity is not treated as Google sign-in'
 
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000007', true);
+DO $$
+DECLARE
+  v_access jsonb;
+BEGIN
+  v_access := public.resolve_application_access();
+  IF v_access->>'status' <> 'google_required' OR public.is_application_user() THEN
+    RAISE EXCEPTION 'An unverified Google email was eligible for a pending authorization: %', v_access;
+  END IF;
+END;
+$$;
+COMMIT;
+\echo 'PASS: a pending authorization requires a verified Google identity'
+
 UPDATE auth.identities
 SET provider_id = 'changed-google-subject'
 WHERE user_id = '40000000-0000-4000-8000-000000000002' AND provider = 'google';
@@ -246,11 +292,21 @@ SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000001', true);
 DO $$
 DECLARE
-  v_suspended boolean;
+  v_blocked boolean := false;
 BEGIN
-  v_suspended := public.admin_suspend_access('enabled-user@example.test');
-  IF NOT v_suspended THEN
-    RAISE EXCEPTION 'Administrator did not suspend the enabled user';
+  BEGIN
+    PERFORM public.admin_suspend_access('enabled-user@example.test');
+  EXCEPTION WHEN SQLSTATE '55000' THEN
+    v_blocked := true;
+  END;
+  IF NOT v_blocked THEN
+    RAISE EXCEPTION 'Administrator suspended a user who still owns a board';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM public.admin_list_access() AS access
+    WHERE access.email = 'enabled-user@example.test' AND access.state = 'active'
+  ) THEN
+    RAISE EXCEPTION 'A blocked suspension changed the owner’s application state';
   END IF;
 END;
 $$;
@@ -259,6 +315,99 @@ COMMIT;
 BEGIN;
 SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);
+DO $$
+DECLARE
+  v_access jsonb;
+  v_board_count integer;
+BEGIN
+  v_access := public.resolve_application_access();
+  SELECT count(*) INTO v_board_count FROM public.list_my_boards();
+  IF v_access->>'status' <> 'active' OR v_board_count <> 1 THEN
+    RAISE EXCEPTION 'A blocked suspension did not preserve the owner’s active access';
+  END IF;
+END;
+$$;
+COMMIT;
+
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000005', true);
+DO $$
+DECLARE
+  v_access jsonb;
+BEGIN
+  v_access := public.resolve_application_access();
+  IF v_access->>'status' <> 'active' OR v_access->>'is_admin' <> 'false' THEN
+    RAISE EXCEPTION 'A no-board identity was not linked for revocation testing: %', v_access;
+  END IF;
+END;
+$$;
+COMMIT;
+
+UPDATE auth.users
+SET email = 'revocation-user-updated@example.test'
+WHERE id = '40000000-0000-4000-8000-000000000005';
+UPDATE auth.identities
+SET identity_data = jsonb_set(
+  identity_data,
+  '{email}',
+  '"revocation-user-updated@example.test"'::jsonb
+)
+WHERE user_id = '40000000-0000-4000-8000-000000000005'
+  AND provider = 'google';
+
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000005', true);
+DO $$
+DECLARE
+  v_access jsonb;
+BEGIN
+  v_access := public.resolve_application_access();
+  IF v_access->>'status' <> 'active' THEN
+    RAISE EXCEPTION 'A changed Google email broke its stable linked identity: %', v_access;
+  END IF;
+END;
+$$;
+COMMIT;
+
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000001', true);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM public.admin_list_access() AS access
+    WHERE access.email = 'revocation-user@example.test'
+      AND access.state = 'active' AND access.linked
+  ) OR EXISTS (
+    SELECT 1 FROM public.admin_list_access() AS access
+    WHERE access.email = 'revocation-user-updated@example.test'
+  ) THEN
+    RAISE EXCEPTION 'A changed email created or moved an application identity';
+  END IF;
+END;
+$$;
+COMMIT;
+
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000001', true);
+DO $$
+DECLARE
+  v_suspended boolean;
+BEGIN
+  v_suspended := public.admin_suspend_access('revocation-user@example.test');
+  IF NOT v_suspended THEN
+    RAISE EXCEPTION 'Administrator did not suspend the no-board user';
+  END IF;
+END;
+$$;
+COMMIT;
+
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000005', true);
 DO $$
 DECLARE
   v_access jsonb;
@@ -285,3 +434,59 @@ END;
 $$;
 COMMIT;
 \echo 'PASS: a valid token cannot bypass current suspension'
+
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000001', true);
+DO $$
+BEGIN
+  PERFORM public.admin_enable_access('revocation-user@example.test');
+  IF NOT EXISTS (
+    SELECT 1 FROM public.admin_list_access() AS access
+    WHERE access.email = 'revocation-user@example.test'
+      AND access.state = 'active' AND access.linked
+  ) THEN
+    RAISE EXCEPTION 'Rehabilitation did not preserve the linked authorization';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM public.admin_list_access() AS access
+    WHERE access.email = 'revocation-user-updated@example.test'
+  ) THEN
+    RAISE EXCEPTION 'Rehabilitation created an authorization under the changed email';
+  END IF;
+END;
+$$;
+COMMIT;
+
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000005', true);
+DO $$
+DECLARE
+  v_access jsonb;
+  v_board_count integer;
+BEGIN
+  v_access := public.resolve_application_access();
+  SELECT count(*) INTO v_board_count FROM public.list_my_boards();
+  IF v_access->>'status' <> 'active' OR v_board_count <> 0 THEN
+    RAISE EXCEPTION 'Rehabilitation did not restore the same access without recreating boards';
+  END IF;
+END;
+$$;
+COMMIT;
+
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000006', true);
+DO $$
+DECLARE
+  v_access jsonb;
+BEGIN
+  v_access := public.resolve_application_access();
+  IF v_access->>'status' <> 'active' OR v_access->>'is_admin' <> 'true' THEN
+    RAISE EXCEPTION 'Second administrator fixture was not linked for concurrency testing';
+  END IF;
+END;
+$$;
+COMMIT;
+\echo 'PASS: stable Google subject, unchanged access row, and an isolated second administrator fixture'

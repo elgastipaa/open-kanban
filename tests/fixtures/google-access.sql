@@ -2,4 +2,6 @@
 -- Explicit test principals; the absent no-access principal must remain denied.
 INSERT INTO public.application_access (email, state, is_admin) VALUES
   ('bootstrap-admin@example.test', 'pending', true),
-  ('enabled-user@example.test', 'pending', false);
+  ('enabled-user@example.test', 'pending', false),
+  ('revocation-user@example.test', 'pending', false),
+  ('second-admin@example.test', 'pending', true);

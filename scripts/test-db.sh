@@ -228,8 +228,122 @@ SQL
 echo 'PASS: task updated_at follows write order after a delayed transaction start.'
 
 "${psql[@]}" -q -f "$repo_dir/tests/db/auth_schema.sql"
-"${psql[@]}" -q -f "$repo_dir/supabase/migrations/015_closed_google_access.sql"
+private_migrations=false
+for migration in "$repo_dir"/supabase/migrations/*.sql; do
+  if [[ "$(basename -- "$migration")" == '015_closed_google_access.sql' ]]; then
+    private_migrations=true
+  fi
+  if [[ "$private_migrations" == true ]]; then
+    printf 'Applying %s\n' "$(basename -- "$migration")"
+    "${psql[@]}" -q -f "$migration"
+  fi
+done
 "${psql[@]}" -f "$repo_dir/tests/fixtures/google-access.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/closed_access.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/authentication.sql"
+"${psql[@]}" -f "$repo_dir/tests/db/admin_authorization.sql"
+
+# A former administrator must lose authority if another administrator
+# suspends their account while a second admin action is waiting on the lock.
+admin_race_dir="$test_dir/admin-access-race"
+mkdir -- "$admin_race_dir"
+admin_a_log="$admin_race_dir/admin-a.log"
+admin_b_log="$admin_race_dir/admin-b.log"
+
+PGAPPNAME=openkanban_admin_race_a "${psql[@]}" > "$admin_a_log" 2>&1 <<'SQL' &
+BEGIN;
+LOCK TABLE public.application_access IN SHARE ROW EXCLUSIVE MODE;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000001', true);
+SELECT pg_sleep(5);
+SELECT public.admin_suspend_access('second-admin@example.test');
+COMMIT;
+SQL
+admin_a_pid=$!
+
+admin_a_holding_lock=false
+for _ in $(seq 1 100); do
+  admin_a_state=$("${psql[@]}" -At -c "SELECT state FROM pg_stat_activity WHERE application_name = 'openkanban_admin_race_a' AND state = 'active' AND query LIKE '%pg_sleep(5)%'")
+  if [[ "$admin_a_state" == active ]]; then
+    admin_a_holding_lock=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$admin_a_holding_lock" != true ]]; then
+  cat -- "$admin_a_log" >&2
+  echo 'The first administrator did not acquire the access-management lock.' >&2
+  wait "$admin_a_pid" || true
+  exit 1
+fi
+
+PGAPPNAME=openkanban_admin_race_b "${psql[@]}" > "$admin_b_log" 2>&1 <<'SQL' &
+\set VERBOSITY verbose
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000006', true);
+SELECT public.admin_suspend_access('revocation-user@example.test');
+COMMIT;
+SQL
+admin_b_pid=$!
+
+admin_b_waiting=false
+for _ in $(seq 1 100); do
+  waiting_count=$("${psql[@]}" -At -c "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'openkanban_admin_race_b' AND wait_event_type = 'Lock'")
+  if [[ "$waiting_count" == 1 ]]; then
+    admin_b_waiting=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$admin_b_waiting" != true ]]; then
+  cat -- "$admin_b_log" >&2
+  echo 'The second administrator did not wait for the active suspension.' >&2
+  wait "$admin_a_pid" || true
+  wait "$admin_b_pid" || true
+  exit 1
+fi
+
+wait "$admin_a_pid" || { cat -- "$admin_a_log" >&2; exit 1; }
+if wait "$admin_b_pid"; then
+  echo 'A former administrator completed an action after losing administration.' >&2
+  cat -- "$admin_b_log" >&2
+  exit 1
+fi
+if ! grep -q '42501: Administrator access required' "$admin_b_log"; then
+  echo 'The waiting administrator action failed for an unexpected reason.' >&2
+  cat -- "$admin_b_log" >&2
+  exit 1
+fi
+
+"${psql[@]}" -q <<'SQL'
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000001', true);
+DO $$
+DECLARE
+  v_active_admins integer;
+  v_second_admin_state text;
+  v_target_state text;
+BEGIN
+  SELECT count(*) INTO v_active_admins
+  FROM public.admin_list_access() AS access
+  WHERE access.is_admin AND access.state = 'active';
+  SELECT access.state INTO v_second_admin_state
+  FROM public.admin_list_access() AS access
+  WHERE access.email = 'second-admin@example.test';
+  SELECT access.state INTO v_target_state
+  FROM public.admin_list_access() AS access
+  WHERE access.email = 'revocation-user@example.test';
+  IF v_active_admins <> 1
+    OR v_second_admin_state <> 'suspended'
+    OR v_target_state <> 'active' THEN
+    RAISE EXCEPTION 'Concurrent administration left an invalid final state: admins %, second admin %, target %',
+      v_active_admins, v_second_admin_state, v_target_state;
+  END IF;
+END;
+$$;
+COMMIT;
+SQL
+echo 'PASS: concurrent admins cannot use a stale administrator authority.'
 printf 'Database regression tests passed (disposable PostgreSQL).\n'

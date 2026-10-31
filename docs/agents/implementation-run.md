@@ -92,3 +92,14 @@ El usuario pidió continuar cuanto se pueda hasta completar el objetivo sin requ
 - Aplicar LP-0.2: menor número de ticket alcanzable por esta excepción, un único implementador activo, skills implement-spec/implement/TDD/code-review, rama y worktree aislados, revisiones e integración. La autorización previa de commits/push a ramas codex y actualización de la PR acumulada sigue vigente; no se hace merge/push a main ni se despliega producción.
 
 Siguiente ticket: #6 «Crear y encontrar tableros privados», contrato C-93/C-96; P01/P07/P10/P12/P16. GitHub conserva Blocked by #4; su avance se autoriza solo como implementación y verificación local. #4/#5 siguen abiertos y su aceptación manual no se infiere.
+
+## Entrega local de #6 — 2026-10-31
+
+La instrucción del usuario amplió la excepción de secuencia para implementar #6 con entorno local aislado y actores sintéticos, manteniendo la dependencia nativa y textual `Blocked by #4`. La rama `codex/issue-6` parte de `ee2771e75a7c18592b0af7eea814afae66f119da`. El HEAD de código revisado es `22da1e221ec607fff7a69d683ba3b151c81a2d13`; commits de código: `fd3af1f` (crear/encontrar tableros), `ffb8981` (aislar borrador de alta por UUID Auth y ampliar pruebas de permisos/revocación) y `22da1e2` (quitar estado móvil duplicado y publicar `pnpm test:unit`). Evidencia criterio por criterio en `docs/validation/issue-6.md`.
+
+- TDD rojo-verde. Pasaron `pnpm test:unit` (2/2), `pnpm test:db` con PostgreSQL descartable, `pnpm typecheck`, `pnpm build` (Next 16.4.2), Biome dirigido y `git diff --check`.
+- Spec y Standards revisaron el HEAD de código `22da1e2` contra la base fija `ee2771e`; ambos quedaron sin hallazgos. Se corrigieron los tres P2 de Spec y los dos hallazgos bajos de Standards antes de esa revisión final.
+- El proyecto local único `open-kanban-issue-6` respondió en Auth health y aplicó migraciones 001–017; no se emitió sesión. No había browser runner headless existente y el smoke Auth→PostgREST no pudo ejecutarse por el bloqueo de la herramienta al manejar secretos locales en memoria. No se usó Google, IAB/CUA, credencial real ni `.env`.
+- La DB prueba owner/member, creación vacía y zona, lista/lectura por membresía vigente, rename owner con slug estable, mutaciones de columnas como miembro, revocación, generación archivada, constraints, idempotencia y carreras entre sesiones sintéticas. UI autenticada, móvil/teclado real y reconciliación visible tras timeout quedan parciales/no probadas; ver la matriz en `docs/validation/issue-6.md`.
+- #6 permanece OPEN y pasa a `ready-for-human` mientras falte Auth→PostgREST y recorrido UI autenticado; `Blocked by #4` permanece intacto. No inferir aceptación de #4, no cerrar #6. La excepción solo habilitó el trabajo aislado y no cambia contratos ni autoriza producción.
+- La integración fast-forward de código y evidencia y la verificación final de tracker se registran después de esta sección cuando concluyan.

@@ -67,4 +67,14 @@ La implementación de «Administrar habilitación global» se revisó y se integ
 - C-81/A-04 queda parcialmente verificable: aún no hay modelos de membresías, roles, asignaciones y avisos. La suspensión de dueños de tableros se rechaza hasta resolver propiedad conforme a #19.
 - No hubo push. Se preservan docs/VALIDATION.md y .scratch/ ajenos; main y producción no se tocaron.
 
-Próximo paso humano cuando el usuario esté en la computadora: continuar OAuth real de #4 en Chrome local, corregir primero el error de hidratación si se reproduce y verificar identidades habilitada/no habilitada/sin sesión. Luego repetir la vista admin autenticada de #5. La excepción de secuencia no convierte este trabajo local en aceptación de OAuth ni permite cerrar #4/#5.
+Próximo paso humano cuando el usuario esté en la computadora: continuar OAuth real de #4 en Chrome local y verificar identidades habilitada/no habilitada/sin sesión; luego repetir la vista admin autenticada de #5. El fallo de hidratación observado en el smoke del 31/10 ya se corrigió y verificó en la sección siguiente. La excepción de secuencia no convierte este trabajo local en aceptación de OAuth ni permite cerrar #4/#5.
+
+## Corrección del smoke sin sesión de #4 — 2026-10-31
+
+El smoke de #5 reveló hidratación fallida en login: `src/app/login/page.tsx` envolvía `Logo` en un `Link` aunque `Logo` ya genera el enlace a `/`. El cambio acotado `d810d457c1810d06c516490ddf07bf11783ef291` elimina únicamente el envoltorio redundante y su import. Base fija: `b8b6bb32524070b4cd829ce11302e5a8124c3602`.
+
+- TDD en navegador local, sin sesión: antes, `/admin/access` redirigió con `307` a `/login?next=%2Fadmin%2Faccess`; el DOM tenía dos anchors, uno anidado, y React reportó `Hydration failed`. Después, la misma ruta terminó en login, quedó un solo anchor, cero anidados y no hubo errores/avisos nuevos de consola. No se inició Google OAuth ni se autenticó.
+- Pasaron `pnpm typecheck`, `pnpm build`, Biome dirigido para `src/app/login/page.tsx` y `git diff --check`.
+- Spec y Standards revisaron el HEAD de código `d810d45` contra `b8b6bb3`: sin hallazgos; Standards no encontró infracciones ni smells accionables.
+- #4 sigue OPEN/`ready-for-human`; OAuth/Auth real con identidad habilitada y no habilitada, logout y cambio de cuenta aún requieren recorrido manual. Este hotfix no satisface esos criterios.
+- No se hizo push ni se operó main/producción. Se preservan `docs/VALIDATION.md` y `.scratch/` ajenos.

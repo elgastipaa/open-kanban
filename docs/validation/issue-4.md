@@ -129,3 +129,22 @@ El revisor detectó que la evidencia del HEAD de código todavía apuntaba a `6d
 5. Resolver por separado la asignación de tableros legacy mediante inventario autorizado y asignación explícita a su propietario. Hasta completar Auth real y los recorridos pendientes, el issue permanece abierto y `ready-for-human`.
 
 Esta entrega es local en `codex/issue-4`; no se hizo push, merge ni operación en producción.
+
+## Corrección del smoke sin sesión — 31/10/2026
+
+Esta corrección atiende el fallo de hidratación observado al recorrer sin sesión `/admin/access` desde #5. La rama `codex/issue-4` parte de `b8b6bb32524070b4cd829ce11302e5a8124c3602`; el commit de código es `d810d457c1810d06c516490ddf07bf11783ef291`.
+
+La causa era que `src/app/login/page.tsx` envolvía `<Logo />` en un `Link` aunque `Logo` ya renderiza su propio enlace a `/`. El cambio quita solo ese envoltorio y su import; conserva `Logo`, el destino `/`, el copy y el diseño.
+
+### Prueba rojo → verde en navegador local
+
+Entorno: app local `http://127.0.0.1:3000`, Next.js 16.4.2 y un tab nuevo del navegador integrado, sin sesión. No se pulsó «Entrar con Google», no se abrió el proveedor ni se autenticó.
+
+- **Rojo, antes del cambio:** `GET /admin/access` respondió `307` con `Location: /login?next=%2Fadmin%2Faccess`. En login, el DOM contenía dos `<a>` y un enlace anidado; la consola reportó que `<a>` no puede estar dentro de otro `<a>` y `Hydration failed`.
+- **Verde, después del cambio:** la misma ruta redirigió a `/login?next=%2Fadmin%2Faccess`; el DOM conservó un enlace y cero anidados. No aparecieron errores ni avisos nuevos de consola tras la navegación.
+
+### Validación y revisión de la corrección
+
+Pasaron `pnpm typecheck`, `pnpm build`, `pnpm exec biome check src/app/login/page.tsx` y `git diff --check`. Spec y Standards revisaron el HEAD de código `d810d45` contra `b8b6bb3`: sin hallazgos de spec, infracciones documentadas ni smells accionables.
+
+Este smoke confirma la pantalla de acceso sin sesión y su hidratación; no verifica Google OAuth, admisión Auth real, identidad habilitada/no habilitada, logout ni cambio de cuenta. #4 permanece abierto y `ready-for-human` hasta completar esos recorridos manuales.

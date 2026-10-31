@@ -1,6 +1,6 @@
 # Issue #7 — evidencia de implementación
 
-Fecha: 31/10/2026. Issue: «Capturar tareas consecutivas sin duplicados». Rama: `codex/issue-7`. Base fija: `1312906108fa2a4815dd1a42cd5d889d04a16951`. HEAD de código final antes de este informe: `2f88596beaf7d4ccc34c40d6dccb5b2c02b89bb5`.
+Fecha: 31/10/2026. Issue: «Capturar tareas consecutivas sin duplicados». Rama: `codex/issue-7`. Base fija: `1312906108fa2a4815dd1a42cd5d889d04a16951`. HEAD de código final antes de este informe: `9ff7421b7aff4b749a8cb706ad416c4c42562469`.
 
 Se conservó `Blocked by #6`. La autorización de secuencia permitió la implementación y pruebas locales con actores sintéticos; no satisface Auth/OAuth real ni permite cerrar #7.
 
@@ -19,7 +19,7 @@ Se conservó `Blocked by #6`. La autorización de secuencia permitió la impleme
 | Confirmación vacía el campo, mantiene la captura abierta y permite seguir en la misma columna | **Parcial** | El componente espera la confirmación del hook antes de vaciar y regenerar la operation_id, y vuelve a enfocar el input. Falta recorrido manual autenticado. |
 | Ante fallo, conservar título y foco; retirar contenido si se deniega acceso | **Parcial** | `unavailable` conserva el borrador para reconciliar. Un error SQLSTATE `42501` se clasifica como `access_denied`: se limpia el título, se elimina el composer y se enfoca un aviso accesible sin contenido privado. El estado tiene prueba unitaria; el foco y el retiro visual aún no se verificaron en navegador. |
 | Resultado durable y consulta por operation_id y carga esperada | **Probado en DB** | `task_capture_receipts` conserva actor, clave, board/column/task y hash. `get_task_creation_result_p` exige la carga esperada y la compara en servidor antes de devolver una tarea. No existe la variante pública solo por operation_id. |
-| Replay idéntico devuelve el mismo task; distinta carga con la misma clave se rechaza | **Probado en DB** | `tests/db/task_capture.sql` comprueba que una consulta con la carga igual devuelve la tarea confirmada y que una carga distinta genera `23514` sin devolverla ni alterar tareas. El RPC de creación también rechaza el conflicto sin efecto parcial. |
+| Replay idéntico devuelve el mismo task; distinta carga con la misma clave se rechaza | **Probado en DB** | `tests/db/task_capture.sql` comprueba que una consulta con la carga igual devuelve la tarea confirmada y que una carga distinta genera `23514` sin devolverla ni alterar tareas. El RPC de creación también rechaza el conflicto sin efecto parcial, incluso cuando el payload apunta a otro board autorizado del actor. |
 | Vencimiento requiere reconciliación y evita reintento ciego | **Probado en DB; UI parcial** | Se vence la fila sintéticamente; la consulta con carga coincidente y el replay devuelven `expired_unknown`. Una carga distinta genera `23514` antes de resolver el task; el conteo no cambia. La consulta posterior del tablero solo ocurre después de reconciliar la misma carga. Falta confirmar este recorrido en navegador. |
 | Mover una tarea capturada y reconciliar/repetir su intención original | **Probado en DB** | La prueba mueve la tarea a otra columna activa del mismo tablero, luego consulta y repite el RPC con el payload/operation_id original. Ambas respuestas conservan `task_id` y exponen el `column_id` actual; no crean otra tarea. |
 | Doble envío y dos sesiones concurrentes crean una tarea | **Probado en DB; UI parcial** | El script retiene el row lock del board y ejecuta dos sesiones `authenticated` con la misma clave/carga; ambas obtienen el mismo task id y queda una receipt y una tarea. `pendingRef` evita doble submit en el componente; no fue verificado con navegador. |
@@ -88,3 +88,19 @@ Evidencia final del commit de código `2f88596beaf7d4ccc34c40d6dccb5b2c02b89bb5`
 - `bash -n scripts/test-db.sh` y `git diff --check`: exit 0. Git solo avisó que convertirá LF a CRLF al tocar los tres archivos con LF.
 
 Estas verificaciones no incluyen navegador, foco/DOM real, PostgREST/Auth HTTP ni OAuth. No se usaron sesiones ni credenciales reales. #7 permanece abierto con `Blocked by #6`.
+
+## Colisión de clave entre tableros — 31/10/2026
+
+La regresión roja en `tests/db/task_capture.sql` usa un actor autorizado a los dos tableros: crea y conserva una receipt en A, y vuelve a llamar `create_task_p` con el mismo operation_id pero board/column de B. Antes del fix, el resolver scoped a B devolvía `not_found` y la rama posterior a `ON CONFLICT` respondía `55000`, que el cliente interpreta como incierto. Con el fix, esa colisión da `23514` y el mensaje genérico `This task creation operation was already used with different details`, sin DETAIL ni HINT.
+
+La consulta de la clave desde B sigue devolviendo `not_found` sin task, task_id ni board_id. La consulta original en A conserva el mismo task_id y cantidad de tareas; B no recibe tareas ni receipt resoluble. No se cambia la identidad actor-scoped de las claves ni se devuelve información del board/receipt original al cliente de B.
+
+El cliente ya clasifica `23514` como `conflict`. Revisé que en conflicto la captura queda de solo lectura, Enter no envía, y «Asignar clave nueva» solo rota operation_id y limpia el error, conservando título y columna; esa acción sigue sin verificación de DOM/foco en navegador. Se añadió aserción unitaria del mapper `23514` → `conflict`.
+
+Evidencia final de esta ronda sobre el HEAD `9ff7421b7aff4b749a8cb706ad416c4c42562469`:
+
+- `pnpm test:db`: exit 0 en PostgreSQL desechable 16.15, con la regresión cross-board, la carrera de revocación y las demás pruebas DB.
+- `pnpm test:unit`: exit 0, 5/5.
+- `pnpm exec next typegen && pnpm typecheck`, `pnpm build`, Biome dirigido, `bash -n scripts/test-db.sh` y `git diff --check`: exit 0.
+
+No se verificaron PostgREST/Auth HTTP, OAuth ni UI real; #7 permanece abierto y `Blocked by #6` sigue vigente.

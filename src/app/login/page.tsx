@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { SignInButton } from "@/components/auth/sign-in-button";
 import { Logo } from "@/components/ui/logo";
 import { getSafeNextPath } from "@/lib/auth";
@@ -14,9 +13,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   return (
     <main className="flex min-h-dvh items-center justify-center bg-black px-5 py-12 text-white">
       <section className="w-full max-w-md rounded-3xl border border-white/10 bg-neutral-950 p-8 shadow-2xl sm:p-10">
-        <Link href="/" aria-label="OpenKanban, inicio">
-          <Logo />
-        </Link>
+        <Logo />
         <h1 className="mt-10 font-bold font-display text-3xl tracking-tight">
           Accede a tus tableros
         </h1>

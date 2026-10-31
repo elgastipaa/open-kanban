@@ -242,6 +242,141 @@ done
 "${psql[@]}" -f "$repo_dir/tests/db/closed_access.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/authentication.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/admin_authorization.sql"
+"${psql[@]}" -f "$repo_dir/tests/db/private_boards.sql"
+
+# Keep two authenticated database sessions open at once: the owner can read the
+# board while an unrelated global admin is denied its content and listing.
+private_board_slug=$("${psql[@]}" -At -c "SELECT slug FROM public.boards WHERE name = 'Trabajo renombrado' AND owner_id = '40000000-0000-4000-8000-000000000002' ORDER BY created_at DESC LIMIT 1")
+if [[ -z "$private_board_slug" ]]; then
+  echo 'Private board isolation fixture did not create the expected owner board.' >&2
+  exit 1
+fi
+private_board_dir="$test_dir/private-board-sessions"
+mkdir -- "$private_board_dir"
+owner_session_log="$private_board_dir/owner.log"
+outsider_session_log="$private_board_dir/outsider.log"
+PGAPPNAME=openkanban_board_owner_session "${psql[@]}" -v board_slug="$private_board_slug" > "$owner_session_log" 2>&1 <<'SQL' &
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);
+SELECT set_config('test.board_slug', :'board_slug', true);
+DO $$
+BEGIN
+  IF public.get_full_board_p(current_setting('test.board_slug')) IS NULL THEN
+    RAISE EXCEPTION 'Owner session did not read its private board';
+  END IF;
+END;
+$$;
+SELECT pg_sleep(4);
+COMMIT;
+SQL
+owner_session_pid=$!
+owner_session_active=false
+for _ in $(seq 1 100); do
+  owner_state=$("${psql[@]}" -At -c "SELECT state FROM pg_stat_activity WHERE application_name = 'openkanban_board_owner_session' AND state = 'active' AND query LIKE '%pg_sleep(4)%'")
+  if [[ "$owner_state" == active ]]; then
+    owner_session_active=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$owner_session_active" != true ]]; then
+  cat -- "$owner_session_log" >&2
+  echo 'Owner session did not hold the fixture connection open.' >&2
+  exit 1
+fi
+PGAPPNAME=openkanban_board_unrelated_admin "${psql[@]}" -v board_slug="$private_board_slug" > "$outsider_session_log" 2>&1 <<'SQL'
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000006', true);
+SELECT set_config('test.board_slug', :'board_slug', true);
+DO $$
+DECLARE
+  v_count integer;
+BEGIN
+  IF public.get_full_board_p(current_setting('test.board_slug')) IS NOT NULL THEN
+    RAISE EXCEPTION 'An unrelated administrator read the owner board';
+  END IF;
+  SELECT count(*) INTO v_count FROM public.list_my_boards()
+  WHERE slug = current_setting('test.board_slug');
+  IF v_count <> 0 THEN
+    RAISE EXCEPTION 'An unrelated administrator listed the owner board';
+  END IF;
+END;
+$$;
+COMMIT;
+\echo 'PASS: two concurrent authenticated sessions preserve board isolation'
+SQL
+wait "$owner_session_pid" || { cat -- "$owner_session_log" >&2; exit 1; }
+
+# Race the same create intent from two authenticated sessions while both wait
+# behind a table lock. The unique owner/request key must return one board twice.
+board_create_race_dir="$test_dir/private-board-create-race"
+mkdir -- "$board_create_race_dir"
+board_create_lock_log="$board_create_race_dir/lock-holder.log"
+board_create_first_log="$board_create_race_dir/first.log"
+board_create_second_log="$board_create_race_dir/second.log"
+PGAPPNAME=openkanban_board_create_lock_holder "${psql[@]}" > "$board_create_lock_log" 2>&1 <<'SQL' &
+BEGIN;
+LOCK TABLE public.board_creation_requests IN ACCESS EXCLUSIVE MODE;
+SELECT pg_sleep(3);
+COMMIT;
+SQL
+board_create_lock_pid=$!
+board_create_lock_active=false
+for _ in $(seq 1 100); do
+  lock_state=$("${psql[@]}" -At -c "SELECT state FROM pg_stat_activity WHERE application_name = 'openkanban_board_create_lock_holder' AND state = 'active' AND query LIKE '%pg_sleep(3)%'")
+  if [[ "$lock_state" == active ]]; then
+    board_create_lock_active=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$board_create_lock_active" != true ]]; then
+  cat -- "$board_create_lock_log" >&2
+  echo 'Board creation lock holder did not start.' >&2
+  exit 1
+fi
+for attempt in first second; do
+  if [[ "$attempt" == first ]]; then
+    target_log="$board_create_first_log"
+  else
+    target_log="$board_create_second_log"
+  fi
+  PGAPPNAME="openkanban_board_create_$attempt" "${psql[@]}" > "$target_log" 2>&1 <<'SQL' &
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);
+SELECT id FROM public.create_board_p(
+  'Intención concurrente', 'UTC', 'eeeeeeee-0000-4000-8000-000000000001'
+);
+COMMIT;
+SQL
+  if [[ "$attempt" == first ]]; then
+    board_create_first_pid=$!
+  else
+    board_create_second_pid=$!
+  fi
+done
+wait "$board_create_lock_pid" || { cat -- "$board_create_lock_log" >&2; exit 1; }
+wait "$board_create_first_pid" || { cat -- "$board_create_first_log" >&2; exit 1; }
+wait "$board_create_second_pid" || { cat -- "$board_create_second_log" >&2; exit 1; }
+board_create_uuid_pattern='[[:xdigit:]]{8}-([[:xdigit:]]{4}-){3}[[:xdigit:]]{12}'
+board_create_first_id=$(grep -Eo "$board_create_uuid_pattern" "$board_create_first_log" | tail -n 1)
+board_create_second_id=$(grep -Eo "$board_create_uuid_pattern" "$board_create_second_log" | tail -n 1)
+board_create_receipt_id=$("${psql[@]}" -At -c "SELECT board_id FROM public.board_creation_requests WHERE user_id = '40000000-0000-4000-8000-000000000002' AND operation_id = 'eeeeeeee-0000-4000-8000-000000000001'")
+if [[ -z "$board_create_first_id" || "$board_create_first_id" != "$board_create_second_id" || "$board_create_first_id" != "$board_create_receipt_id" ]]; then
+  echo 'Concurrent create retries did not return the same board recorded by the receipt.' >&2
+  cat -- "$board_create_first_log" "$board_create_second_log" >&2
+  exit 1
+fi
+board_create_count=$("${psql[@]}" -At -c "SELECT count(*) FROM public.board_creation_requests WHERE user_id = '40000000-0000-4000-8000-000000000002' AND operation_id = 'eeeeeeee-0000-4000-8000-000000000001'")
+if [[ "$board_create_count" != 1 ]]; then
+  echo "Concurrent create intent produced $board_create_count request receipts; expected 1." >&2
+  cat -- "$board_create_first_log" "$board_create_second_log" >&2
+  exit 1
+fi
+echo 'PASS: two concurrent retries of one board creation intent produce one board'
 
 # An active non-admin must be rejected before waiting on another transaction's
 # access-management lock, for every admin mutation.

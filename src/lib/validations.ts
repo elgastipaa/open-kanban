@@ -17,6 +17,7 @@ export const prioritySchema = z.enum(["low", "medium", "high", "urgent"]);
 const titleSchema = (label: string, max: number) =>
   z
     .string()
+    .trim()
     .min(1, `${label} is required`)
     .max(max, `${label} must be ${max} characters or fewer`);
 
@@ -32,7 +33,13 @@ export const taskDescriptionSchema = z
 // Payload schemas
 // ---------------------------------------------------------------------------
 
-export const createBoardSchema = z.object({ slug: slugSchema });
+export const boardNameSchema = titleSchema("Board name", 100);
+export const createBoardSchema = z.object({
+  name: boardNameSchema,
+  time_zone: z.string().trim().min(1).max(100),
+  operation_id: z.uuid(),
+});
+export const renameBoardSchema = z.object({ name: boardNameSchema });
 
 export const createColumnSchema = z.object({
   board_id: z.string().uuid(),

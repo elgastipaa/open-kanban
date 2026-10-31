@@ -10,6 +10,9 @@ export type Priority = "low" | "medium" | "high" | "urgent";
 export interface Board {
   id: string;
   slug: string;
+  name: string;
+  time_zone: string;
+  role: "owner" | "collaborator";
   created_at: string;
   updated_at: string;
 }

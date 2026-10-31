@@ -1,6 +1,8 @@
 "use client";
 
 import { AnimatePresence, motion } from "motion/react";
+import { useState } from "react";
+import { AddColumn, AddColumnForm } from "@/components/board/add-column";
 import { AddTask } from "@/components/board/add-task";
 import { MobileColumnControls } from "@/components/board/mobile-column-controls";
 import { MobileTaskCard } from "@/components/board/mobile-task-card";
@@ -9,7 +11,7 @@ import type { ColumnWithTasks, Task } from "@/lib/types";
 
 interface MobileBoardProps {
   columns: ColumnWithTasks[];
-  onAddColumn: () => void;
+  onAddColumn: (title: string) => void;
   onRenameColumn: (columnId: string, title: string) => void;
   onShiftColumn: (fromIndex: number, toIndex: number) => void;
   onAddTask: (columnId: string, title: string) => void;
@@ -51,6 +53,7 @@ export function MobileBoard({
   onMoveTask,
   onRequestDeleteColumn,
 }: MobileBoardProps) {
+  const [isAddingColumn, setIsAddingColumn] = useState(false);
   const { safeIndex, direction, goToPrev, goToNext, goTo, onDragEnd } =
     useColumnSwipe(columns.length);
 
@@ -104,7 +107,22 @@ export function MobileBoard({
     onMoveTask(activeColumn.id, activeColumn.id, index, index + 1);
   }
 
-  if (columns.length === 0) return null;
+  if (columns.length === 0) {
+    return (
+      <section className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
+        <div>
+          <h2 className="font-semibold text-lg text-text-primary">
+            Este tablero todavía no tiene columnas
+          </h2>
+          <p className="mt-2 max-w-sm text-sm text-text-muted">
+            Elige los nombres y el orden que te sirvan para organizar tus
+            tareas.
+          </p>
+        </div>
+        <AddColumn variant="empty" onAdd={onAddColumn} />
+      </section>
+    );
+  }
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
@@ -116,7 +134,7 @@ export function MobileBoard({
             taskCount={activeColumn.tasks.length}
             currentIndex={safeIndex}
             totalColumns={columns.length}
-            canDelete={columns.length > 1}
+            canDelete
             canShiftLeft={safeIndex > 0}
             canShiftRight={safeIndex < columns.length - 1}
             onPrev={goToPrev}
@@ -125,8 +143,20 @@ export function MobileBoard({
             onShiftLeft={handleShiftLeft}
             onShiftRight={handleShiftRight}
             onDelete={handleDeleteColumn}
-            onAddColumn={onAddColumn}
+            onAddColumn={() => setIsAddingColumn(true)}
           />
+
+          {isAddingColumn ? (
+            <div className="mb-3 px-4">
+              <AddColumnForm
+                onAdd={(title) => {
+                  onAddColumn(title);
+                  setIsAddingColumn(false);
+                }}
+                onCancel={() => setIsAddingColumn(false)}
+              />
+            </div>
+          ) : null}
 
           <div className="mb-3 shrink-0 px-4">
             <AddTask onAdd={(title) => onAddTask(activeColumn.id, title)} />

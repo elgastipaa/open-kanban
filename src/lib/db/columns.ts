@@ -100,8 +100,6 @@ export async function updateColumnPositions(
   const payload = uniqueUpdates.map((col) => ({
     id: col.id,
     position: col.position,
-    title: col.title,
-    is_collapsed: col.is_collapsed,
   }));
 
   const { error } = await supabase.rpc("update_column_positions_p", {

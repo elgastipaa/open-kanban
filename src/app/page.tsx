@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { SignInButton } from "@/components/auth/sign-in-button";
 import { SignOutButton } from "@/components/auth/sign-out-button";
+import { CreateBoardForm } from "@/components/board/create-board-form";
 import { Logo } from "@/components/ui/logo";
 import { resolveApplicationAccess } from "@/lib/auth";
-import { createOwnedBoard } from "@/lib/auth-actions";
 import { createClient } from "@/lib/supabase/server";
 import type { Board } from "@/lib/types";
 
@@ -14,10 +14,6 @@ export const metadata: Metadata = {
   robots: { index: false, follow: false, nocache: true },
 };
 
-interface HomePageProps {
-  searchParams: Promise<{ status?: string }>;
-}
-
 const accessMessages: Record<string, string> = {
   google_required: "Para usar OpenKanban debes iniciar sesión con Google.",
   not_enabled: "Tu cuenta todavía no está habilitada para OpenKanban.",
@@ -25,8 +21,7 @@ const accessMessages: Record<string, string> = {
   error: "No se pudo comprobar el acceso. Inténtalo de nuevo más tarde.",
 };
 
-export default async function HomePage({ searchParams }: HomePageProps) {
-  const params = await searchParams;
+export default async function HomePage() {
   const supabase = await createClient();
   const { data: authData } = await supabase.auth.getUser();
 
@@ -105,24 +100,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             Tus tableros
           </h1>
         </div>
-        <form action={createOwnedBoard}>
-          <button
-            type="submit"
-            className="min-h-12 rounded-xl bg-white px-5 py-3 font-semibold text-neutral-950 transition hover:bg-neutral-200"
-          >
-            Crear tablero
-          </button>
-        </form>
+        <CreateBoardForm />
       </section>
-
-      {params.status === "create-error" ? (
-        <p
-          className="mt-6 rounded-xl border border-red-400/20 bg-red-400/5 p-4 text-red-200 text-sm"
-          role="alert"
-        >
-          No se pudo crear el tablero. Inténtalo otra vez.
-        </p>
-      ) : null}
 
       {boardsError ? (
         <p
@@ -143,9 +122,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                 href={`/${board.slug}`}
                 className="block rounded-2xl border border-white/10 bg-neutral-950 p-5 transition hover:border-white/25 hover:bg-neutral-900"
               >
-                <span className="block font-semibold">{board.slug}</span>
+                <span className="block truncate font-semibold">
+                  {board.name}
+                </span>
                 <span className="mt-2 block text-neutral-500 text-xs">
-                  Abrir tablero
+                  {board.role === "owner"
+                    ? "Propietario"
+                    : "Compartido contigo"}
                 </span>
               </Link>
             </li>

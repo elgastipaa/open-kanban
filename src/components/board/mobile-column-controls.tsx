@@ -10,7 +10,7 @@ import {
   IconPencil,
   IconTrash,
 } from "@tabler/icons-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 interface MobileColumnControlsProps {
   title: string;
@@ -47,9 +47,11 @@ export function MobileColumnControls({
 }: MobileColumnControlsProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState(title);
+  const [editError, setEditError] = useState<string | null>(null);
   const [showMenu, setShowMenu] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const editErrorId = `${useId()}-mobile-column-rename-error`;
 
   // Sync edit value when title changes externally
   useEffect(() => {
@@ -77,7 +79,12 @@ export function MobileColumnControls({
 
   function handleRenameSubmit() {
     const trimmed = editValue.trim();
-    if (trimmed && trimmed !== title) {
+    if (!trimmed) {
+      setEditError("Escribe un nombre para la columna.");
+      return;
+    }
+    setEditError(null);
+    if (trimmed !== title) {
       onRename(trimmed);
     } else {
       setEditValue(title);
@@ -95,35 +102,61 @@ export function MobileColumnControls({
         <div className="flex min-w-0 flex-1 flex-col gap-1.5">
           <div className="flex items-center gap-2 font-medium text-[11px] text-text-muted uppercase tracking-wide">
             <span>
-              Column {currentIndex + 1} of {totalColumns}
+              Columna {currentIndex + 1} de {totalColumns}
             </span>
             <span className="h-1 w-1 shrink-0 rounded-full bg-border-hover" />
             <span className="text-accent">
-              {taskCount} Task{taskCount !== 1 && "s"}
+              {taskCount} {taskCount === 1 ? "tarea" : "tareas"}
             </span>
           </div>
 
           {isEditing ? (
-            <input
-              ref={inputRef}
-              value={editValue}
-              onChange={(e) => setEditValue(e.target.value)}
-              onBlur={handleRenameSubmit}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleRenameSubmit();
-                if (e.key === "Escape") {
-                  setEditValue(title);
-                  setIsEditing(false);
-                }
-              }}
-              className="w-full rounded-lg border border-accent bg-surface-raised px-3 py-1.5 font-bold text-lg text-text-primary outline-none transition-all focus:ring-2 focus:ring-accent/20"
-            />
+            <div>
+              <input
+                ref={inputRef}
+                value={editValue}
+                onChange={(e) => {
+                  setEditValue(e.target.value);
+                  if (editError) setEditError(null);
+                }}
+                onBlur={handleRenameSubmit}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    handleRenameSubmit();
+                  }
+                  if (e.key === "Escape") {
+                    setEditValue(title);
+                    setEditError(null);
+                    setIsEditing(false);
+                  }
+                }}
+                aria-label="Nombre de la columna"
+                aria-invalid={Boolean(editError)}
+                aria-describedby={editError ? editErrorId : undefined}
+                maxLength={100}
+                className="w-full rounded-lg border border-accent bg-surface-raised px-3 py-1.5 font-bold text-lg text-text-primary outline-none transition-all focus:ring-2 focus:ring-accent/20"
+              />
+              {editError ? (
+                <p
+                  id={editErrorId}
+                  className="mt-1 text-red-300 text-sm"
+                  role="alert"
+                >
+                  {editError}
+                </p>
+              ) : null}
+            </div>
           ) : (
             <button
               type="button"
-              onDoubleClick={() => setIsEditing(true)}
+              onClick={() => {
+                setEditValue(title);
+                setEditError(null);
+                setIsEditing(true);
+              }}
               className="max-w-full truncate text-left font-bold text-text-primary text-xl tracking-tight transition-colors hover:text-accent"
-              title={`${title} (double-tap to rename)`}
+              aria-label={`Renombrar columna ${title}`}
             >
               {title}
             </button>
@@ -140,7 +173,7 @@ export function MobileColumnControls({
             onClick={onPrev}
             disabled={currentIndex === 0}
             className="flex h-full w-10 items-center justify-center text-text-muted transition-colors hover:bg-surface-overlay hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent"
-            aria-label="Previous column"
+            aria-label="Columna anterior"
           >
             <IconChevronLeft size={18} stroke={2.5} />
           </button>
@@ -150,7 +183,7 @@ export function MobileColumnControls({
             onClick={onNext}
             disabled={currentIndex === totalColumns - 1}
             className="flex h-full w-10 items-center justify-center text-text-muted transition-colors hover:bg-surface-overlay hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent"
-            aria-label="Next column"
+            aria-label="Columna siguiente"
           >
             <IconChevronRight size={18} stroke={2.5} />
           </button>
@@ -161,14 +194,14 @@ export function MobileColumnControls({
           type="button"
           onClick={onAddColumn}
           className="group flex h-full flex-1 items-center justify-center gap-2 rounded-xl border border-border bg-surface-raised px-4 font-medium text-sm text-text-primary transition-colors hover:border-border-hover hover:bg-surface-overlay active:scale-[0.98]"
-          aria-label="Add new column"
+          aria-label="Añadir una columna"
         >
           <IconLayoutColumns
             size={16}
             stroke={2}
             className="text-accent transition-colors group-hover:text-accent"
           />
-          <span className="translate-y-px">New Column</span>
+          <span className="translate-y-px">Nueva columna</span>
         </button>
 
         {/* Settings Menu */}
@@ -177,7 +210,7 @@ export function MobileColumnControls({
             type="button"
             onClick={() => setShowMenu((v) => !v)}
             className="flex h-full w-10 items-center justify-center rounded-xl border border-border bg-surface-raised text-text-muted transition-colors hover:border-border-hover hover:bg-surface-overlay hover:text-text-primary"
-            aria-label="Column options"
+            aria-label="Opciones de columna"
           >
             <IconDots size={20} stroke={2.5} />
           </button>
@@ -190,18 +223,20 @@ export function MobileColumnControls({
               }}
             >
               <div className="mb-1 px-2 py-1 font-semibold text-[10px] text-text-muted uppercase tracking-wider">
-                Column Actions
+                Acciones de columna
               </div>
               <button
                 type="button"
                 onClick={() => {
+                  setEditValue(title);
+                  setEditError(null);
                   setIsEditing(true);
                   setShowMenu(false);
                 }}
                 className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-left font-medium text-sm text-text-secondary transition-colors hover:bg-surface-raised hover:text-text-primary"
               >
                 <IconPencil size={16} stroke={2} className="text-text-muted" />
-                Rename
+                Renombrar
               </button>
 
               {canShiftLeft && (
@@ -218,7 +253,7 @@ export function MobileColumnControls({
                     stroke={2}
                     className="text-text-muted"
                   />
-                  Shift left
+                  Mover a la izquierda
                 </button>
               )}
 
@@ -236,7 +271,7 @@ export function MobileColumnControls({
                     stroke={2}
                     className="text-text-muted"
                   />
-                  Shift right
+                  Mover a la derecha
                 </button>
               )}
 
@@ -256,7 +291,7 @@ export function MobileColumnControls({
                       stroke={2}
                       className="text-red-500/80"
                     />
-                    Delete column
+                    Eliminar columna
                   </button>
                 </>
               )}

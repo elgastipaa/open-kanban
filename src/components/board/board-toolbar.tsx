@@ -2,16 +2,22 @@
 
 import {
   IconDownload,
+  IconPencil,
   IconTrash,
   IconUpload,
   IconUsers,
 } from "@tabler/icons-react";
+import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
 import { BoardSignOutButton } from "@/components/auth/board-sign-out-button";
 import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/ui/logo";
+import { renameBoard } from "@/lib/auth-actions";
 
 interface BoardToolbarProps {
   slug: string;
+  name: string;
+  canRename: boolean;
   viewerCount: number;
   isConnected: boolean;
   onDeleteBoard: () => void;
@@ -21,30 +27,141 @@ interface BoardToolbarProps {
 
 export function BoardToolbar({
   slug,
+  name,
+  canRename,
   viewerCount,
   isConnected,
   onDeleteBoard,
   onExport,
   onImport,
 }: BoardToolbarProps) {
-  const formattedTitle = slug.replaceAll("-", " ");
-  const titleWords = formattedTitle.split(" ");
-  const displayTitle =
-    titleWords.length > 5
-      ? `${titleWords.slice(0, 5).join(" ")}...`
-      : formattedTitle;
+  const [title, setTitle] = useState(name);
+  const [editValue, setEditValue] = useState(name);
+  const [isEditing, setIsEditing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const isSavingRef = useRef(false);
+
+  useEffect(() => {
+    setTitle(name);
+    setEditValue(name);
+  }, [name]);
+
+  useEffect(() => {
+    if (isEditing) {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }
+  }, [isEditing]);
+
+  async function saveName() {
+    if (isSavingRef.current) return;
+    const nextName = editValue.trim();
+    if (!nextName) {
+      setError("Escribe un nombre para el tablero.");
+      return;
+    }
+    if (nextName === title) {
+      setIsEditing(false);
+      setError(null);
+      return;
+    }
+
+    setIsSaving(true);
+    isSavingRef.current = true;
+    setError(null);
+    let result: Awaited<ReturnType<typeof renameBoard>>;
+    try {
+      result = await renameBoard(slug, nextName);
+    } catch {
+      result = { error: "No se pudo confirmar el cambio. Inténtalo de nuevo." };
+    }
+    setIsSaving(false);
+    isSavingRef.current = false;
+    if (result.error || !result.name) {
+      setError(result.error ?? "No se pudo cambiar el nombre.");
+      return;
+    }
+    setTitle(result.name);
+    setEditValue(result.name);
+    setIsEditing(false);
+  }
 
   return (
     <header className="flex shrink-0 items-center justify-between border-border border-b bg-surface-base px-4 py-3 md:px-6">
       <div className="flex min-w-0 items-center gap-3">
         <Logo size={24} showText={false} />
         <div className="mx-1 hidden h-4 w-px bg-border sm:block" />
-        <h1
-          className="truncate font-semibold text-base text-text-primary"
-          title={formattedTitle}
+        <Link
+          href="/"
+          className="shrink-0 rounded-md px-2 py-1 text-sm text-text-secondary hover:bg-surface-overlay hover:text-text-primary"
         >
-          {displayTitle}
-        </h1>
+          Tableros
+        </Link>
+        <div className="min-w-0">
+          {isEditing ? (
+            <input
+              ref={inputRef}
+              value={editValue}
+              onChange={(event) => {
+                setEditValue(event.target.value);
+                if (error) setError(null);
+              }}
+              onBlur={() => void saveName()}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void saveName();
+                }
+                if (event.key === "Escape") {
+                  setEditValue(title);
+                  setError(null);
+                  setIsEditing(false);
+                }
+              }}
+              maxLength={100}
+              aria-label="Nombre del tablero"
+              aria-invalid={Boolean(error)}
+              aria-describedby={error ? "board-rename-error" : undefined}
+              disabled={isSaving}
+              className="w-full min-w-24 rounded-md border border-accent bg-surface-raised px-2 py-1 font-semibold text-base text-text-primary outline-none"
+            />
+          ) : (
+            <div className="flex items-center gap-1">
+              <h1
+                className="truncate font-semibold text-base text-text-primary"
+                title={title}
+              >
+                {title}
+              </h1>
+              {canRename ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditValue(title);
+                    setError(null);
+                    setIsEditing(true);
+                  }}
+                  aria-label="Cambiar el nombre del tablero"
+                  title="Cambiar el nombre del tablero"
+                  className="rounded-md p-1 text-text-muted hover:bg-surface-overlay hover:text-text-primary"
+                >
+                  <IconPencil size={15} />
+                </button>
+              ) : null}
+            </div>
+          )}
+          {error ? (
+            <p
+              id="board-rename-error"
+              className="text-red-300 text-xs"
+              role="alert"
+            >
+              {error}
+            </p>
+          ) : null}
+        </div>
 
         {/* Live viewer count & connection status */}
         {(viewerCount > 1 || !isConnected) && (
@@ -68,33 +185,37 @@ export function BoardToolbar({
       </div>
 
       <div className="flex items-center gap-1">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onImport}
-          title="Import board"
-        >
-          <IconUpload size={16} />
-          <span className="hidden sm:inline">Import</span>
-        </Button>
+        {canRename ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onImport}
+            title="Importar tablero"
+          >
+            <IconUpload size={16} />
+            <span className="hidden sm:inline">Importar</span>
+          </Button>
+        ) : null}
         <Button
           variant="ghost"
           size="sm"
           onClick={onExport}
-          title="Export board"
+          title="Exportar tablero"
         >
           <IconDownload size={16} />
-          <span className="hidden sm:inline">Export</span>
+          <span className="hidden sm:inline">Exportar</span>
         </Button>
-        <Button
-          variant="danger"
-          size="sm"
-          onClick={onDeleteBoard}
-          title="Delete board"
-        >
-          <IconTrash size={16} />
-          <span className="hidden sm:inline">Delete</span>
-        </Button>
+        {canRename ? (
+          <Button
+            variant="danger"
+            size="sm"
+            onClick={onDeleteBoard}
+            title="Eliminar tablero"
+          >
+            <IconTrash size={16} />
+            <span className="hidden sm:inline">Eliminar</span>
+          </Button>
+        ) : null}
         <BoardSignOutButton />
       </div>
     </header>

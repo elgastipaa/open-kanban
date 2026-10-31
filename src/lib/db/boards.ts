@@ -16,15 +16,19 @@ export async function getBoard(
   return response.data as Board | null;
 }
 
-/** Create a new board with the given slug */
+/** Create an explicitly named board with a retry-safe operation id */
 export async function createBoard(
   supabase: SupabaseClient,
-  slug: string,
+  input: { name: string; time_zone: string; operation_id: string },
 ): Promise<Board> {
-  createBoardSchema.parse({ slug });
+  const parsed = createBoardSchema.parse(input);
 
   const response = await supabase
-    .rpc("create_board_p", { p_slug: slug })
+    .rpc("create_board_p", {
+      p_name: parsed.name,
+      p_time_zone: parsed.time_zone,
+      p_operation_id: parsed.operation_id,
+    })
     .single();
 
   if (response.error) handleSupabaseError(response.error);

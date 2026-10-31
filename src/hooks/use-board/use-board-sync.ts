@@ -4,7 +4,7 @@ import { deleteBoard as dbDeleteBoard, getFullBoard } from "@/lib/db";
 import { getSessionEpoch } from "@/lib/supabase/client";
 import type { Board, ColumnWithTasks } from "@/lib/types";
 import type { TaskMutationLedger } from "./task-mutation-ledger";
-import { getInitialLocalColumn, showMutationError } from "./utils";
+import { showMutationError } from "./utils";
 
 interface UseBoardSyncProps {
   slug: string;
@@ -47,9 +47,7 @@ export function useBoardSync({
       boardRef.current = data.board;
       isPersistedRef.current = true;
       setBoard(data.board);
-      const nextColumns =
-        data.columns.length > 0 ? data.columns : [getInitialLocalColumn()];
-      setColumns(taskMutationLedger.sync(nextColumns));
+      setColumns(taskMutationLedger.sync(data.columns));
     }
   }, [
     slug,
@@ -79,7 +77,7 @@ export function useBoardSync({
     boardRef.current = null;
     isPersistedRef.current = false;
     setBoard(null);
-    setColumns(taskMutationLedger.sync([getInitialLocalColumn()], true));
+    setColumns(taskMutationLedger.sync([], true));
     return true;
   }, [
     supabase,
@@ -97,9 +95,7 @@ export function useBoardSync({
       boardRef.current = newBoard;
       isPersistedRef.current = newBoard !== null;
       setBoard(newBoard);
-      const nextColumns =
-        newColumns.length > 0 ? newColumns : [getInitialLocalColumn()];
-      setColumns(taskMutationLedger.sync(nextColumns, true));
+      setColumns(taskMutationLedger.sync(newColumns, true));
     },
     [boardRef, isPersistedRef, setBoard, setColumns, taskMutationLedger],
   );

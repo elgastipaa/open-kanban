@@ -35,9 +35,10 @@ export function useColumnOperations({
   ledger,
 }: UseColumnOperationsProps) {
   const addColumn = useCallback(
-    (title = "Untitled") => {
+    (title: string) => {
+      const trimmedTitle = title.trim();
       const position = columnsRef.current ? columnsRef.current.length : 0;
-      const tempCol = makeLocalColumn(title, position);
+      const tempCol = makeLocalColumn(trimmedTitle, position);
 
       // Optimistic UI update
       setColumns((prev) => [...prev, tempCol]);
@@ -45,34 +46,11 @@ export function useColumnOperations({
       // Queue DB operation
       enqueue(async () => {
         try {
-          const wasPersisted = isPersistedRef.current;
           const board = await persistBoard();
-
-          // If the board was just created, persist any existing local columns
-          // (e.g. the default "To Do" column) before creating the new one
-          if (!wasPersisted) {
-            const currentSnapshot = columnsRef.current ?? [];
-            for (const col of currentSnapshot) {
-              if (col.id.startsWith("local-") && col.id !== tempCol.id) {
-                const newCol = await createColumn(supabase, slug, {
-                  board_id: board.id,
-                  title: col.title,
-                  position: col.position,
-                });
-                setColumns((prev) =>
-                  prev.map((c) =>
-                    c.id === col.id
-                      ? { ...c, id: newCol.id, board_id: board.id }
-                      : c,
-                  ),
-                );
-              }
-            }
-          }
 
           const dbCol = await createColumn(supabase, slug, {
             board_id: board.id,
-            title,
+            title: trimmedTitle,
             position,
           });
 
@@ -98,7 +76,6 @@ export function useColumnOperations({
       supabase,
       slug,
       onMutationRef,
-      isPersistedRef,
     ],
   );
 

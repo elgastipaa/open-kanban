@@ -8,7 +8,7 @@ import {
   IconPencil,
   IconTrash,
 } from "@tabler/icons-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 interface ColumnHeaderProps {
   title: string;
@@ -37,9 +37,15 @@ export function ColumnHeader({
 }: ColumnHeaderProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState(title);
+  const [editError, setEditError] = useState<string | null>(null);
   const [showMenu, setShowMenu] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const editErrorId = `${useId()}-column-rename-error`;
+
+  useEffect(() => {
+    setEditValue(title);
+  }, [title]);
 
   useEffect(() => {
     if (isEditing && inputRef.current) {
@@ -62,7 +68,12 @@ export function ColumnHeader({
 
   function handleSubmit() {
     const trimmed = editValue.trim();
-    if (trimmed && trimmed !== title) {
+    if (!trimmed) {
+      setEditError("Escribe un nombre para la columna.");
+      return;
+    }
+    setEditError(null);
+    if (trimmed !== title) {
       onRename(trimmed);
     } else {
       setEditValue(title);
@@ -74,20 +85,42 @@ export function ColumnHeader({
     <div className="flex items-center justify-between gap-2 px-1 pb-3">
       <div className="flex min-w-0 items-center gap-2">
         {isEditing ? (
-          <input
-            ref={inputRef}
-            value={editValue}
-            onChange={(e) => setEditValue(e.target.value)}
-            onBlur={handleSubmit}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") handleSubmit();
-              if (e.key === "Escape") {
-                setEditValue(title);
-                setIsEditing(false);
-              }
-            }}
-            className="w-full rounded-md border border-accent bg-surface-raised px-2 py-1 font-semibold text-sm text-text-primary outline-none"
-          />
+          <div className="min-w-0 flex-1">
+            <input
+              ref={inputRef}
+              value={editValue}
+              onChange={(e) => {
+                setEditValue(e.target.value);
+                if (editError) setEditError(null);
+              }}
+              onBlur={handleSubmit}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  handleSubmit();
+                }
+                if (e.key === "Escape") {
+                  setEditValue(title);
+                  setEditError(null);
+                  setIsEditing(false);
+                }
+              }}
+              aria-label="Nombre de la columna"
+              aria-invalid={Boolean(editError)}
+              aria-describedby={editError ? editErrorId : undefined}
+              maxLength={100}
+              className="w-full rounded-md border border-accent bg-surface-raised px-2 py-1 font-semibold text-sm text-text-primary outline-none"
+            />
+            {editError ? (
+              <span
+                id={editErrorId}
+                className="mt-1 block text-red-300 text-xs"
+                role="alert"
+              >
+                {editError}
+              </span>
+            ) : null}
+          </div>
         ) : (
           <button
             type="button"
@@ -108,8 +141,8 @@ export function ColumnHeader({
           type="button"
           onClick={onToggleCollapse}
           className="cursor-pointer rounded-md p-1 text-text-muted transition-colors hover:bg-surface-overlay hover:text-text-primary"
-          aria-label="Collapse column"
-          title="Collapse column"
+          aria-label="Contraer columna"
+          title="Contraer columna"
         >
           <IconLayoutSidebarRightCollapse size={16} />
         </button>
@@ -119,6 +152,7 @@ export function ColumnHeader({
           <button
             type="button"
             onClick={() => setShowMenu(!showMenu)}
+            aria-label="Más opciones de columna"
             className="cursor-pointer rounded-md p-1 text-text-muted transition-colors hover:bg-surface-overlay hover:text-text-primary"
           >
             <IconDots size={16} />
@@ -131,6 +165,8 @@ export function ColumnHeader({
               <button
                 type="button"
                 onClick={() => {
+                  setEditValue(title);
+                  setEditError(null);
                   setIsEditing(true);
                   setShowMenu(false);
                 }}
@@ -138,7 +174,7 @@ export function ColumnHeader({
               >
                 <span className="flex items-center gap-1.5">
                   <IconPencil size={12} />
-                  Rename
+                  Renombrar
                 </span>
               </button>
               {canShiftLeft && (
@@ -152,7 +188,7 @@ export function ColumnHeader({
                 >
                   <span className="flex items-center gap-1.5">
                     <IconArrowLeft size={12} />
-                    Shift left
+                    Mover a la izquierda
                   </span>
                 </button>
               )}
@@ -167,7 +203,7 @@ export function ColumnHeader({
                 >
                   <span className="flex items-center gap-1.5">
                     <IconArrowRight size={12} />
-                    Shift right
+                    Mover a la derecha
                   </span>
                 </button>
               )}
@@ -182,7 +218,7 @@ export function ColumnHeader({
                 >
                   <span className="flex items-center gap-1.5">
                     <IconTrash size={12} />
-                    Delete column
+                    Eliminar columna
                   </span>
                 </button>
               )}

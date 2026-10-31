@@ -24,6 +24,7 @@ DO $$
 DECLARE
   v_access jsonb;
   v_board_id uuid;
+  v_board_slug text;
   v_column_id uuid;
   v_pending_removed boolean;
   v_admin_count integer := 0;
@@ -37,10 +38,14 @@ BEGIN
     RAISE EXCEPTION 'Bootstrap administrator lacks the expected application identity';
   END IF;
 
-  SELECT id INTO v_board_id FROM public.create_board_p('admin-private-board');
+  SELECT id, slug INTO v_board_id, v_board_slug
+  FROM public.create_board_p(
+    'Admin private board', 'UTC', 'bbbbbbbb-0000-4000-8000-000000000001'
+  );
   PERFORM set_config('test.admin_board_id', v_board_id::text, false);
-  SELECT id INTO v_column_id FROM public.create_column_p('admin-private-board', v_board_id, 'Admin private', 0);
-  PERFORM public.create_task_p('admin-private-board', v_column_id, 'Admin-owned content');
+  PERFORM set_config('test.admin_board_slug', v_board_slug, false);
+  SELECT id INTO v_column_id FROM public.create_column_p(v_board_slug, v_board_id, 'Admin private', 0);
+  PERFORM public.create_task_p(v_board_slug, v_column_id, 'Admin-owned content');
   SELECT count(*) INTO v_admin_count FROM public.list_my_boards();
   IF v_admin_count <> 1 THEN
     RAISE EXCEPTION 'Owner dashboard did not list exactly its administrator board';
@@ -113,7 +118,9 @@ DO $$
 DECLARE
   v_access jsonb;
   v_board_id uuid;
+  v_board_slug text;
   v_delete_board_id uuid;
+  v_delete_board_slug text;
   v_column_id uuid;
   v_delete_column_id uuid;
   v_row_count integer;
@@ -129,14 +136,18 @@ BEGIN
     RAISE EXCEPTION 'A repeated session check lost the stable identity link';
   END IF;
 
-  SELECT id INTO v_board_id FROM public.create_board_p('enabled-private-board');
-  SELECT id INTO v_column_id FROM public.create_column_p('enabled-private-board', v_board_id, 'Enabled private', 0);
-  PERFORM public.create_task_p('enabled-private-board', v_column_id, 'Enabled content');
-  IF public.get_full_board_p('enabled-private-board')->'columns'->0->'tasks'->0->>'title'
+  SELECT id, slug INTO v_board_id, v_board_slug
+  FROM public.create_board_p(
+    'Enabled private board', 'UTC', 'bbbbbbbb-0000-4000-8000-000000000002'
+  );
+  PERFORM set_config('test.enabled_board_slug', v_board_slug, false);
+  SELECT id INTO v_column_id FROM public.create_column_p(v_board_slug, v_board_id, 'Enabled private', 0);
+  PERFORM public.create_task_p(v_board_slug, v_column_id, 'Enabled content');
+  IF public.get_full_board_p(v_board_slug)->'columns'->0->'tasks'->0->>'title'
     IS DISTINCT FROM 'Enabled content' THEN
     RAISE EXCEPTION 'Enabled identity cannot read its own board';
   END IF;
-  IF public.get_full_board_p('admin-private-board') IS NOT NULL THEN
+  IF public.get_full_board_p(current_setting('test.admin_board_slug')) IS NOT NULL THEN
     RAISE EXCEPTION 'A valid but unrelated identity can read the admin board by slug';
   END IF;
   SELECT count(*) INTO v_row_count FROM public.boards;
@@ -168,11 +179,14 @@ BEGIN
     RAISE EXCEPTION 'The allowed private topic did not retain its message';
   END IF;
 
-  SELECT id INTO v_delete_board_id FROM public.create_board_p('enabled-delete-board');
-  SELECT id INTO v_delete_column_id FROM public.create_column_p('enabled-delete-board', v_delete_board_id, 'To delete', 0);
-  PERFORM public.create_task_p('enabled-delete-board', v_delete_column_id, 'Cascade fixture');
-  PERFORM public.delete_board_p('enabled-delete-board', v_delete_board_id);
-  IF EXISTS (SELECT 1 FROM public.boards WHERE slug = 'enabled-delete-board') THEN
+  SELECT id, slug INTO v_delete_board_id, v_delete_board_slug
+  FROM public.create_board_p(
+    'Enabled delete board', 'UTC', 'bbbbbbbb-0000-4000-8000-000000000003'
+  );
+  SELECT id INTO v_delete_column_id FROM public.create_column_p(v_delete_board_slug, v_delete_board_id, 'To delete', 0);
+  PERFORM public.create_task_p(v_delete_board_slug, v_delete_column_id, 'Cascade fixture');
+  PERFORM public.delete_board_p(v_delete_board_slug, v_delete_board_id);
+  IF EXISTS (SELECT 1 FROM public.boards WHERE id = v_delete_board_id) THEN
     RAISE EXCEPTION 'An owner could not delete a board and its children';
   END IF;
 END;
@@ -185,7 +199,7 @@ SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000001', true);
 DO $$
 BEGIN
-  IF public.get_full_board_p('enabled-private-board') IS NOT NULL THEN
+  IF public.get_full_board_p(current_setting('test.enabled_board_slug')) IS NOT NULL THEN
     RAISE EXCEPTION 'Application administrator can read another user’s private board';
   END IF;
 END;
@@ -210,7 +224,7 @@ BEGIN
     RAISE EXCEPTION 'Non-enabled Auth user passed the application admission check';
   END IF;
   SELECT count(*) INTO v_row_count FROM public.boards;
-  IF v_row_count <> 0 OR public.get_full_board_p('enabled-private-board') IS NOT NULL THEN
+  IF v_row_count <> 0 OR public.get_full_board_p(current_setting('test.enabled_board_slug')) IS NOT NULL THEN
     RAISE EXCEPTION 'Non-enabled Auth user read product data';
   END IF;
   SELECT count(*) INTO v_row_count FROM public.list_my_boards();
@@ -431,7 +445,7 @@ BEGIN
     RAISE EXCEPTION 'A previously issued Auth identity bypassed current suspension: %', v_access;
   END IF;
   SELECT count(*) INTO v_row_count FROM public.boards;
-  IF v_row_count <> 0 OR public.get_full_board_p('enabled-private-board') IS NOT NULL THEN
+  IF v_row_count <> 0 OR public.get_full_board_p(current_setting('test.enabled_board_slug')) IS NOT NULL THEN
     RAISE EXCEPTION 'Suspended Auth identity can still read product data';
   END IF;
   BEGIN

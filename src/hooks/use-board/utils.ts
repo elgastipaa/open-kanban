@@ -19,18 +19,6 @@ export function makeLocalColumn(
   };
 }
 
-export function getInitialLocalColumn(): ColumnWithTasks {
-  return {
-    id: "local-initial-todo",
-    board_id: "",
-    title: "To Do",
-    position: 0,
-    is_collapsed: false,
-    created_at: "2026-01-01T00:00:00.000Z",
-    tasks: [],
-  };
-}
-
 /** Show a standardized error toast for failed mutations */
 export function showMutationError(action: string) {
   toast.error(`Failed to ${action}`, {

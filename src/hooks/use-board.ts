@@ -8,7 +8,6 @@ import type { UseBoardOptions } from "./use-board/types";
 import { useBoardSync } from "./use-board/use-board-sync";
 import { useColumnOperations } from "./use-board/use-column-operations";
 import { useTaskOperations } from "./use-board/use-task-operations";
-import { getInitialLocalColumn } from "./use-board/utils";
 
 export function useBoard({
   slug,
@@ -17,10 +16,7 @@ export function useBoard({
   onMutation,
 }: UseBoardOptions) {
   const [board, setBoard] = useState<Board | null>(initialBoard);
-  const [columns, setColumns] = useState<ColumnWithTasks[]>(() => {
-    if (initialColumns.length > 0) return initialColumns;
-    return [getInitialLocalColumn()];
-  });
+  const [columns, setColumns] = useState<ColumnWithTasks[]>(initialColumns);
   const taskMutationLedgerRef = useRef<TaskMutationLedger | null>(null);
   if (!taskMutationLedgerRef.current) {
     taskMutationLedgerRef.current = new TaskMutationLedger(columns);

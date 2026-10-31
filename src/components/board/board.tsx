@@ -94,6 +94,18 @@ export function Board({
           return;
         }
 
+        const { data: boardAccess, error: boardAccessError } = await supabase
+          .rpc("get_board_p", { p_slug: slug })
+          .maybeSingle();
+        if (boardAccessError) {
+          preserveSessionData();
+          return;
+        }
+        if (!boardAccess) {
+          denySession();
+          return;
+        }
+
         if (!disposed && generation === verificationGeneration) {
           setSessionStatus("active");
         }
@@ -135,7 +147,7 @@ export function Board({
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [ownerAuthUserId, router]);
+  }, [ownerAuthUserId, router, slug]);
 
   if (sessionStatus === "checking" || sessionStatus === "denied") {
     return (
@@ -167,6 +179,7 @@ function BoardWorkspace({
 }: BoardWorkspaceProps) {
   const router = useRouter();
   const { isMobile, isReady } = useDevice();
+  const [openColumnFormSignal, setOpenColumnFormSignal] = useState(0);
 
   // Ref to hold refreshFromDB - avoids circular dependency between hooks
   const refreshRef = useRef<(() => Promise<void>) | undefined>(undefined);
@@ -192,6 +205,7 @@ function BoardWorkspace({
   });
 
   const {
+    board,
     columns,
     addColumn,
     renameColumn,
@@ -223,7 +237,7 @@ function BoardWorkspace({
       {
         key: "j",
         ctrlOrCmd: true,
-        action: () => addColumn(),
+        action: () => setOpenColumnFormSignal((signal) => signal + 1),
       },
       {
         key: "ArrowUp",
@@ -236,7 +250,7 @@ function BoardWorkspace({
         action: () => toggleAllColumnsCollapse(true),
       },
     ],
-    [addColumn, toggleAllColumnsCollapse],
+    [toggleAllColumnsCollapse],
   );
   useHotKeys(hotKeyBindings);
 
@@ -365,6 +379,8 @@ function BoardWorkspace({
       )}
       <BoardToolbar
         slug={slug}
+        name={board?.name ?? initialBoard.name}
+        canRename={initialBoard.role === "owner"}
         viewerCount={viewerCount}
         isConnected={isConnected}
         onDeleteBoard={() => setShowDeleteBoard(true)}
@@ -377,11 +393,28 @@ function BoardWorkspace({
         <div className="flex flex-1 items-center justify-center">
           <div className="board-spinner" />
         </div>
+      ) : columns.length === 0 ? (
+        <section className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
+          <div>
+            <h2 className="font-semibold text-lg text-text-primary">
+              Este tablero todavía no tiene columnas
+            </h2>
+            <p className="mt-2 max-w-sm text-sm text-text-muted">
+              Elige los nombres y el orden que te sirvan para organizar tus
+              tareas.
+            </p>
+          </div>
+          <AddColumn
+            variant="empty"
+            onAdd={addColumn}
+            openSignal={openColumnFormSignal}
+          />
+        </section>
       ) : isMobile ? (
         /* ── Mobile: single-column view ── */
         <MobileBoard
           columns={columns}
-          onAddColumn={() => addColumn()}
+          onAddColumn={addColumn}
           onRenameColumn={renameColumn}
           onShiftColumn={moveColumn}
           onAddTask={addTask}
@@ -399,7 +432,7 @@ function BoardWorkspace({
                 <Column
                   key={column.id}
                   column={column}
-                  canDelete={columns.length > 1}
+                  canDelete
                   canShiftLeft={index > 0}
                   canShiftRight={index < columns.length - 1}
                   onRenameColumn={renameColumn}
@@ -412,7 +445,7 @@ function BoardWorkspace({
                   onDeleteTask={requestDeleteTask}
                 />
               ))}
-              <AddColumn onAdd={() => addColumn()} />
+              <AddColumn onAdd={addColumn} openSignal={openColumnFormSignal} />
             </div>
           </LayoutGroup>
           <KeyboardShortcuts />

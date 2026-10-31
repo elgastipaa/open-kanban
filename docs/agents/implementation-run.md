@@ -111,3 +111,17 @@ La entrega de código revisada (`22da1e221ec607fff7a69d683ba3b151c81a2d13`) y el
 GitHub #6 verificado después de integrar: **OPEN**, asignado a `elgastipaa`, con `ready-for-human`; el body y la relación nativa `Blocked by #4` siguen presentes. El comentario de evidencia es `https://github.com/elgastipaa/open-kanban/issues/6#issuecomment-6548679571`. #4 y #5 siguen abiertos. No se cerró ningún issue.
 
 Los cambios ajenos de `docs/VALIDATION.md` conservaron SHA-256 `B8669EAAFEA1A6D41C1342470E49324D2FAA50BED03DCCCFE7E94AF17D51FD9C`; `.scratch/` sigue sin seguimiento y preservado. No se modificó `main`, no se ejecutó SQL remoto y no hubo despliegue de producción.
+
+## Entrega local de #7 — 2026-10-31
+
+La implementación de «Capturar tareas consecutivas sin duplicados» se revisó contra la base fija `1312906108fa2a4815dd1a42cd5d889d04a16951`. Código final revisado: `9ff7421b7aff4b749a8cb706ad416c4c42562469`; evidencia y rama de trabajo: `7b575e2109c7294f6882a50e163efdd14e122eec`. La integración `codex/openkanban-1-0` avanzó por fast-forward desde la base hasta `7b575e2` y se publicó en `origin`; el commit de este checkpoint/documentación queda después de ese HEAD.
+
+- TDD rojo-verde con Postgres 16.15 descartable, migraciones 001–018 y actores sintéticos. Se cubren Enter/botón y no creación por blur en código; recibos durables, replay y respuesta perdida; distintas cargas con la misma clave incluidas colisiones entre tableros; expiración; tarea movida; whitespace; validación de tablero/columna; autoría derivada; campos protegidos; doble captura concurrente; denegación genérica al reconciliar tras revocación y carrera de revoke-vs-resolve.
+- Pasaron `pnpm test:db`, `pnpm test:unit` (5/5), `pnpm exec next typegen && pnpm typecheck`, `pnpm build` (Next 16.4.2), Biome dirigido, `bash -n scripts/test-db.sh` y `git diff --check`. Evidencia por criterio: [docs/validation/issue-7.md](../validation/issue-7.md).
+- Reviews finales sobre el HEAD de código/evidencia `7b575e2` contra la base fija: Spec sin findings; Standards sin infracciones duras. Se anotaron smells no bloqueantes de duplicación y agrupamiento de argumentos.
+- GitHub #7 continúa OPEN, asignado a `elgastipaa`, etiquetado `ready-for-human` y con `Blocked by #6` conservado. No se marcaron criterios humanos como cumplidos ni se cerró el issue. Evidencia comentada: https://github.com/elgastipaa/open-kanban/issues/7#issuecomment-6549429359.
+- La PR acumulada #54 continúa OPEN/draft; su body incluye #7 y el informe reproducible. No se cambió el base branch.
+- Auth/PostgREST HTTP, OAuth y recorrido real de UI/DOM/foco/teclado siguen pendientes. No se usaron cuentas, sesiones, datos o claves reales; no se operó `main` ni producción.
+- Se preservaron los cambios ajenos de `docs/VALIDATION.md` y `.scratch/` sin stage/commit.
+
+Próximo paso: completar Auth/PostgREST y recorrido de navegador con sesión sintética legítima cuando el prerequisito #6 y el runner permitan hacerlo. Mantener #7 abierto y su dependencia intacta hasta verificar todos sus criterios.

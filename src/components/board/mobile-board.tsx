@@ -2,7 +2,7 @@
 
 import { AnimatePresence, motion } from "motion/react";
 import { useState } from "react";
-import { AddColumn, AddColumnForm } from "@/components/board/add-column";
+import { AddColumnForm } from "@/components/board/add-column";
 import { AddTask } from "@/components/board/add-task";
 import { MobileColumnControls } from "@/components/board/mobile-column-controls";
 import { MobileTaskCard } from "@/components/board/mobile-task-card";
@@ -105,23 +105,6 @@ export function MobileBoard({
     const index = activeColumn.tasks.findIndex((t) => t.id === taskId);
     if (index === -1 || index >= activeColumn.tasks.length - 1) return;
     onMoveTask(activeColumn.id, activeColumn.id, index, index + 1);
-  }
-
-  if (columns.length === 0) {
-    return (
-      <section className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
-        <div>
-          <h2 className="font-semibold text-lg text-text-primary">
-            Este tablero todavía no tiene columnas
-          </h2>
-          <p className="mt-2 max-w-sm text-sm text-text-muted">
-            Elige los nombres y el orden que te sirvan para organizar tus
-            tareas.
-          </p>
-        </div>
-        <AddColumn variant="empty" onAdd={onAddColumn} />
-      </section>
-    );
   }
 
   return (

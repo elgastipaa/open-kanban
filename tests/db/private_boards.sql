@@ -6,7 +6,13 @@ CREATE TEMP TABLE private_board_refs (
   slug text NOT NULL,
   request_id uuid NOT NULL
 );
+CREATE TEMP TABLE private_board_column_refs (
+  purpose text PRIMARY KEY,
+  first_column_id uuid NOT NULL,
+  second_column_id uuid NOT NULL
+);
 GRANT SELECT, INSERT ON private_board_refs TO authenticated;
+GRANT SELECT, INSERT ON private_board_column_refs TO authenticated;
 
 BEGIN;
 SET LOCAL ROLE authenticated;
@@ -168,7 +174,8 @@ END;
 $$;
 COMMIT;
 
--- A current collaborator can list and use the board, but cannot rename it.
+-- A current collaborator can list/read the board and use permitted columns,
+-- but cannot rename the board.
 RESET ROLE;
 INSERT INTO public.board_memberships(board_id, user_id, role)
 SELECT board_id, '40000000-0000-4000-8000-000000000001', 'collaborator'
@@ -181,6 +188,8 @@ DO $$
 DECLARE
   v_slug text;
   v_board_id uuid;
+  v_first_column_id uuid;
+  v_second_column_id uuid;
   v_full_board json;
   v_board_count integer;
   v_denied boolean := false;
@@ -208,9 +217,108 @@ BEGIN
   IF NOT v_denied THEN
     RAISE EXCEPTION 'A collaborator renamed the board';
   END IF;
+
+  SELECT id INTO v_first_column_id
+  FROM public.create_column_p(v_slug, v_board_id, 'Columna del miembro A', 10);
+  SELECT id INTO v_second_column_id
+  FROM public.create_column_p(v_slug, v_board_id, 'Columna del miembro B', 11);
+  PERFORM public.update_column_p(
+    v_slug,
+    v_first_column_id,
+    'Columna renombrada por miembro A',
+    10,
+    false
+  );
+  PERFORM public.update_column_positions_p(
+    v_slug,
+    jsonb_build_array(
+      jsonb_build_object('id', v_second_column_id, 'position', 10),
+      jsonb_build_object('id', v_first_column_id, 'position', 11)
+    )
+  );
+  v_full_board := public.get_full_board_p(v_slug);
+  IF v_full_board->'columns'->0->>'title' <> 'Columna del miembro B'
+    OR v_full_board->'columns'->1->>'title' <> 'Columna renombrada por miembro A' THEN
+    RAISE EXCEPTION 'An active collaborator could not create, rename, or reorder columns';
+  END IF;
+  INSERT INTO pg_temp.private_board_column_refs(purpose, first_column_id, second_column_id)
+  VALUES ('owner-board', v_first_column_id, v_second_column_id);
 END;
 $$;
 COMMIT;
+\echo 'PASS: a current collaborator can create, rename, and reorder columns'
+
+-- Revocation immediately removes listing/read access and all column mutations.
+RESET ROLE;
+UPDATE public.board_memberships
+SET revoked_at = now()
+WHERE board_id = (SELECT board_id FROM pg_temp.private_board_refs WHERE purpose = 'owner-board')
+  AND user_id = '40000000-0000-4000-8000-000000000001'
+  AND revoked_at IS NULL;
+
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000001', true);
+DO $$
+DECLARE
+  v_slug text;
+  v_board_id uuid;
+  v_column_id uuid;
+  v_board_count integer;
+  v_column_count integer;
+  v_create_denied boolean := false;
+  v_rename_denied boolean := false;
+  v_reorder_denied boolean := false;
+BEGIN
+  SELECT board_id, slug INTO v_board_id, v_slug
+  FROM pg_temp.private_board_refs WHERE purpose = 'owner-board';
+  SELECT first_column_id INTO v_column_id
+  FROM pg_temp.private_board_column_refs WHERE purpose = 'owner-board';
+
+  SELECT count(*) INTO v_board_count FROM public.list_my_boards()
+  WHERE id = v_board_id;
+  SELECT count(*) INTO v_column_count FROM public.get_columns_p(v_board_id);
+  IF v_board_count <> 0
+    OR v_column_count <> 0
+    OR public.get_full_board_p(v_slug) IS NOT NULL
+    OR EXISTS (SELECT 1 FROM public.get_board_p(v_slug))
+    OR EXISTS (SELECT 1 FROM public.boards WHERE id = v_board_id)
+    OR public.can_access_board_topic('board:' || v_board_id::text) THEN
+    RAISE EXCEPTION 'A revoked collaborator retained listing, read, RLS, or realtime access';
+  END IF;
+
+  BEGIN
+    PERFORM public.create_column_p(v_slug, v_board_id, 'No autorizada', 12);
+  EXCEPTION WHEN insufficient_privilege THEN
+    v_create_denied := true;
+  END;
+  BEGIN
+    PERFORM public.update_column_p(
+      v_slug,
+      v_column_id,
+      'Nombre no autorizado',
+      NULL,
+      NULL
+    );
+  EXCEPTION WHEN insufficient_privilege THEN
+    v_rename_denied := true;
+  END;
+  BEGIN
+    PERFORM public.update_column_positions_p(
+      v_slug,
+      jsonb_build_array(jsonb_build_object('id', v_column_id, 'position', 12))
+    );
+  EXCEPTION WHEN insufficient_privilege THEN
+    v_reorder_denied := true;
+  END;
+
+  IF NOT v_create_denied OR NOT v_rename_denied OR NOT v_reorder_denied THEN
+    RAISE EXCEPTION 'A revoked collaborator could still create, rename, or reorder columns';
+  END IF;
+END;
+$$;
+COMMIT;
+\echo 'PASS: a revoked collaborator loses board listing, reads, and column mutations'
 
 -- The owner may rename; the URL key does not change. The board has no implied
 -- first column. Columns are explicitly named and the active order is readable.

@@ -100,7 +100,7 @@ export default async function HomePage() {
             Tus tableros
           </h1>
         </div>
-        <CreateBoardForm />
+        <CreateBoardForm principalId={authData.user.id} />
       </section>
 
       {boardsError ? (

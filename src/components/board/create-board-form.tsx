@@ -4,48 +4,50 @@ import { useRouter } from "next/navigation";
 import { useActionState, useEffect, useState } from "react";
 import type { CreateBoardActionState } from "@/lib/auth-actions";
 import { createOwnedBoard } from "@/lib/auth-actions";
+import {
+  createBoardIntentStorageKey,
+  readCreateBoardIntent,
+  removeCreateBoardIntent,
+  type SavedCreateBoardIntent,
+  saveCreateBoardIntent,
+} from "@/lib/private-board-intent";
 
 const emptyState: CreateBoardActionState = { error: null };
-const intentStorageKey = "openkanban:create-board-intent";
 
-interface SavedIntent {
-  name: string;
-  timeZone: string;
-  operationId: string;
-  uncertain: boolean;
+interface CreateBoardFormProps {
+  principalId: string | null | undefined;
 }
 
-function readSavedIntent(): SavedIntent | null {
+function readSavedIntent(principalId: string): SavedCreateBoardIntent | null {
   try {
-    const value = sessionStorage.getItem(intentStorageKey);
-    if (!value) return null;
-    const parsed = JSON.parse(value) as SavedIntent;
-    if (
-      typeof parsed.name === "string" &&
-      typeof parsed.timeZone === "string" &&
-      typeof parsed.operationId === "string" &&
-      typeof parsed.uncertain === "boolean" &&
-      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-        parsed.operationId,
-      )
-    ) {
-      return parsed;
-    }
+    return readCreateBoardIntent(sessionStorage, principalId);
   } catch {
-    // Session storage can be unavailable in restricted browser contexts.
+    return null;
   }
-  return null;
 }
 
-function saveIntent(intent: SavedIntent) {
+function saveIntent(principalId: string, intent: SavedCreateBoardIntent) {
   try {
-    sessionStorage.setItem(intentStorageKey, JSON.stringify(intent));
+    saveCreateBoardIntent(sessionStorage, principalId, intent);
   } catch {
     // The current form state still keeps retries idempotent for this page.
   }
 }
 
-export function CreateBoardForm() {
+export function CreateBoardForm({ principalId }: CreateBoardFormProps) {
+  if (
+    typeof principalId !== "string" ||
+    !createBoardIntentStorageKey(principalId)
+  ) {
+    return null;
+  }
+
+  return (
+    <CreateBoardFormForPrincipal key={principalId} principalId={principalId} />
+  );
+}
+
+function CreateBoardFormForPrincipal({ principalId }: { principalId: string }) {
   const router = useRouter();
   const [state, formAction, pending] = useActionState(
     createOwnedBoard,
@@ -59,7 +61,7 @@ export function CreateBoardForm() {
   useEffect(() => {
     if (state.slug) {
       try {
-        sessionStorage.removeItem(intentStorageKey);
+        removeCreateBoardIntent(sessionStorage, principalId);
       } catch {
         // Navigation can proceed without storage access.
       }
@@ -71,15 +73,25 @@ export function CreateBoardForm() {
     if (state.editable) {
       setIntentUncertain(false);
       if (timeZone && operationId) {
-        saveIntent({ name, timeZone, operationId, uncertain: false });
+        saveIntent(principalId, {
+          name,
+          timeZone,
+          operationId,
+          uncertain: false,
+        });
       }
     } else if (state.uncertain) {
       setIntentUncertain(true);
       if (timeZone && operationId) {
-        saveIntent({ name, timeZone, operationId, uncertain: true });
+        saveIntent(principalId, {
+          name,
+          timeZone,
+          operationId,
+          uncertain: true,
+        });
       }
     }
-  }, [state, router, name, timeZone, operationId]);
+  }, [state, router, name, timeZone, operationId, principalId]);
 
   useEffect(() => {
     let detectedTimeZone = "";
@@ -90,7 +102,7 @@ export function CreateBoardForm() {
     }
     if (!detectedTimeZone) return;
 
-    const saved = readSavedIntent();
+    const saved = readSavedIntent(principalId);
     const nextName = saved?.name ?? "";
     const keepSavedIntent =
       saved?.uncertain === true || saved?.timeZone === detectedTimeZone;
@@ -104,13 +116,13 @@ export function CreateBoardForm() {
     setTimeZone(nextTimeZone);
     setOperationId(nextOperationId);
     setIntentUncertain(saved?.uncertain === true);
-    saveIntent({
+    saveIntent(principalId, {
       name: nextName,
       timeZone: nextTimeZone,
       operationId: nextOperationId,
       uncertain: saved?.uncertain === true,
     });
-  }, []);
+  }, [principalId]);
 
   function updateName(nextName: string) {
     setName(nextName);
@@ -118,7 +130,7 @@ export function CreateBoardForm() {
     const nextOperationId = crypto.randomUUID();
     setOperationId(nextOperationId);
     if (timeZone) {
-      saveIntent({
+      saveIntent(principalId, {
         name: nextName,
         timeZone,
         operationId: nextOperationId,
@@ -130,7 +142,7 @@ export function CreateBoardForm() {
   function handleSubmit() {
     setIntentUncertain(true);
     if (timeZone && operationId) {
-      saveIntent({ name, timeZone, operationId, uncertain: true });
+      saveIntent(principalId, { name, timeZone, operationId, uncertain: true });
     }
   }
 

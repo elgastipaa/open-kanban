@@ -283,6 +283,17 @@ BEGIN
       'public.task_capture_normalize_title(text)',
       'EXECUTE'
     )
+    OR has_function_privilege(
+      'authenticated',
+      'public.assert_task_capture_access_p(uuid)',
+      'EXECUTE'
+    )
+    OR has_function_privilege(
+      'authenticated',
+      'public.resolve_task_capture_receipt_p(uuid, uuid, bytea)',
+      'EXECUTE'
+    )
+    OR to_regprocedure('public.resolve_task_capture_receipt_p(uuid, bytea)') IS NOT NULL
     OR to_regprocedure('public.get_task_creation_result_p(uuid)') IS NOT NULL
     OR has_table_privilege('authenticated', 'public.tasks', 'INSERT')
     OR EXISTS (
@@ -357,30 +368,40 @@ $$;
 COMMIT;
 \echo 'PASS: capture replay, explicit intent, payload conflict, append, and board validation'
 
--- A revoked collaborator cannot resolve a prior receipt or use a changed hash
--- to learn whether the operation key exists.
+-- A revoked collaborator cannot distinguish existing and unknown operation ids
+-- through either reconciliation or create replay.
 RESET ROLE;
 BEGIN;
 SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000001', true);
 DO $$
 DECLARE
-  v_result jsonb;
   v_board_id uuid;
   v_column_id uuid;
+  v_denial_code text;
+  v_denial_message text;
 BEGIN
   SELECT board_id, column_id INTO v_board_id, v_column_id
   FROM pg_temp.issue7_capture_fixture;
-  v_result := public.get_task_creation_result_p(
-    'a7777777-0000-4000-8000-000000000001',
-    v_board_id,
-    v_column_id,
-    'Comprar leche',
-    NULL,
-    'medium'
-  );
-  IF v_result->>'status' IS DISTINCT FROM 'not_found' OR v_result ? 'task' THEN
-    RAISE EXCEPTION 'Another actor resolved a task capture receipt: %', v_result;
+  BEGIN
+    PERFORM public.get_task_creation_result_p(
+      'a7777777-0000-4000-8000-000000000001',
+      v_board_id,
+      v_column_id,
+      'Comprar leche',
+      NULL,
+      'medium'
+    );
+    RAISE EXCEPTION 'Another actor resolved a task capture receipt';
+  EXCEPTION WHEN insufficient_privilege THEN
+    GET STACKED DIAGNOSTICS
+      v_denial_code = RETURNED_SQLSTATE,
+      v_denial_message = MESSAGE_TEXT;
+  END;
+  IF v_denial_code IS DISTINCT FROM '42501'
+    OR v_denial_message IS DISTINCT FROM 'Board access is required' THEN
+    RAISE EXCEPTION 'Another actor did not receive a generic board denial: %/%',
+      v_denial_code, v_denial_message;
   END IF;
 END;
 $$;
@@ -395,7 +416,6 @@ DO $$
 DECLARE
   v_board_id uuid;
   v_column_id uuid;
-  v_result jsonb;
 BEGIN
   SELECT board_id, column_id INTO v_board_id, v_column_id
   FROM pg_temp.issue7_capture_fixture;
@@ -419,52 +439,108 @@ SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000001', true);
 DO $$
 DECLARE
-  v_result jsonb;
   v_board_id uuid;
   v_column_id uuid;
+  v_existing_query_code text;
+  v_existing_query_message text;
+  v_missing_query_code text;
+  v_missing_query_message text;
+  v_existing_create_code text;
+  v_existing_create_message text;
+  v_missing_create_code text;
+  v_missing_create_message text;
 BEGIN
   SELECT board_id, column_id INTO v_board_id, v_column_id
   FROM pg_temp.issue7_capture_fixture;
-  v_result := public.get_task_creation_result_p(
-    'a7777777-0000-4000-8000-000000000005',
-    v_board_id,
-    v_column_id,
-    'Revoked collaborator task',
-    NULL,
-    'medium'
-  );
-  IF v_result->>'status' IS DISTINCT FROM 'unavailable'
-    OR v_result ? 'task' THEN
-    RAISE EXCEPTION 'A revoked member resolved a receipt: %', v_result;
-  END IF;
 
-  v_result := public.get_task_creation_result_p(
-    'a7777777-0000-4000-8000-000000000005',
-    v_board_id,
-    v_column_id,
-    'Changed after revocation',
-    NULL,
-    'medium'
-  );
-  IF v_result->>'status' IS DISTINCT FROM 'unavailable'
-    OR v_result ? 'task' THEN
-    RAISE EXCEPTION 'A revoked member learned the operation hash state through reconciliation: %', v_result;
-  END IF;
+  BEGIN
+    PERFORM public.get_task_creation_result_p(
+      'a7777777-0000-4000-8000-000000000005',
+      v_board_id,
+      v_column_id,
+      'Revoked collaborator task',
+      NULL,
+      'medium'
+    );
+    RAISE EXCEPTION 'A revoked member reconciled an existing operation id';
+  EXCEPTION WHEN insufficient_privilege THEN
+    GET STACKED DIAGNOSTICS
+      v_existing_query_code = RETURNED_SQLSTATE,
+      v_existing_query_message = MESSAGE_TEXT;
+  END;
+  BEGIN
+    PERFORM public.get_task_creation_result_p(
+      'a7777777-0000-4000-8000-000000000009',
+      v_board_id,
+      v_column_id,
+      'No such receipt',
+      NULL,
+      'medium'
+    );
+    RAISE EXCEPTION 'A revoked member reconciled an unknown operation id';
+  EXCEPTION WHEN insufficient_privilege THEN
+    GET STACKED DIAGNOSTICS
+      v_missing_query_code = RETURNED_SQLSTATE,
+      v_missing_query_message = MESSAGE_TEXT;
+  END;
 
-  v_result := public.create_task_p(
-    'a7777777-0000-4000-8000-000000000005',
-    v_board_id,
-    v_column_id,
-    'Changed after revocation'
-  );
-  IF v_result->>'status' IS DISTINCT FROM 'unavailable'
-    OR v_result ? 'task' THEN
-    RAISE EXCEPTION 'A revoked member learned the operation hash state: %', v_result;
+  BEGIN
+    PERFORM public.create_task_p(
+      'a7777777-0000-4000-8000-000000000005',
+      v_board_id,
+      v_column_id,
+      'Changed after revocation'
+    );
+    RAISE EXCEPTION 'A revoked member replayed an existing operation id';
+  EXCEPTION WHEN insufficient_privilege THEN
+    GET STACKED DIAGNOSTICS
+      v_existing_create_code = RETURNED_SQLSTATE,
+      v_existing_create_message = MESSAGE_TEXT;
+  END;
+
+  BEGIN
+    PERFORM public.create_task_p(
+      'a7777777-0000-4000-8000-000000000009',
+      v_board_id,
+      v_column_id,
+      'No such receipt'
+    );
+    RAISE EXCEPTION 'A revoked member created an unknown operation id';
+  EXCEPTION WHEN insufficient_privilege THEN
+    GET STACKED DIAGNOSTICS
+      v_missing_create_code = RETURNED_SQLSTATE,
+      v_missing_create_message = MESSAGE_TEXT;
+  END;
+
+  IF v_existing_query_code IS DISTINCT FROM '42501'
+    OR v_missing_query_code IS DISTINCT FROM v_existing_query_code
+    OR v_existing_query_message IS DISTINCT FROM 'Board access is required'
+    OR v_missing_query_message IS DISTINCT FROM v_existing_query_message
+    OR v_existing_create_code IS DISTINCT FROM '42501'
+    OR v_missing_create_code IS DISTINCT FROM v_existing_create_code
+    OR v_existing_create_message IS DISTINCT FROM 'Board access is required'
+    OR v_missing_create_message IS DISTINCT FROM v_existing_create_message THEN
+    RAISE EXCEPTION 'Revoked access distinguished an existing receipt from an unknown operation: query %/% and create %/%',
+      v_existing_query_code || ': ' || v_existing_query_message,
+      v_missing_query_code || ': ' || v_missing_query_message,
+      v_existing_create_code || ': ' || v_existing_create_message,
+      v_missing_create_code || ': ' || v_missing_create_message;
   END IF;
 END;
 $$;
 COMMIT;
-\echo 'PASS: revoked members cannot resolve task capture receipts'
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM public.task_capture_receipts
+    WHERE actor_id = '40000000-0000-4000-8000-000000000001'
+      AND operation_id = 'a7777777-0000-4000-8000-000000000009'
+  ) THEN
+    RAISE EXCEPTION 'A denied replay left a receipt for the unknown operation';
+  END IF;
+END;
+$$;
+\echo 'PASS: revoked members receive the same generic denial for existing/unknown receipts and replay'
 
 -- Expired receipts are an unknown outcome. They require reconciliation, and a
 -- repeated request must not silently produce another task.

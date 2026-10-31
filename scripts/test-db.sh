@@ -245,6 +245,152 @@ done
 "${psql[@]}" -f "$repo_dir/tests/db/private_boards.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/task_capture.sql"
 
+# A reconciliation locks the actor's active membership before looking up its
+# receipt. If revocation wins the membership row first, the resolver must wait
+# and then deny the request rather than returning a previously captured task.
+task_capture_revoke_dir="$test_dir/task-capture-revocation-race"
+mkdir -- "$task_capture_revoke_dir"
+task_capture_revoke_holder_log="$task_capture_revoke_dir/revoker.log"
+task_capture_revoke_resolver_log="$task_capture_revoke_dir/resolver.log"
+"${psql[@]}" -q <<'SQL'
+CREATE TABLE public.issue7_task_capture_revoke_fixture (
+  board_id uuid NOT NULL,
+  column_id uuid NOT NULL,
+  operation_id uuid NOT NULL
+);
+GRANT SELECT, INSERT ON public.issue7_task_capture_revoke_fixture TO authenticated;
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);
+DO $$
+DECLARE
+  board record;
+  column_id uuid;
+BEGIN
+  SELECT * INTO board FROM public.create_board_p(
+    'Issue 7 revocation race',
+    'UTC',
+    'f7777777-0000-4000-8000-000000000011'
+  );
+  SELECT id INTO column_id
+  FROM public.create_column_p(board.slug, board.id, 'Concurrent revoke', 0);
+  INSERT INTO public.issue7_task_capture_revoke_fixture(board_id, column_id, operation_id)
+  VALUES (board.id, column_id, 'a7777777-0000-4000-8000-000000000011');
+END;
+$$;
+COMMIT;
+INSERT INTO public.board_memberships(board_id, user_id, role)
+SELECT board_id, '40000000-0000-4000-8000-000000000001', 'collaborator'
+FROM public.issue7_task_capture_revoke_fixture;
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000001', true);
+DO $$
+DECLARE
+  fixture record;
+BEGIN
+  SELECT * INTO STRICT fixture FROM public.issue7_task_capture_revoke_fixture;
+  PERFORM public.create_task_p(
+    fixture.operation_id,
+    fixture.board_id,
+    fixture.column_id,
+    'Committed before concurrent revocation'
+  );
+END;
+$$;
+COMMIT;
+SQL
+task_capture_revoke_board_id=$("${psql[@]}" -At -c "SELECT board_id FROM public.issue7_task_capture_revoke_fixture")
+task_capture_revoke_column_id=$("${psql[@]}" -At -c "SELECT column_id FROM public.issue7_task_capture_revoke_fixture")
+task_capture_revoke_operation_id=$("${psql[@]}" -At -c "SELECT operation_id FROM public.issue7_task_capture_revoke_fixture")
+
+PGAPPNAME=openkanban_task_capture_revoker "${psql[@]}" > "$task_capture_revoke_holder_log" 2>&1 <<SQL &
+BEGIN;
+UPDATE public.board_memberships
+SET revoked_at = clock_timestamp()
+WHERE board_id = '$task_capture_revoke_board_id'
+  AND user_id = '40000000-0000-4000-8000-000000000001'
+  AND revoked_at IS NULL;
+SELECT pg_sleep(3);
+COMMIT;
+SQL
+task_capture_revoke_holder_pid=$!
+task_capture_revoke_holder_active=false
+for _ in $(seq 1 100); do
+  revoke_state=$("${psql[@]}" -At -c "SELECT state FROM pg_stat_activity WHERE application_name = 'openkanban_task_capture_revoker' AND state = 'active' AND query LIKE '%pg_sleep(3)%'")
+  if [[ "$revoke_state" == active ]]; then
+    task_capture_revoke_holder_active=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$task_capture_revoke_holder_active" != true ]]; then
+  cat -- "$task_capture_revoke_holder_log" >&2
+  echo 'Task capture membership revocation lock holder did not start.' >&2
+  exit 1
+fi
+
+PGAPPNAME=openkanban_task_capture_resolver "${psql[@]}" -v board_id="$task_capture_revoke_board_id" \
+  -v column_id="$task_capture_revoke_column_id" -v operation_id="$task_capture_revoke_operation_id" \
+  > "$task_capture_revoke_resolver_log" 2>&1 <<'SQL' &
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000001', true);
+SELECT set_config('test.capture_board_id', :'board_id', true);
+SELECT set_config('test.capture_column_id', :'column_id', true);
+SELECT set_config('test.capture_operation_id', :'operation_id', true);
+DO $$
+DECLARE
+  v_denial_code text;
+  v_denial_message text;
+BEGIN
+  BEGIN
+    PERFORM public.get_task_creation_result_p(
+      current_setting('test.capture_operation_id')::uuid,
+      current_setting('test.capture_board_id')::uuid,
+      current_setting('test.capture_column_id')::uuid,
+      'Committed before concurrent revocation',
+      NULL,
+      'medium'
+    );
+    RAISE EXCEPTION 'Reconciliation returned a task after membership revocation won the race';
+  EXCEPTION WHEN insufficient_privilege THEN
+    GET STACKED DIAGNOSTICS
+      v_denial_code = RETURNED_SQLSTATE,
+      v_denial_message = MESSAGE_TEXT;
+  END;
+  IF v_denial_code IS DISTINCT FROM '42501'
+    OR v_denial_message IS DISTINCT FROM 'Board access is required' THEN
+    RAISE EXCEPTION 'Concurrent revoke did not produce the generic denial: %/%',
+      v_denial_code, v_denial_message;
+  END IF;
+END;
+$$;
+COMMIT;
+SQL
+task_capture_revoke_resolver_pid=$!
+task_capture_revoke_resolver_waiting=false
+for _ in $(seq 1 100); do
+  revoke_waiting_count=$("${psql[@]}" -At -c "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'openkanban_task_capture_resolver' AND wait_event_type = 'Lock'")
+  if [[ "$revoke_waiting_count" == 1 ]]; then
+    task_capture_revoke_resolver_waiting=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$task_capture_revoke_resolver_waiting" != true ]]; then
+  cat -- "$task_capture_revoke_resolver_log" >&2
+  echo 'Task capture resolver did not wait for the membership revocation lock.' >&2
+  "${psql[@]}" -q -c "SELECT pg_cancel_backend(pid) FROM pg_stat_activity WHERE application_name = 'openkanban_task_capture_revoker'" >/dev/null
+  wait "$task_capture_revoke_holder_pid" || true
+  wait "$task_capture_revoke_resolver_pid" || true
+  exit 1
+fi
+wait "$task_capture_revoke_holder_pid" || { cat -- "$task_capture_revoke_holder_log" >&2; exit 1; }
+wait "$task_capture_revoke_resolver_pid" || { cat -- "$task_capture_revoke_resolver_log" >&2; exit 1; }
+"${psql[@]}" -q -c 'DROP TABLE public.issue7_task_capture_revoke_fixture'
+echo 'PASS: reconciliation waits for concurrent membership revocation and then denies access'
+
 # Hold the destination board row so two authenticated sessions submit the same
 # explicit task-capture intent concurrently and must both resolve one receipt.
 task_capture_race_dir="$test_dir/task-capture-race"

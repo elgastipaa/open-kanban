@@ -82,9 +82,49 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION public.resolve_task_capture_receipt_p(
+CREATE OR REPLACE FUNCTION public.assert_task_capture_access_p(p_board_id uuid)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public, auth, pg_temp
+AS $$
+DECLARE
+  v_actor_id uuid := auth.uid();
+  v_locked_actor uuid;
+  v_membership_id uuid;
+BEGIN
+  IF v_actor_id IS NULL OR NOT public.is_application_user() THEN
+    RAISE EXCEPTION 'Board access is required' USING ERRCODE = '42501';
+  END IF;
+
+  -- Shared row locks serialize access checks with application suspension and
+  -- membership revocation.
+  SELECT access.auth_user_id INTO v_locked_actor
+  FROM public.application_access AS access
+  WHERE access.auth_user_id = v_actor_id
+  FOR SHARE;
+  IF NOT FOUND OR NOT public.is_application_user() THEN
+    RAISE EXCEPTION 'Board access is required' USING ERRCODE = '42501';
+  END IF;
+
+  SELECT membership.id INTO v_membership_id
+  FROM public.board_memberships AS membership
+  WHERE membership.board_id = p_board_id
+    AND membership.user_id = v_actor_id
+    AND membership.revoked_at IS NULL
+  FOR SHARE;
+  IF NOT FOUND OR NOT public.is_board_member(p_board_id) THEN
+    RAISE EXCEPTION 'Board access is required' USING ERRCODE = '42501';
+  END IF;
+END;
+$$;
+
+DROP FUNCTION IF EXISTS public.resolve_task_capture_receipt_p(uuid, bytea);
+
+CREATE FUNCTION public.resolve_task_capture_receipt_p(
   p_operation_id uuid,
-  p_expected_payload_hash bytea DEFAULT NULL
+  p_board_id uuid,
+  p_expected_payload_hash bytea
 )
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -93,36 +133,24 @@ SET search_path = pg_catalog, public, auth, pg_temp
 AS $$
 DECLARE
   v_actor_id uuid := auth.uid();
-  v_locked_actor uuid;
   v_receipt public.task_capture_receipts%ROWTYPE;
   v_board_id uuid;
-  v_membership_id uuid;
   v_column_id uuid;
   v_task public.tasks%ROWTYPE;
 BEGIN
-  IF p_operation_id IS NULL THEN
-    RAISE EXCEPTION 'A task creation operation id is required'
+  IF p_operation_id IS NULL OR p_board_id IS NULL THEN
+    RAISE EXCEPTION 'A task creation operation and board are required'
       USING ERRCODE = '22023';
   END IF;
 
-  IF v_actor_id IS NULL OR NOT public.is_application_user() THEN
-    RETURN jsonb_build_object('status', 'unavailable');
-  END IF;
-
-  -- Serialize this request with suspension, then re-check the current access
-  -- state before revealing any operation or task result.
-  SELECT access.auth_user_id INTO v_locked_actor
-  FROM public.application_access AS access
-  WHERE access.auth_user_id = v_actor_id
-  FOR SHARE;
-  IF NOT FOUND OR NOT public.is_application_user() THEN
-    RETURN jsonb_build_object('status', 'unavailable');
-  END IF;
+  -- Authorize and lock the requested board before looking up the operation id.
+  PERFORM public.assert_task_capture_access_p(p_board_id);
 
   SELECT receipt.* INTO v_receipt
   FROM public.task_capture_receipts AS receipt
   WHERE receipt.actor_id = v_actor_id
     AND receipt.operation_id = p_operation_id
+    AND receipt.board_id = p_board_id
   FOR UPDATE;
   IF NOT FOUND THEN
     RETURN jsonb_build_object(
@@ -131,25 +159,11 @@ BEGIN
     );
   END IF;
 
-  IF NOT public.is_board_member(v_receipt.board_id) THEN
-    RETURN jsonb_build_object('status', 'unavailable');
-  END IF;
-
   SELECT board.id INTO v_board_id
   FROM public.boards AS board
-  WHERE board.id = v_receipt.board_id
+  WHERE board.id = p_board_id
   FOR SHARE;
   IF NOT FOUND THEN
-    RETURN jsonb_build_object('status', 'unavailable');
-  END IF;
-
-  SELECT membership.id INTO v_membership_id
-  FROM public.board_memberships AS membership
-  WHERE membership.board_id = v_receipt.board_id
-    AND membership.user_id = v_actor_id
-    AND membership.revoked_at IS NULL
-  FOR SHARE;
-  IF NOT FOUND OR NOT public.is_board_member(v_receipt.board_id) THEN
     RETURN jsonb_build_object('status', 'unavailable');
   END IF;
 
@@ -157,16 +171,15 @@ BEGIN
   FROM public.columns AS column_row
   JOIN public.boards AS board ON board.id = column_row.board_id
   WHERE column_row.id = v_receipt.column_id
-    AND column_row.board_id = v_receipt.board_id
+    AND column_row.board_id = p_board_id
     AND column_row.generation_id = board.active_generation_id;
   IF NOT FOUND THEN
     RETURN jsonb_build_object('status', 'unavailable');
   END IF;
 
-  -- Check the current board authorization before comparing a supplied hash.
-  -- Otherwise a former member could distinguish a reused key from an unknown one.
-  IF p_expected_payload_hash IS NOT NULL
-    AND v_receipt.payload_hash IS DISTINCT FROM p_expected_payload_hash THEN
+  -- Authorization and membership locks are held before comparing the hash, so
+  -- a revoked member cannot distinguish a reused key from an unknown one.
+  IF v_receipt.payload_hash IS DISTINCT FROM p_expected_payload_hash THEN
     RAISE EXCEPTION 'This task creation operation was already used with different details'
       USING ERRCODE = '23514';
   END IF;
@@ -186,7 +199,7 @@ BEGIN
   JOIN public.columns AS column_row ON column_row.id = task.column_id
   JOIN public.boards AS board ON board.id = column_row.board_id
   WHERE task.id = v_receipt.task_id
-    AND board.id = v_receipt.board_id
+    AND board.id = p_board_id
     AND column_row.generation_id = board.active_generation_id;
   IF NOT FOUND THEN
     RETURN jsonb_build_object('status', 'unavailable');
@@ -195,7 +208,7 @@ BEGIN
   RETURN jsonb_build_object(
     'status', 'confirmed',
     'operation_id', v_receipt.operation_id,
-    'board_id', v_receipt.board_id,
+    'board_id', p_board_id,
     'column_id', v_task.column_id,
     'task_id', v_task.id,
     'task', to_jsonb(v_task)
@@ -243,6 +256,7 @@ BEGIN
   IF p_board_id IS NULL OR p_column_id IS NULL THEN
     RAISE EXCEPTION 'Choose a board and column' USING ERRCODE = '22023';
   END IF;
+  PERFORM public.assert_task_capture_access_p(p_board_id);
   v_title := public.task_capture_normalize_title(p_title);
   IF p_description IS NOT NULL AND char_length(p_description) > 2000 THEN
     RAISE EXCEPTION 'Task descriptions must be 2000 characters or fewer'
@@ -267,6 +281,7 @@ BEGIN
 
   v_existing_result := public.resolve_task_capture_receipt_p(
     p_operation_id,
+    p_board_id,
     v_payload_hash
   );
   IF v_existing_result->>'status' <> 'not_found' THEN
@@ -332,6 +347,7 @@ BEGIN
   IF NOT FOUND THEN
     v_existing_result := public.resolve_task_capture_receipt_p(
       p_operation_id,
+      p_board_id,
       v_payload_hash
     );
     IF v_existing_result->>'status' = 'not_found' THEN
@@ -397,6 +413,7 @@ BEGIN
     RAISE EXCEPTION 'A task creation operation, board, and column are required'
       USING ERRCODE = '22023';
   END IF;
+  PERFORM public.assert_task_capture_access_p(p_board_id);
   v_title := public.task_capture_normalize_title(p_title);
   IF p_description IS NOT NULL AND char_length(p_description) > 2000 THEN
     RAISE EXCEPTION 'Task descriptions must be 2000 characters or fewer'
@@ -419,9 +436,13 @@ BEGIN
     'priority', p_priority
   ));
 
-  -- The resolver authorizes the receipt's current board membership before it
-  -- compares this hash, so revoked or unrelated actors cannot detect reuse.
-  RETURN public.resolve_task_capture_receipt_p(p_operation_id, v_payload_hash);
+  -- The resolver rechecks and locks access before reading the receipt, so an
+  -- access revoke cannot be distinguished from an unknown operation id.
+  RETURN public.resolve_task_capture_receipt_p(
+    p_operation_id,
+    p_board_id,
+    v_payload_hash
+  );
 END;
 $$;
 
@@ -429,7 +450,9 @@ REVOKE ALL ON FUNCTION public.task_capture_payload_hash(jsonb)
   FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.task_capture_normalize_title(text)
   FROM PUBLIC, anon, authenticated, service_role;
-REVOKE ALL ON FUNCTION public.resolve_task_capture_receipt_p(uuid, bytea)
+REVOKE ALL ON FUNCTION public.assert_task_capture_access_p(uuid)
+  FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.resolve_task_capture_receipt_p(uuid, uuid, bytea)
   FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.create_task_p(uuid, uuid, uuid, text, text, text)
   FROM PUBLIC, anon, authenticated, service_role;

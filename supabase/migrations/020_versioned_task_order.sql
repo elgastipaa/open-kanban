@@ -13,7 +13,6 @@ CREATE TABLE public.task_order_receipts (
   board_id uuid NOT NULL REFERENCES public.boards(id) ON DELETE CASCADE,
   payload_hash bytea NOT NULL CHECK (octet_length(payload_hash) = 32),
   result_status text NOT NULL CHECK (result_status IN ('pending', 'confirmed', 'conflict')),
-  result_payload jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   result_expires_at timestamptz NOT NULL DEFAULT (clock_timestamp() + interval '7 days'),
   PRIMARY KEY (actor_id, operation_id)
@@ -59,6 +58,38 @@ REVOKE ALL ON FUNCTION public.bump_task_order_version_p()
   FROM PUBLIC, anon, authenticated, service_role;
 
 DROP FUNCTION public.update_task_positions_p(text, jsonb);
+
+CREATE FUNCTION public.task_order_column_snapshots_p(
+  p_board_id uuid,
+  p_column_ids uuid[]
+)
+RETURNS jsonb
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, public, auth, pg_temp
+AS $$
+  SELECT COALESCE(jsonb_agg(
+    jsonb_build_object(
+      'id', column_row.id,
+      'task_order_version', column_row.task_order_version,
+      'tasks', COALESCE((
+        SELECT jsonb_agg(to_jsonb(task) ORDER BY task.position, task.id)
+        FROM public.tasks AS task
+        WHERE task.column_id = column_row.id
+      ), '[]'::jsonb)
+    ) ORDER BY column_row.position, column_row.id
+  ), '[]'::jsonb)
+  FROM public.columns AS column_row
+  JOIN public.boards AS board ON board.id = column_row.board_id
+  WHERE board.id = p_board_id
+    AND board.active_generation_id = column_row.generation_id
+    AND column_row.id = ANY(p_column_ids)
+    AND public.is_board_member(board.id);
+$$;
+
+REVOKE ALL ON FUNCTION public.task_order_column_snapshots_p(uuid, uuid[])
+  FROM PUBLIC, anon, authenticated, service_role;
 
 CREATE FUNCTION public.update_task_positions_p(
   p_operation_id uuid,
@@ -204,7 +235,33 @@ BEGIN
       RETURN jsonb_build_object('status', 'expired_unknown', 'operation_id', p_operation_id);
     END IF;
     IF v_receipt.result_status = 'confirmed' OR v_receipt.result_status = 'conflict' THEN
-      RETURN v_receipt.result_payload;
+      FOR v_index IN 1..v_move_count LOOP
+        v_source_column_id := v_requested_source_ids[v_index];
+        v_destination_column_id := v_destination_ids[v_index];
+        IF array_position(v_snapshot_column_ids, v_source_column_id) IS NULL THEN
+          v_snapshot_column_ids := array_append(v_snapshot_column_ids, v_source_column_id);
+        END IF;
+        IF array_position(v_snapshot_column_ids, v_destination_column_id) IS NULL THEN
+          v_snapshot_column_ids := array_append(v_snapshot_column_ids, v_destination_column_id);
+        END IF;
+        SELECT task.column_id INTO v_source_column_id
+        FROM public.tasks AS task
+        JOIN public.columns AS column_row ON column_row.id = task.column_id
+        WHERE task.id = v_move_ids[v_index]
+          AND column_row.board_id = v_board_id
+          AND column_row.generation_id = v_board.active_generation_id;
+        IF FOUND AND array_position(v_snapshot_column_ids, v_source_column_id) IS NULL THEN
+          v_snapshot_column_ids := array_append(v_snapshot_column_ids, v_source_column_id);
+        END IF;
+      END LOOP;
+      v_column_snapshots := public.task_order_column_snapshots_p(
+        v_board_id, v_snapshot_column_ids
+      );
+      RETURN jsonb_build_object(
+        'status', v_receipt.result_status,
+        'operation_id', p_operation_id,
+        'columns', v_column_snapshots
+      );
     END IF;
     RETURN jsonb_build_object('status', 'retryable', 'operation_id', p_operation_id);
   END IF;
@@ -322,25 +379,15 @@ BEGIN
   END IF;
 
   IF v_conflict THEN
-    SELECT COALESCE(jsonb_agg(
-      jsonb_build_object(
-        'id', column_row.id,
-        'task_order_version', column_row.task_order_version,
-        'tasks', COALESCE((
-          SELECT jsonb_agg(to_jsonb(task) ORDER BY task.position, task.id)
-          FROM public.tasks AS task WHERE task.column_id = column_row.id
-        ), '[]'::jsonb)
-      ) ORDER BY column_row.position, column_row.id
-    ), '[]'::jsonb)
-    INTO v_column_snapshots
-    FROM public.columns AS column_row
-    WHERE column_row.id = ANY(v_snapshot_column_ids);
+    v_column_snapshots := public.task_order_column_snapshots_p(
+      v_board_id, v_snapshot_column_ids
+    );
     v_result := jsonb_build_object(
       'status', 'conflict', 'operation_id', p_operation_id,
       'columns', v_column_snapshots
     );
     UPDATE public.task_order_receipts AS receipt
-    SET result_status = 'conflict', result_payload = v_result
+    SET result_status = 'conflict'
     WHERE receipt.actor_id = v_actor_id AND receipt.operation_id = p_operation_id;
     RETURN v_result;
   END IF;
@@ -376,26 +423,16 @@ BEGIN
     END IF;
   END LOOP;
 
-  SELECT COALESCE(jsonb_agg(
-    jsonb_build_object(
-      'id', column_row.id,
-      'task_order_version', column_row.task_order_version,
-      'tasks', COALESCE((
-        SELECT jsonb_agg(to_jsonb(task) ORDER BY task.position, task.id)
-        FROM public.tasks AS task WHERE task.column_id = column_row.id
-      ), '[]'::jsonb)
-    ) ORDER BY column_row.position, column_row.id
-  ), '[]'::jsonb)
-  INTO v_column_snapshots
-  FROM public.columns AS column_row
-  WHERE column_row.id = ANY(v_touched_column_ids);
+  v_column_snapshots := public.task_order_column_snapshots_p(
+    v_board_id, v_touched_column_ids
+  );
 
   v_result := jsonb_build_object(
     'status', 'confirmed', 'operation_id', p_operation_id,
     'columns', v_column_snapshots
   );
   UPDATE public.task_order_receipts AS receipt
-  SET result_status = 'confirmed', result_payload = v_result
+  SET result_status = 'confirmed'
   WHERE receipt.actor_id = v_actor_id AND receipt.operation_id = p_operation_id;
   RETURN v_result;
 END;

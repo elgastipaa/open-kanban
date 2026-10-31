@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { prepareTaskOrderMove } from "../../src/lib/task-order.ts";
+import {
+  mergeAuthoritativeOrderVersions,
+  prepareTaskOrderMove,
+} from "../../src/lib/task-order.ts";
 
 function task(id, column_id, position, title = id) {
   return {
@@ -139,6 +142,37 @@ test("moving to an empty column sends explicit null anchors", () => {
     source: 2,
     empty: 1,
   });
+});
+
+test("confirmed task inserts and deletes adopt server order versions without guessing increments", () => {
+  const local = [
+    column("source", [task("kept", "source", 0)], 8),
+    column("destination", [], 3),
+  ];
+  const authorized = [column("source", [], 10), column("destination", [], 3)];
+
+  const reconciled = mergeAuthoritativeOrderVersions(local, authorized);
+
+  assert.deepEqual(
+    reconciled.map(({ id, task_order_version }) => [id, task_order_version]),
+    [
+      ["source", 10],
+      ["destination", 3],
+    ],
+  );
+  assert.deepEqual(reconciled[0].tasks, local[0].tasks);
+  assert.equal(
+    mergeAuthoritativeOrderVersions(reconciled, authorized)[0]
+      .task_order_version,
+    10,
+  );
+  assert.equal(
+    mergeAuthoritativeOrderVersions(
+      [column("source", [], 11)],
+      [column("source", [], 10)],
+    )[0].task_order_version,
+    11,
+  );
 });
 
 test("a missing task or destination cannot produce a movement command", () => {

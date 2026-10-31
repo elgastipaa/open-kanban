@@ -112,6 +112,8 @@ DECLARE
   v_before_task jsonb;
   v_after_task jsonb;
   v_version_after_move bigint;
+  v_version_before_replay bigint;
+  v_replay_task_id uuid;
   v_source_version_after_move bigint;
   v_source_order text[];
   v_target_order text[];
@@ -177,7 +179,15 @@ BEGIN
     RAISE EXCEPTION 'Moving changed task fields or field versions: before %, after %', v_before_task, v_after_task;
   END IF;
 
-  -- A lost response replay returns the confirmed result without bumping order again.
+  -- Replays read the current authorized snapshot instead of retaining task
+  -- titles in the receipt, and they never apply the move a second time.
+  v_replay_task_id := (public.create_task_p(
+    'f9999999-0000-4000-8000-000000000118', v_fixture.board_id,
+    v_fixture.target_column_id, 'Tarea posterior al recibo'
+  )->'task'->>'id')::uuid;
+  SELECT task_order_version INTO STRICT v_version_before_replay
+  FROM public.get_columns_p(v_fixture.board_id)
+  WHERE id = v_fixture.target_column_id;
   v_replay := public.update_task_positions_p(
     'f9999999-0000-4000-8000-000000000101',
     v_fixture.board_slug,
@@ -195,8 +205,27 @@ BEGIN
   );
   IF v_replay->>'status' IS DISTINCT FROM 'confirmed'
     OR (SELECT task_order_version FROM public.columns WHERE id = v_fixture.target_column_id)
-      IS DISTINCT FROM v_version_after_move THEN
-    RAISE EXCEPTION 'Replaying a confirmed move applied it a second time: %', v_replay;
+      IS DISTINCT FROM v_version_before_replay
+    OR jsonb_array_length(v_replay->'columns') <> 2
+    OR NOT EXISTS (
+      SELECT 1 FROM jsonb_array_elements(v_replay->'columns') AS snapshot(value)
+      WHERE snapshot.value->>'id' = v_fixture.target_column_id::text
+        AND EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements(snapshot.value->'tasks') AS task(value)
+          WHERE task.value->>'id' = v_replay_task_id::text
+            AND task.value->>'title' = 'Tarea posterior al recibo'
+        )
+    ) THEN
+    RAISE EXCEPTION 'Replaying a confirmed move did not return a fresh authorized snapshot: %', v_replay;
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_catalog.pg_attribute AS attribute
+    WHERE attribute.attrelid = 'public.task_order_receipts'::regclass
+      AND attribute.attname = 'result_payload'
+      AND NOT attribute.attisdropped
+  ) THEN
+    RAISE EXCEPTION 'Task-order receipts still retain private result snapshots';
   END IF;
 
   v_result := public.update_task_positions_p(
@@ -320,7 +349,9 @@ BEGIN
   END IF;
   SELECT array_agg(task.title ORDER BY task.position)
   INTO v_order FROM public.tasks AS task WHERE task.column_id = v_fixture.target_column_id;
-  IF v_order IS DISTINCT FROM ARRAY['Antes', 'Tarea C', 'Tarea A', 'Después']::text[] THEN
+  IF v_order IS DISTINCT FROM ARRAY[
+    'Antes', 'Tarea C', 'Tarea A', 'Después', 'Tarea posterior al recibo'
+  ]::text[] THEN
     RAISE EXCEPTION 'The batch did not respect its deterministic anchors: %', v_order;
   END IF;
 
@@ -423,6 +454,125 @@ END;
 $$;
 COMMIT;
 
+-- Create/delete each advance the independent order version. A client that
+-- refreshes that version through the authorized column RPC can move at once;
+-- using the pre-mutation snapshot correctly requires review.
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);
+DO $$
+DECLARE
+  v_fixture record;
+  v_before_create_version bigint;
+  v_after_create_version bigint;
+  v_before_delete_version bigint;
+  v_after_delete_version bigint;
+  v_created_task_id uuid;
+  v_deleted_task_id uuid;
+  v_result jsonb;
+BEGIN
+  SELECT * INTO STRICT v_fixture FROM public.issue9_order_fixture WHERE purpose = 'main';
+  SELECT task_order_version INTO STRICT v_before_create_version
+  FROM public.get_columns_p(v_fixture.board_id)
+  WHERE id = v_fixture.source_column_id;
+
+  v_created_task_id := (public.create_task_p(
+    'f9999999-0000-4000-8000-000000000111', v_fixture.board_id,
+    v_fixture.source_column_id, 'Tarea creada para orden inmediato'
+  )->'task'->>'id')::uuid;
+  SELECT task_order_version INTO STRICT v_after_create_version
+  FROM public.get_columns_p(v_fixture.board_id)
+  WHERE id = v_fixture.source_column_id;
+  IF v_after_create_version <= v_before_create_version THEN
+    RAISE EXCEPTION 'Creating a task did not advance the authorized order version';
+  END IF;
+
+  v_result := public.update_task_positions_p(
+    'f9999999-0000-4000-8000-000000000112', v_fixture.board_slug,
+    jsonb_build_array(jsonb_build_object(
+      'id', v_created_task_id,
+      'source_column_id', v_fixture.source_column_id,
+      'column_id', v_fixture.source_column_id,
+      'before_task_id', NULL,
+      'after_task_id', v_fixture.task_b
+    )),
+    jsonb_build_object(v_fixture.source_column_id::text, v_before_create_version)
+  );
+  IF v_result->>'status' IS DISTINCT FROM 'conflict'
+    OR (SELECT column_id FROM public.tasks WHERE id = v_created_task_id)
+      IS DISTINCT FROM v_fixture.source_column_id THEN
+    RAISE EXCEPTION 'The pre-create order snapshot did not require review: %', v_result;
+  END IF;
+
+  v_result := public.update_task_positions_p(
+    'f9999999-0000-4000-8000-000000000113', v_fixture.board_slug,
+    jsonb_build_array(
+      jsonb_build_object(
+        'id', v_created_task_id,
+        'source_column_id', v_fixture.source_column_id,
+        'column_id', v_fixture.source_column_id,
+        'before_task_id', NULL,
+        'after_task_id', v_fixture.task_b
+      )
+    ),
+    jsonb_build_object(v_fixture.source_column_id::text, v_after_create_version)
+  );
+  IF v_result->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'An immediate post-create reorder did not use the authorized order version: %', v_result;
+  END IF;
+
+  v_deleted_task_id := (public.create_task_p(
+    'f9999999-0000-4000-8000-000000000116', v_fixture.board_id,
+    v_fixture.source_column_id, 'Tarea descartable para borrar'
+  )->'task'->>'id')::uuid;
+  SELECT task_order_version INTO STRICT v_before_delete_version
+  FROM public.get_columns_p(v_fixture.board_id)
+  WHERE id = v_fixture.source_column_id;
+  PERFORM public.delete_task_p(v_fixture.board_slug, v_deleted_task_id);
+  SELECT task_order_version INTO STRICT v_after_delete_version
+  FROM public.get_columns_p(v_fixture.board_id)
+  WHERE id = v_fixture.source_column_id;
+  IF v_after_delete_version <= v_before_delete_version THEN
+    RAISE EXCEPTION 'Deleting a task did not advance the authorized order version';
+  END IF;
+
+  v_result := public.update_task_positions_p(
+    'f9999999-0000-4000-8000-000000000114', v_fixture.board_slug,
+    jsonb_build_array(jsonb_build_object(
+      'id', v_fixture.task_b,
+      'source_column_id', v_fixture.source_column_id,
+      'column_id', v_fixture.source_column_id,
+      'before_task_id', NULL,
+      'after_task_id', v_created_task_id
+    )),
+    jsonb_build_object(v_fixture.source_column_id::text, v_before_delete_version)
+  );
+  IF v_result->>'status' IS DISTINCT FROM 'conflict'
+    OR (SELECT column_id FROM public.tasks WHERE id = v_fixture.task_b)
+      IS DISTINCT FROM v_fixture.source_column_id THEN
+    RAISE EXCEPTION 'The pre-delete order snapshot did not require review: %', v_result;
+  END IF;
+
+  v_result := public.update_task_positions_p(
+    'f9999999-0000-4000-8000-000000000115', v_fixture.board_slug,
+    jsonb_build_array(
+      jsonb_build_object(
+        'id', v_fixture.task_b,
+        'source_column_id', v_fixture.source_column_id,
+        'column_id', v_fixture.source_column_id,
+        'before_task_id', NULL,
+        'after_task_id', v_created_task_id
+      )
+    ),
+    jsonb_build_object(v_fixture.source_column_id::text, v_after_delete_version)
+  );
+  IF v_result->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'An immediate post-delete reorder did not use the authorized order version: %', v_result;
+  END IF;
+END;
+$$;
+COMMIT;
+
 -- The successful receipt cannot be replayed after its reconciliation window.
 UPDATE public.task_order_receipts
 SET result_expires_at = clock_timestamp() - interval '1 second'
@@ -437,8 +587,14 @@ DECLARE
   v_fixture record;
   v_result jsonb;
   v_move_count integer;
+  v_target_version_before bigint;
+  v_second_target_version_before bigint;
 BEGIN
   SELECT * INTO STRICT v_fixture FROM public.issue9_order_fixture WHERE purpose = 'main';
+  SELECT task_order_version INTO STRICT v_target_version_before
+  FROM public.columns WHERE id = v_fixture.target_column_id;
+  SELECT task_order_version INTO STRICT v_second_target_version_before
+  FROM public.columns WHERE id = v_fixture.second_target_column_id;
   SELECT count(*) INTO v_move_count FROM public.tasks
   WHERE id IN (v_fixture.task_c, v_fixture.task_d)
     AND column_id IN (v_fixture.target_column_id, v_fixture.second_target_column_id);
@@ -464,7 +620,14 @@ BEGIN
     v_fixture.batch_expected_order_versions
   );
   IF v_result->>'status' IS DISTINCT FROM 'expired_unknown'
-    OR v_move_count <> 2 THEN
+    OR v_move_count <> 2
+    OR v_result ? 'columns'
+    OR v_result ? 'task'
+    OR v_result->>'operation_id' IS DISTINCT FROM 'f9999999-0000-4000-8000-000000000103'
+    OR (SELECT task_order_version FROM public.columns WHERE id = v_fixture.target_column_id)
+      IS DISTINCT FROM v_target_version_before
+    OR (SELECT task_order_version FROM public.columns WHERE id = v_fixture.second_target_column_id)
+      IS DISTINCT FROM v_second_target_version_before THEN
     RAISE EXCEPTION 'An expired move receipt was reapplied or not identified: %', v_result;
   END IF;
 END;

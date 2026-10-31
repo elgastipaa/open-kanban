@@ -15,7 +15,10 @@ import {
   updateTaskPositions,
 } from "@/lib/db";
 import { getSessionEpoch } from "@/lib/supabase/client";
-import { prepareTaskOrderMove } from "@/lib/task-order";
+import {
+  mergeAuthoritativeOrderVersions,
+  prepareTaskOrderMove,
+} from "@/lib/task-order";
 import type {
   Board,
   ColumnWithTasks,
@@ -76,21 +79,7 @@ function mergeOrderSnapshots(
   columns: ColumnWithTasks[],
   snapshots: TaskOrderColumnSnapshot[],
 ): ColumnWithTasks[] {
-  const snapshotsById = new Map(
-    snapshots.map((snapshot) => [snapshot.id, snapshot]),
-  );
-  return columns.map((column) => {
-    const snapshot = snapshotsById.get(column.id);
-    return snapshot
-      ? {
-          ...column,
-          task_order_version: Math.max(
-            column.task_order_version,
-            snapshot.task_order_version,
-          ),
-        }
-      : column;
-  });
+  return mergeAuthoritativeOrderVersions(columns, snapshots);
 }
 
 export function useTaskOperations({
@@ -107,6 +96,41 @@ export function useTaskOperations({
 }: UseTaskOperationsProps) {
   const localColumnIds = useRef(new Map<string, string>());
   const orderReconciliationRequiredRef = useRef(false);
+
+  const refreshTaskOrderVersions = useCallback(
+    async (fallbackColumns: ColumnWithTasks[]): Promise<boolean> => {
+      const sessionEpoch = getSessionEpoch();
+      orderReconciliationRequiredRef.current = true;
+      try {
+        const latestBoard = await getFullBoardForTaskEdit(supabase, slug);
+        if (sessionEpoch !== getSessionEpoch()) {
+          onAccessLost();
+          return false;
+        }
+        if (!latestBoard) {
+          onAccessLost();
+          return false;
+        }
+        setColumns((currentColumns) =>
+          mergeAuthoritativeOrderVersions(
+            currentColumns.length > 0 ? currentColumns : fallbackColumns,
+            latestBoard.columns,
+          ),
+        );
+        orderReconciliationRequiredRef.current = false;
+        return true;
+      } catch (error) {
+        if (
+          error instanceof TaskEditError &&
+          error.reason === "access_denied"
+        ) {
+          onAccessLost();
+        }
+        return false;
+      }
+    },
+    [onAccessLost, setColumns, slug, supabase],
+  );
 
   const verifyTaskCreation = useCallback(
     async (
@@ -215,10 +239,25 @@ export function useTaskOperations({
         columnsRef.current ?? optimisticDelete,
         { kind: "task-deleted" },
       );
-      setColumns(ledger.forgetTask(tempTaskId, deletedColumns));
+      const columnsWithoutTask = ledger.forgetTask(tempTaskId, deletedColumns);
+      setColumns(columnsWithoutTask);
+      if (!(await refreshTaskOrderVersions(columnsWithoutTask))) {
+        toast.error("No se pudo actualizar el orden", {
+          description:
+            "La tarea se eliminó. Vuelve a cargar el tablero antes de mover otra tarea.",
+        });
+      }
       onMutationRef.current?.();
     },
-    [columnsRef, ledger, onMutationRef, setColumns, slug, supabase],
+    [
+      columnsRef,
+      ledger,
+      onMutationRef,
+      refreshTaskOrderVersions,
+      setColumns,
+      slug,
+      supabase,
+    ],
   );
 
   const addTask = useCallback(
@@ -370,6 +409,12 @@ export function useTaskOperations({
             }
 
             setColumns(creation.columns);
+            if (!(await refreshTaskOrderVersions(creation.columns))) {
+              toast.error("La tarea se guardó, pero el orden no se actualizó", {
+                description:
+                  "Vuelve a cargar el tablero antes de mover otra tarea.",
+              });
+            }
             onMutationRef.current?.();
             resolve();
           } catch (error) {
@@ -400,6 +445,7 @@ export function useTaskOperations({
       supabase,
       slug,
       onMutationRef,
+      refreshTaskOrderVersions,
     ],
   );
 
@@ -588,11 +634,18 @@ export function useTaskOperations({
       enqueue(async () => {
         try {
           await dbDeleteTask(supabase, slug, intent.taskId);
-          setColumns(
-            ledger.settle(intent.id, columnsRef.current ?? [], {
-              kind: "task-deleted",
-            }),
+          const columnsWithoutTask = ledger.settle(
+            intent.id,
+            columnsRef.current ?? [],
+            { kind: "task-deleted" },
           );
+          setColumns(columnsWithoutTask);
+          if (!(await refreshTaskOrderVersions(columnsWithoutTask))) {
+            toast.error("La tarea se eliminó, pero el orden no se actualizó", {
+              description:
+                "Vuelve a cargar el tablero antes de mover otra tarea.",
+            });
+          }
           onMutationRef.current?.();
         } catch {
           setColumns(ledger.settle(intent.id, columnsRef.current ?? []));
@@ -609,6 +662,7 @@ export function useTaskOperations({
       ledger,
       enqueue,
       onMutationRef,
+      refreshTaskOrderVersions,
     ],
   );
 
@@ -706,6 +760,19 @@ export function useTaskOperations({
               return false;
             }
           };
+          const reconcileUnconfirmedMove = async (
+            reason: "uncertain" | "retryable" | "expired_unknown",
+          ): Promise<TaskOrderResult> => {
+            const reconciled = await reconcileCurrentOrder(sessionEpoch);
+            toast.error("No se pudo confirmar el movimiento", {
+              description: reconciled
+                ? "Actualizamos el tablero. Revisa el lugar antes de elegir de nuevo."
+                : "No pudimos consultar el orden actual. El movimiento quedó detenido; vuelve a cargar el tablero.",
+            });
+            return reconciled
+              ? { status: reason, operation_id: operationId }
+              : { status: "unavailable", operation_id: operationId };
+          };
 
           const command = intent.orderCommand;
           if (
@@ -768,17 +835,7 @@ export function useTaskOperations({
               result.status === "retryable" ||
               result.status === "uncertain"
             ) {
-              const reconciled = await reconcileCurrentOrder(sessionEpoch);
-              toast.error("No se pudo confirmar el movimiento", {
-                description: reconciled
-                  ? "Actualizamos el tablero. Revisa el lugar antes de elegir de nuevo."
-                  : "No pudimos consultar el orden actual. El movimiento quedó detenido; vuelve a cargar el tablero.",
-              });
-              finish(
-                reconciled
-                  ? result
-                  : { status: "unavailable", operation_id: operationId },
-              );
+              finish(await reconcileUnconfirmedMove(result.status));
               return;
             }
             setColumns(rollback());
@@ -800,17 +857,7 @@ export function useTaskOperations({
               reason === "retryable" ||
               reason === "expired_unknown"
             ) {
-              const reconciled = await reconcileCurrentOrder(sessionEpoch);
-              toast.error("No se pudo confirmar el movimiento", {
-                description: reconciled
-                  ? "Actualizamos el tablero. Revisa el lugar antes de elegir de nuevo."
-                  : "No pudimos consultar el orden actual. El movimiento quedó detenido; vuelve a cargar el tablero.",
-              });
-              finish(
-                reconciled
-                  ? { status: reason, operation_id: operationId }
-                  : { status: "unavailable", operation_id: operationId },
-              );
+              finish(await reconcileUnconfirmedMove(reason));
               return;
             }
             setColumns(rollback());

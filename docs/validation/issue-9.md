@@ -26,12 +26,19 @@ La entrega mantiene #9 abierto. Las comprobaciones visuales con navegador aún r
 | Permisos e aislamiento | **Probado en DB** | `anon` no puede ejecutar la mutación. Miembro activo puede mover en el tablero autorizado; admin global sin membresía no recibe acceso a contenido. La mutación valida origen y destino en el tablero/generación activos y no acepta campos protegidos. Auth HTTP/PostgREST real queda pendiente. |
 | C-95, P01/P07–P09/P17/P18 relevantes | **Implementado con parcial explícita** | Se conserva el detalle/captura de origen y la decisión Guardar/Descartar/Cancelar; el contrato de mutación está limitado a origen/destino/anclas/versiones. UI móvil, teclado, foco y cambios remotos se reservan para recorrido humano según los límites anteriores. Las revisiones Spec/Standards contra la base fija quedan a cargo del coordinador sobre el HEAD ya comprometido. |
 
+## Seguimiento de hallazgos P2
+
+- Tras cada alta o baja confirmada, el cliente consulta de nuevo el tablero autorizado y mezcla únicamente `task_order_version` de servidor con las columnas locales. La mezcla es monotónica: no inventa incrementos ni pisa una versión local más nueva recibida por cambios remotos. Mientras esa lectura está pendiente o falla, los movimientos quedan detenidos; una lectura fallida indica recargar el tablero.
+- Los recibos de orden ya no guardan snapshots ni filas/títulos. Conservan actor, operation ID, tablero, hash del payload, estado y fechas. Un replay vigente reconstruye el snapshot actual mediante un helper protegido y después de validar de nuevo membresía; el snapshot no se retiene en la tabla. Un receipt vencido solo devuelve `expired_unknown` y el cliente reconcilia antes de permitir otra elección.
+- La secuencia de reconciliación para `uncertain`, `retryable` y `expired_unknown` comparte un único helper en `use-task-operations.ts`. La agregación de snapshots `confirmed`/`conflict` también comparte el helper SQL `task_order_column_snapshots_p`.
+- Las regresiones cubren lecturas autorizadas después de create/delete: enviar la versión previa produce `conflict`, mientras que la versión actual leída permite reordenar enseguida. También comprueban replay con una tarea creada después del receipt, ausencia de `result_payload`, receipt vencido sin snapshots/filas ni incremento de versiones, y conservación de una versión local más nueva que una lectura atrasada.
+
 ## Comandos y resultados
 
 | Comando | Resultado |
 | --- | --- |
-| `pnpm test:db` | Pasa en PostgreSQL 16.15 descartable. Incluye #3/#8 y regresiones de orden, permisos, replay, anclas, lote y carrera concurrente de dos actores. |
-| `pnpm test:unit` | Pasa: 23 pruebas, 0 fallas. Incluye anclas intra/intercolumna, destino vacío, versión de orden independiente, decisión de movimiento posterior a guardar/descartar y regresiones de captura/edición/foco. Node emite avisos de detección de módulo TypeScript existentes con `--experimental-strip-types`. |
+| `pnpm test:db` | Pasa en PostgreSQL 16.15 descartable. Incluye #3/#8, create/delete seguidos de reordenación con lectura autorizada de versión, replay con snapshot actual, receipt vencido sin datos privados ni segunda mutación, permisos, anclas, lote y carrera concurrente de dos actores. |
+| `pnpm test:unit` | Pasa: 24 pruebas, 0 fallas. Incluye anclas intra/intercolumna, destino vacío, versión de orden independiente, adopción monotónica de versiones autoritativas después de create/delete, decisión de movimiento posterior a guardar/descartar y regresiones de captura/edición/foco. Node emite avisos de detección de módulo TypeScript existentes con `--experimental-strip-types`. |
 | `pnpm exec next typegen` y `pnpm typecheck` | Pasan con Next.js 16.4.2; tipos generados localmente no se incluyen. |
 | `pnpm build` | Pasa con Next.js 16.4.2; Turbopack compila, verifica TypeScript, genera páginas estáticas y finaliza la optimización. |
 | Biome dirigido a archivos TS/TSX/MJS modificados | `biome check --line-ending=crlf` y `biome lint` pasan. |

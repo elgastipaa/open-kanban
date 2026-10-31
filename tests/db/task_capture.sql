@@ -64,12 +64,37 @@ BEGIN
     p_title => 'Comprar leche'
   );
 
-  v_result := public.get_task_creation_result_p(v_operation_id);
+  v_result := public.get_task_creation_result_p(
+    v_operation_id,
+    v_board_id,
+    v_column_id,
+    'Comprar leche',
+    NULL,
+    'medium'
+  );
   IF v_result->>'status' IS DISTINCT FROM 'confirmed'
     OR (v_result->>'board_id')::uuid IS DISTINCT FROM v_board_id
     OR (v_result->>'column_id')::uuid IS DISTINCT FROM v_column_id THEN
     RAISE EXCEPTION 'The committed capture could not be reconciled: %', v_result;
   END IF;
+
+  v_rejected := false;
+  BEGIN
+    PERFORM public.get_task_creation_result_p(
+      v_operation_id,
+      v_board_id,
+      v_column_id,
+      'Borrador diferente',
+      NULL,
+      'medium'
+    );
+  EXCEPTION WHEN check_violation THEN
+    v_rejected := true;
+  END;
+  IF NOT v_rejected THEN
+    RAISE EXCEPTION 'Reconciliation returned a confirmed task for a different payload';
+  END IF;
+
   v_task_id := (v_result->'task'->>'id')::uuid;
   IF v_task_id IS NULL
     OR v_result->'task'->>'created_by' IS DISTINCT FROM auth.uid()::text
@@ -161,7 +186,12 @@ BEGIN
     RAISE EXCEPTION 'A column from another board was accepted';
   END IF;
   IF public.get_task_creation_result_p(
-      'a7777777-0000-4000-8000-000000000003'
+      'a7777777-0000-4000-8000-000000000003',
+      v_board_id,
+      v_other_column_id,
+      'Cruce de tablero',
+      NULL,
+      'medium'
     )->>'status' IS DISTINCT FROM 'not_found' OR EXISTS (
     SELECT 1 FROM public.tasks WHERE column_id = v_other_column_id
   ) THEN
@@ -180,7 +210,12 @@ BEGIN
     v_rejected := true;
   END;
   IF NOT v_rejected OR public.get_task_creation_result_p(
-      'a7777777-0000-4000-8000-000000000004'
+      'a7777777-0000-4000-8000-000000000004',
+      v_board_id,
+      v_column_id,
+      'Título de comprobación',
+      NULL,
+      'medium'
     )->>'status' IS DISTINCT FROM 'not_found' THEN
     RAISE EXCEPTION 'An empty task title was accepted or left a receipt';
   END IF;
@@ -190,6 +225,12 @@ BEGIN
       'public.create_task_p(uuid, uuid, uuid, text, text, text)',
       'EXECUTE'
     )
+    OR NOT has_function_privilege(
+      'authenticated',
+      'public.get_task_creation_result_p(uuid, uuid, uuid, text, text, text)',
+      'EXECUTE'
+    )
+    OR to_regprocedure('public.get_task_creation_result_p(uuid)') IS NOT NULL
     OR has_table_privilege('authenticated', 'public.tasks', 'INSERT')
     OR EXISTS (
       SELECT 1 FROM pg_catalog.pg_proc AS procedure
@@ -198,6 +239,12 @@ BEGIN
         AND procedure.proname = 'create_task_p'
         AND pg_catalog.pg_get_function_identity_arguments(procedure.oid)
           = 'text, uuid, text, text, text, integer'
+    ) OR EXISTS (
+      SELECT 1 FROM pg_catalog.pg_proc AS procedure
+      JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = procedure.pronamespace
+      WHERE namespace.nspname = 'public'
+        AND procedure.proname = 'get_task_creation_result_p'
+        AND pg_catalog.pg_get_function_identity_arguments(procedure.oid) = 'uuid'
     ) THEN
     RAISE EXCEPTION 'Task creation still exposes a client-controlled legacy/protected-field path';
   END IF;
@@ -228,8 +275,19 @@ SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000001
 DO $$
 DECLARE
   v_result jsonb;
+  v_board_id uuid;
+  v_column_id uuid;
 BEGIN
-  v_result := public.get_task_creation_result_p('a7777777-0000-4000-8000-000000000001');
+  SELECT board_id, column_id INTO v_board_id, v_column_id
+  FROM pg_temp.issue7_capture_fixture;
+  v_result := public.get_task_creation_result_p(
+    'a7777777-0000-4000-8000-000000000001',
+    v_board_id,
+    v_column_id,
+    'Comprar leche',
+    NULL,
+    'medium'
+  );
   IF v_result->>'status' IS DISTINCT FROM 'not_found' OR v_result ? 'task' THEN
     RAISE EXCEPTION 'Another actor resolved a task capture receipt: %', v_result;
   END IF;
@@ -274,14 +332,34 @@ DECLARE
   v_board_id uuid;
   v_column_id uuid;
 BEGIN
-  v_result := public.get_task_creation_result_p('a7777777-0000-4000-8000-000000000005');
+  SELECT board_id, column_id INTO v_board_id, v_column_id
+  FROM pg_temp.issue7_capture_fixture;
+  v_result := public.get_task_creation_result_p(
+    'a7777777-0000-4000-8000-000000000005',
+    v_board_id,
+    v_column_id,
+    'Revoked collaborator task',
+    NULL,
+    'medium'
+  );
   IF v_result->>'status' IS DISTINCT FROM 'unavailable'
     OR v_result ? 'task' THEN
     RAISE EXCEPTION 'A revoked member resolved a receipt: %', v_result;
   END IF;
 
-  SELECT board_id, column_id INTO v_board_id, v_column_id
-  FROM pg_temp.issue7_capture_fixture;
+  v_result := public.get_task_creation_result_p(
+    'a7777777-0000-4000-8000-000000000005',
+    v_board_id,
+    v_column_id,
+    'Changed after revocation',
+    NULL,
+    'medium'
+  );
+  IF v_result->>'status' IS DISTINCT FROM 'unavailable'
+    OR v_result ? 'task' THEN
+    RAISE EXCEPTION 'A revoked member learned the operation hash state through reconciliation: %', v_result;
+  END IF;
+
   v_result := public.create_task_p(
     'a7777777-0000-4000-8000-000000000005',
     v_board_id,
@@ -315,14 +393,50 @@ DECLARE
   v_column_id uuid;
   v_rejected boolean := false;
 BEGIN
-  v_result := public.get_task_creation_result_p('a7777777-0000-4000-8000-000000000001');
+  SELECT board_id, column_id INTO v_board_id, v_column_id
+  FROM pg_temp.issue7_capture_fixture;
+  v_result := public.get_task_creation_result_p(
+    'a7777777-0000-4000-8000-000000000001',
+    v_board_id,
+    v_column_id,
+    'Comprar leche',
+    NULL,
+    'medium'
+  );
   IF v_result->>'status' IS DISTINCT FROM 'expired_unknown'
     OR v_result->>'task_id' IS NULL THEN
     RAISE EXCEPTION 'An expired result was not reported as unknown: %', v_result;
   END IF;
 
-  v_board_id := (v_result->>'board_id')::uuid;
-  v_column_id := (v_result->>'column_id')::uuid;
+  v_result := public.get_task_creation_result_p(
+    'a7777777-0000-4000-8000-000000000001',
+    v_board_id,
+    v_column_id,
+    'Comprar leche',
+    NULL,
+    'medium'
+  );
+  IF v_result->>'status' IS DISTINCT FROM 'expired_unknown' THEN
+    RAISE EXCEPTION 'Matching expired intent did not remain unknown: %', v_result;
+  END IF;
+
+  v_rejected := false;
+  BEGIN
+    PERFORM public.get_task_creation_result_p(
+      'a7777777-0000-4000-8000-000000000001',
+      v_board_id,
+      v_column_id,
+      'Título cambiado',
+      NULL,
+      'medium'
+    );
+  EXCEPTION WHEN check_violation THEN
+    v_rejected := true;
+  END;
+  IF NOT v_rejected THEN
+    RAISE EXCEPTION 'Expired reconciliation accepted a different payload';
+  END IF;
+
   v_result := public.create_task_p(
     'a7777777-0000-4000-8000-000000000001',
     v_board_id,
@@ -333,6 +447,7 @@ BEGIN
     RAISE EXCEPTION 'Expired replay retried without reconciliation: %', v_result;
   END IF;
 
+  v_rejected := false;
   BEGIN
     PERFORM public.create_task_p(
       'a7777777-0000-4000-8000-000000000001',

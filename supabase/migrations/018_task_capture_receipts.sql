@@ -353,14 +353,61 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION public.get_task_creation_result_p(p_operation_id uuid)
+CREATE OR REPLACE FUNCTION public.get_task_creation_result_p(
+  p_operation_id uuid,
+  p_board_id uuid,
+  p_column_id uuid,
+  p_title text,
+  p_description text,
+  p_priority text
+)
 RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, public, auth, pg_temp
 AS $$
+DECLARE
+  v_title text;
+  v_description text;
+  v_payload_hash bytea;
 BEGIN
-  RETURN public.resolve_task_capture_receipt_p(p_operation_id);
+  IF p_operation_id IS NULL OR p_board_id IS NULL OR p_column_id IS NULL THEN
+    RAISE EXCEPTION 'A task creation operation, board, and column are required'
+      USING ERRCODE = '22023';
+  END IF;
+  IF p_title IS NULL OR btrim(p_title) = '' THEN
+    RAISE EXCEPTION 'Enter a task title' USING ERRCODE = '22023';
+  END IF;
+
+  v_title := btrim(p_title);
+  IF char_length(v_title) > 200 THEN
+    RAISE EXCEPTION 'Task titles must be 200 characters or fewer'
+      USING ERRCODE = '22023';
+  END IF;
+  IF p_description IS NOT NULL AND char_length(p_description) > 2000 THEN
+    RAISE EXCEPTION 'Task descriptions must be 2000 characters or fewer'
+      USING ERRCODE = '22023';
+  END IF;
+  IF p_priority IS NULL OR p_priority NOT IN ('low', 'medium', 'high', 'urgent') THEN
+    RAISE EXCEPTION 'Choose a valid task priority' USING ERRCODE = '22023';
+  END IF;
+
+  v_description := CASE
+    WHEN p_description IS NULL OR btrim(p_description) = '' THEN NULL
+    ELSE p_description
+  END;
+  v_payload_hash := public.task_capture_payload_hash(jsonb_build_object(
+    'action', 'create_task',
+    'board_id', p_board_id,
+    'column_id', p_column_id,
+    'title', v_title,
+    'description', v_description,
+    'priority', p_priority
+  ));
+
+  -- The resolver authorizes the receipt's current board membership before it
+  -- compares this hash, so revoked or unrelated actors cannot detect reuse.
+  RETURN public.resolve_task_capture_receipt_p(p_operation_id, v_payload_hash);
 END;
 $$;
 
@@ -370,11 +417,11 @@ REVOKE ALL ON FUNCTION public.resolve_task_capture_receipt_p(uuid, bytea)
   FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.create_task_p(uuid, uuid, uuid, text, text, text)
   FROM PUBLIC, anon, authenticated, service_role;
-REVOKE ALL ON FUNCTION public.get_task_creation_result_p(uuid)
+REVOKE ALL ON FUNCTION public.get_task_creation_result_p(uuid, uuid, uuid, text, text, text)
   FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.create_task_p(uuid, uuid, uuid, text, text, text)
   TO authenticated;
-GRANT EXECUTE ON FUNCTION public.get_task_creation_result_p(uuid)
+GRANT EXECUTE ON FUNCTION public.get_task_creation_result_p(uuid, uuid, uuid, text, text, text)
   TO authenticated;
 
 NOTIFY pgrst, 'reload schema';

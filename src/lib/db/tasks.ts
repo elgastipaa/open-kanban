@@ -80,11 +80,21 @@ function taskFromResult(
 async function queryTaskCreationResult(
   supabase: SupabaseClient,
   operationId: string,
+  boardId: string,
+  payload: CreateTaskPayload,
 ): Promise<TaskCaptureResult> {
   const { data, error } = await supabase.rpc("get_task_creation_result_p", {
     p_operation_id: operationId,
+    p_board_id: boardId,
+    p_column_id: payload.column_id,
+    p_title: payload.title,
+    p_description: payload.description ?? null,
+    p_priority: payload.priority ?? "medium",
   });
-  if (error || !isTaskCaptureResult(data)) {
+  if (error) {
+    throw definiteFailure(error) ?? new TaskCaptureError("uncertain");
+  }
+  if (!isTaskCaptureResult(data)) {
     throw new TaskCaptureError("uncertain");
   }
   return data;
@@ -95,8 +105,14 @@ async function resolveExpiredTaskCreation(
   slug: string,
   operationId: string,
   boardId: string,
+  payload: CreateTaskPayload,
 ): Promise<Task> {
-  const result = await queryTaskCreationResult(supabase, operationId);
+  const result = await queryTaskCreationResult(
+    supabase,
+    operationId,
+    boardId,
+    payload,
+  );
   if (result.status !== "expired_unknown") throwForResult(result);
   if (
     result.operation_id !== operationId ||
@@ -131,10 +147,17 @@ async function taskAfterResult(
   slug: string,
   operationId: string,
   boardId: string,
+  payload: CreateTaskPayload,
   result: TaskCaptureResult,
 ): Promise<Task> {
   if (result.status === "expired_unknown") {
-    return resolveExpiredTaskCreation(supabase, slug, operationId, boardId);
+    return resolveExpiredTaskCreation(
+      supabase,
+      slug,
+      operationId,
+      boardId,
+      payload,
+    );
   }
   return taskFromResult(result, operationId, boardId);
 }
@@ -176,9 +199,21 @@ async function reconcileAfterCreateFailure(
   boardId: string,
   payload: CreateTaskPayload,
 ): Promise<Task> {
-  const priorResult = await queryTaskCreationResult(supabase, operationId);
+  const priorResult = await queryTaskCreationResult(
+    supabase,
+    operationId,
+    boardId,
+    payload,
+  );
   if (priorResult.status !== "not_found") {
-    return taskAfterResult(supabase, slug, operationId, boardId, priorResult);
+    return taskAfterResult(
+      supabase,
+      slug,
+      operationId,
+      boardId,
+      payload,
+      priorResult,
+    );
   }
 
   // The server confirmed there is no receipt, so retry exactly once with the
@@ -193,7 +228,14 @@ async function reconcileAfterCreateFailure(
     if (retryResult.status === "not_found") {
       throw new TaskCaptureError("uncertain");
     }
-    return taskAfterResult(supabase, slug, operationId, boardId, retryResult);
+    return taskAfterResult(
+      supabase,
+      slug,
+      operationId,
+      boardId,
+      payload,
+      retryResult,
+    );
   } catch (retryError) {
     if (
       retryError instanceof TaskCaptureError &&
@@ -204,11 +246,23 @@ async function reconcileAfterCreateFailure(
     const definite = definiteFailure(retryError);
     if (definite) throw definite;
 
-    const finalResult = await queryTaskCreationResult(supabase, operationId);
+    const finalResult = await queryTaskCreationResult(
+      supabase,
+      operationId,
+      boardId,
+      payload,
+    );
     if (finalResult.status === "not_found") {
       throw new TaskCaptureError("uncertain");
     }
-    return taskAfterResult(supabase, slug, operationId, boardId, finalResult);
+    return taskAfterResult(
+      supabase,
+      slug,
+      operationId,
+      boardId,
+      payload,
+      finalResult,
+    );
   }
 }
 
@@ -262,7 +316,7 @@ export async function createTask(
       parsed,
     );
   }
-  return taskAfterResult(supabase, slug, operationId, boardId, result);
+  return taskAfterResult(supabase, slug, operationId, boardId, parsed, result);
 }
 
 /** Query a prior explicit capture, retrying only after a not-found receipt. */
@@ -279,7 +333,12 @@ export async function reconcileTaskCreation(
   } catch {
     throw new TaskCaptureError("rejected");
   }
-  const result = await queryTaskCreationResult(supabase, operationId);
+  const result = await queryTaskCreationResult(
+    supabase,
+    operationId,
+    boardId,
+    parsed,
+  );
   if (result.status === "not_found") {
     return reconcileAfterCreateFailure(
       supabase,
@@ -289,7 +348,7 @@ export async function reconcileTaskCreation(
       parsed,
     );
   }
-  return taskAfterResult(supabase, slug, operationId, boardId, result);
+  return taskAfterResult(supabase, slug, operationId, boardId, parsed, result);
 }
 
 /** Update only explicitly supplied task fields; null clears description. */

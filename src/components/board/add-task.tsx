@@ -20,7 +20,6 @@ const reconciliationReasons: TaskCaptureErrorReason[] = [
   "uncertain",
   "expired_unknown",
   "unavailable",
-  "conflict",
 ];
 
 function errorMessage(reason: TaskCaptureErrorReason | null): string | null {
@@ -34,7 +33,7 @@ function errorMessage(reason: TaskCaptureErrorReason | null): string | null {
     case "rejected":
       return "No se pudo añadir la tarea. Conservamos el borrador.";
     case "conflict":
-      return "Esta clave de captura ya tiene otros datos. Reconciliá el resultado antes de continuar.";
+      return "Esta clave ya pertenece a otra captura. Conservamos el borrador; asignale una clave nueva para continuar.";
     default:
       return null;
   }
@@ -54,6 +53,7 @@ export function AddTask({ columnId, onAdd }: AddTaskProps) {
   const { isMobile } = useDevice();
   const reconciliationRequired =
     errorReason !== null && reconciliationReasons.includes(errorReason);
+  const payloadConflict = errorReason === "conflict";
   const message = errorMessage(errorReason);
 
   useEffect(() => {
@@ -103,6 +103,13 @@ export function AddTask({ columnId, onAdd }: AddTaskProps) {
     inputRef.current?.focus();
   }
 
+  function assignNewOperationId() {
+    if (pendingRef.current || !payloadConflict) return;
+    setOperationId(generateUUID());
+    setErrorReason(null);
+    inputRef.current?.focus();
+  }
+
   if (!isOpen) {
     return (
       <button
@@ -125,7 +132,7 @@ export function AddTask({ columnId, onAdd }: AddTaskProps) {
         <input
           ref={inputRef}
           value={title}
-          readOnly={pending || reconciliationRequired}
+          readOnly={pending || reconciliationRequired || payloadConflict}
           onChange={(event) => {
             setTitle(event.target.value);
             if (errorReason === "rejected") {
@@ -137,7 +144,7 @@ export function AddTask({ columnId, onAdd }: AddTaskProps) {
           onKeyDown={(event) => {
             if (event.key === "Enter") {
               event.preventDefault();
-              void submit();
+              if (!payloadConflict) void submit();
             }
             if (event.key === "Escape" && !pending) setIsOpen(false);
           }}
@@ -148,15 +155,23 @@ export function AddTask({ columnId, onAdd }: AddTaskProps) {
         />
         <button
           type="button"
-          onClick={() => void submit()}
-          disabled={pending || !title.trim()}
+          onClick={() => {
+            if (payloadConflict) {
+              assignNewOperationId();
+              return;
+            }
+            void submit();
+          }}
+          disabled={pending || (!title.trim() && !payloadConflict)}
           className="shrink-0 rounded-md bg-accent px-3 py-1.5 font-semibold text-sm text-surface-overlay disabled:cursor-not-allowed disabled:opacity-50"
         >
           {pending
             ? "Guardando…"
             : reconciliationRequired
               ? "Reconciliar"
-              : "Añadir"}
+              : payloadConflict
+                ? "Asignar clave nueva"
+                : "Añadir"}
         </button>
       </div>
       {message ? (
@@ -166,7 +181,7 @@ export function AddTask({ columnId, onAdd }: AddTaskProps) {
           className="px-3 py-2 text-text-muted text-xs"
         >
           <p>{message}</p>
-          {reconciliationRequired ? (
+          {payloadConflict || reconciliationRequired ? (
             <button
               type="button"
               onClick={discardDraft}

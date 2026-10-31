@@ -1,7 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { isTaskEditReadAccessDeniedCode } from "@/lib/task-edit-read";
 import type { Board, ColumnWithTasks } from "@/lib/types";
 import { createBoardSchema } from "@/lib/validations";
 import { handleSupabaseError } from "./errors";
+import { TaskEditError } from "./tasks";
 
 /** Fetch a board by slug, returns null if not found */
 export async function getBoard(
@@ -58,5 +60,23 @@ export async function getFullBoard(
     .maybeSingle();
 
   if (response.error) handleSupabaseError(response.error);
+  return response.data as { board: Board; columns: ColumnWithTasks[] } | null;
+}
+
+/** Read a board for task-edit reconciliation without hiding SQL permission denial. */
+export async function getFullBoardForTaskEdit(
+  supabase: SupabaseClient,
+  slug: string,
+): Promise<{ board: Board; columns: ColumnWithTasks[] } | null> {
+  const response = await supabase
+    .rpc("get_full_board_p", { p_slug: slug })
+    .maybeSingle();
+
+  if (response.error) {
+    if (isTaskEditReadAccessDeniedCode(response.error.code)) {
+      throw new TaskEditError("access_denied");
+    }
+    handleSupabaseError(response.error);
+  }
   return response.data as { board: Board; columns: ColumnWithTasks[] } | null;
 }

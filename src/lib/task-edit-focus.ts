@@ -2,6 +2,13 @@ export interface TaskFocusOrigin {
   taskId: string;
   columnId: string;
   position: number;
+  columnTitle: string;
+}
+
+export interface TaskFocusColumnSnapshot {
+  id: string;
+  title: string;
+  taskIds: string[];
 }
 
 export interface TaskFocusCandidate {
@@ -15,6 +22,23 @@ export type TaskFocusTarget =
   | { kind: "column"; columnId: string }
   | { kind: "board" }
   | null;
+
+/** Preserve the task's source column, position, and label at the moment it opens. */
+export function captureTaskFocusOrigin(
+  taskId: string,
+  fallbackColumnId: string,
+  columns: TaskFocusColumnSnapshot[],
+): TaskFocusOrigin {
+  const sourceColumn = columns.find((column) =>
+    column.taskIds.includes(taskId),
+  );
+  return {
+    taskId,
+    columnId: sourceColumn?.id ?? fallbackColumnId,
+    position: sourceColumn?.taskIds.indexOf(taskId) ?? 0,
+    columnTitle: sourceColumn?.title ?? "Columna",
+  };
+}
 
 /** Choose the nearest still-valid control in the user's original board context. */
 export function selectTaskFocusTarget(

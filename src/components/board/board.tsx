@@ -26,7 +26,11 @@ import {
   abortPendingSessionRequests,
   createClient,
 } from "@/lib/supabase/client";
-import { selectTaskFocusTarget } from "@/lib/task-edit-focus";
+import {
+  captureTaskFocusOrigin,
+  selectTaskFocusTarget,
+  type TaskFocusOrigin,
+} from "@/lib/task-edit-focus";
 import type { Board as BoardType, ColumnWithTasks, Task } from "@/lib/types";
 
 interface BoardProps {
@@ -271,11 +275,7 @@ function BoardWorkspace({
 
   // Task modal state
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
-  const taskOriginRef = useRef<{
-    taskId: string;
-    columnId: string;
-    position: number;
-  } | null>(null);
+  const taskOriginRef = useRef<TaskFocusOrigin | null>(null);
   const { isOnline } = useOnlineStatus();
   const editingTask = editingTaskId
     ? (columns
@@ -288,17 +288,15 @@ function BoardWorkspace({
   }, [editingTask, editingTaskId]);
 
   function openTaskDetail(task: Task, _opener: HTMLButtonElement) {
-    const originColumn = columns.find((column) =>
-      column.tasks.some((candidate) => candidate.id === task.id),
+    taskOriginRef.current = captureTaskFocusOrigin(
+      task.id,
+      task.column_id,
+      columns.map((column) => ({
+        id: column.id,
+        title: column.title,
+        taskIds: column.tasks.map((candidate) => candidate.id),
+      })),
     );
-    taskOriginRef.current = {
-      taskId: task.id,
-      columnId: originColumn?.id ?? task.column_id,
-      position:
-        originColumn?.tasks.findIndex(
-          (candidate) => candidate.id === task.id,
-        ) ?? 0,
-    };
     setEditingTaskId(task.id);
   }
 
@@ -544,7 +542,7 @@ function BoardWorkspace({
       <TaskModal
         key={editingTask?.id ?? "closed"}
         task={editingTask}
-        contextLabel={`${board?.name ?? initialBoard.name} · ${columns.find((column) => column.id === editingTask?.column_id)?.title ?? "Columna"}`}
+        contextLabel={`${board?.name ?? initialBoard.name} · ${taskOriginRef.current?.columnTitle ?? "Columna"}`}
         open={editingTaskId !== null && editingTask !== null}
         isOnline={isOnline}
         onClose={() => setEditingTaskId(null)}

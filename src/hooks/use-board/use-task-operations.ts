@@ -5,6 +5,7 @@ import {
   createTask,
   deleteTask as dbDeleteTask,
   getFullBoard,
+  getFullBoardForTaskEdit,
   reconcileTaskCreation,
   TaskCaptureError,
   TaskEditError,
@@ -396,11 +397,11 @@ export function useTaskOperations({
         if (
           !currentColumns.some((column) => column.id === result.task.column_id)
         ) {
-          const latestBoard = await getFullBoard(supabase, slug);
+          const latestBoard = await getFullBoardForTaskEdit(supabase, slug);
           if (sessionEpoch !== getSessionEpoch()) {
             throw new TaskEditError("stale_session");
           }
-          if (!latestBoard) throw new TaskEditError("unavailable");
+          if (!latestBoard) throw new TaskEditError("access_denied");
           authoritativeColumns = latestBoard.columns;
         }
         const nextColumns = authoritativeColumns.map((column) => ({
@@ -419,14 +420,12 @@ export function useTaskOperations({
           (error.reason === "expired_unknown" || error.reason === "conflict")
         ) {
           try {
-            const latestBoard = await getFullBoard(supabase, slug);
+            const latestBoard = await getFullBoardForTaskEdit(supabase, slug);
             if (sessionEpoch !== getSessionEpoch()) {
-              onAccessLost();
               throw new TaskEditError("stale_session");
             }
             if (!latestBoard) {
-              onAccessLost();
-              throw new TaskEditError("stale_session");
+              throw new TaskEditError("access_denied");
             }
             const latestTask = latestBoard.columns
               .flatMap((column) => column.tasks)
@@ -498,7 +497,18 @@ export function useTaskOperations({
   const refreshTaskForEdit = useCallback(
     async (taskId: string): Promise<Task | null> => {
       const sessionEpoch = getSessionEpoch();
-      const latestBoard = await getFullBoard(supabase, slug);
+      let latestBoard: Awaited<ReturnType<typeof getFullBoardForTaskEdit>>;
+      try {
+        latestBoard = await getFullBoardForTaskEdit(supabase, slug);
+      } catch (error) {
+        if (
+          error instanceof TaskEditError &&
+          error.reason === "access_denied"
+        ) {
+          onAccessLost();
+        }
+        throw error;
+      }
       if (sessionEpoch !== getSessionEpoch()) {
         onAccessLost();
         throw new TaskEditError("stale_session");

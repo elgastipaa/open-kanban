@@ -1,6 +1,3 @@
-/** biome-ignore-all lint/a11y/noStaticElementInteractions: handled by dnd package  */
-/** biome-ignore-all lint/a11y/useSemanticElements: nested buttons */
-/** biome-ignore-all lint/a11y/useKeyWithClickEvents: handled by dragHandleProps */
 "use client";
 
 import { Draggable } from "@hello-pangea/dnd";
@@ -50,16 +47,14 @@ export function TaskCard({ task, index, onEdit, onDelete }: TaskCardProps) {
             }`}
           >
             {/* Drag handle - distinctly separated on the left */}
-            <div
+            <button
+              type="button"
               {...provided.dragHandleProps}
-              role="button"
-              tabIndex={0}
-              aria-label={`Task: ${task.title}. Press Space to move.`}
-              onClick={(e) => e.stopPropagation()}
+              aria-label={`Mover tarea: ${task.title}. Pulsa la barra espaciadora para moverla.`}
               className="flex w-10 shrink-0 cursor-grab items-center justify-center border-border border-r bg-surface-base/40 text-text-muted outline-0 transition-colors hover:bg-surface-hover hover:text-text-secondary active:cursor-grabbing sm:w-8"
             >
               <IconGripVertical size={16} />
-            </div>
+            </button>
 
             {/* Main detail trigger */}
             <button
@@ -99,20 +94,16 @@ export function TaskCard({ task, index, onEdit, onDelete }: TaskCardProps) {
                   })}
                 </span>
               </div>
+            </button>
 
-              {/* Delete button - visible on hover */}
-              <button
-                type="button"
-                aria-label={`Eliminar tarea: ${task.title}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onDelete(task.id);
-                }}
-                onKeyDown={(e) => e.stopPropagation()}
-                className="absolute top-1.5 right-1.5 cursor-pointer rounded-md p-1.5 text-text-muted opacity-0 transition-colors hover:bg-red-500/10 hover:text-red-400 focus:opacity-100 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent group-hover:opacity-100"
-              >
-                <IconTrash size={14} />
-              </button>
+            {/* Delete button is a sibling of the detail trigger, never nested inside it. */}
+            <button
+              type="button"
+              aria-label={`Eliminar tarea: ${task.title}`}
+              onClick={() => onDelete(task.id)}
+              className="absolute top-1.5 right-1.5 cursor-pointer rounded-md p-1.5 text-text-muted opacity-0 transition-colors hover:bg-red-500/10 hover:text-red-400 focus:opacity-100 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent group-hover:opacity-100"
+            >
+              <IconTrash size={14} />
             </button>
           </div>
         );

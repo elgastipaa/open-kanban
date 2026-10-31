@@ -709,6 +709,12 @@ export function TaskModal({
               El borrador vive solo en esta sesión y no se recupera si recargas
               o cierras la página.
             </p>
+            {closeAction === "delete" && (
+              <p className="mt-1 text-sm text-text-secondary">
+                Guardar conserva este detalle abierto. La eliminación se
+                confirma por separado después.
+              </p>
+            )}
             {closeNotice && (
               <output
                 aria-live="polite"
@@ -724,6 +730,7 @@ export function TaskModal({
                   onClick={() => void save(true)}
                   disabled={
                     !dirty ||
+                    !normalizedTitle ||
                     !isOnline ||
                     hasConflict ||
                     isWorking ||
@@ -731,6 +738,22 @@ export function TaskModal({
                   }
                 >
                   Guardar y cerrar
+                </Button>
+              )}
+              {closeAction === "delete" && (
+                <Button
+                  variant="primary"
+                  onClick={() => void save(false)}
+                  disabled={
+                    !dirty ||
+                    !normalizedTitle ||
+                    !isOnline ||
+                    hasConflict ||
+                    isWorking ||
+                    reconciliationRequired
+                  }
+                >
+                  Guardar cambios
                 </Button>
               )}
               <Button

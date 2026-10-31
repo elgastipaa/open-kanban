@@ -103,3 +103,11 @@ La instrucción del usuario amplió la excepción de secuencia para implementar 
 - La DB prueba owner/member, creación vacía y zona, lista/lectura por membresía vigente, rename owner con slug estable, mutaciones de columnas como miembro, revocación, generación archivada, constraints, idempotencia y carreras entre sesiones sintéticas. UI autenticada, móvil/teclado real y reconciliación visible tras timeout quedan parciales/no probadas; ver la matriz en `docs/validation/issue-6.md`.
 - #6 permanece OPEN y pasa a `ready-for-human` mientras falte Auth→PostgREST y recorrido UI autenticado; `Blocked by #4` permanece intacto. No inferir aceptación de #4, no cerrar #6. La excepción solo habilitó el trabajo aislado y no cambia contratos ni autoriza producción.
 - La integración fast-forward de código y evidencia y la verificación final de tracker se registran después de esta sección cuando concluyan.
+
+### Integración y tracker de #6 — 2026-10-31
+
+La entrega de código revisada (`22da1e221ec607fff7a69d683ba3b151c81a2d13`) y el informe reproducible se integraron por fast-forward en `codex/openkanban-1-0`, desde `ee2771e75a7c18592b0af7eea814afae66f119da` hasta `af27f275c25526f6074207bd90e28ce906624aaa`. El push ordinario de la rama codex llegó a `origin`; no hubo force-push. La PR acumulada #54 sigue open/draft con esta entrega en su body. Este checkpoint es un commit documental posterior al código y a la evidencia.
+
+GitHub #6 verificado después de integrar: **OPEN**, asignado a `elgastipaa`, con `ready-for-human`; el body y la relación nativa `Blocked by #4` siguen presentes. El comentario de evidencia es `https://github.com/elgastipaa/open-kanban/issues/6#issuecomment-6548679571`. #4 y #5 siguen abiertos. No se cerró ningún issue.
+
+Los cambios ajenos de `docs/VALIDATION.md` conservaron SHA-256 `B8669EAAFEA1A6D41C1342470E49324D2FAA50BED03DCCCFE7E94AF17D51FD9C`; `.scratch/` sigue sin seguimiento y preservado. No se modificó `main`, no se ejecutó SQL remoto y no hubo despliegue de producción.

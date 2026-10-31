@@ -287,7 +287,7 @@ function BoardWorkspace({
     if (editingTaskId && !editingTask) setEditingTaskId(null);
   }, [editingTask, editingTaskId]);
 
-  function openTaskDetail(task: Task, _opener: HTMLButtonElement) {
+  function openTaskDetail(task: Task) {
     taskOriginRef.current = captureTaskFocusOrigin(
       task.id,
       task.column_id,

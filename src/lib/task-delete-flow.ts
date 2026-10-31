@@ -2,6 +2,7 @@ export interface TaskDeleteFlow {
   deletingTaskId: string | null;
   waitingForEditorCloseTaskId: string | null;
   resumeEditorTaskId: string | null;
+  restoreFocusAfterDialogClose: boolean;
 }
 
 export function createTaskDeleteFlow(): TaskDeleteFlow {
@@ -9,6 +10,7 @@ export function createTaskDeleteFlow(): TaskDeleteFlow {
     deletingTaskId: null,
     waitingForEditorCloseTaskId: null,
     resumeEditorTaskId: null,
+    restoreFocusAfterDialogClose: false,
   };
 }
 
@@ -20,6 +22,7 @@ export function requestCardTaskDelete(
     deletingTaskId: taskId,
     waitingForEditorCloseTaskId: null,
     resumeEditorTaskId: null,
+    restoreFocusAfterDialogClose: false,
   };
 }
 
@@ -31,6 +34,7 @@ export function requestEditorTaskDelete(
     deletingTaskId: null,
     waitingForEditorCloseTaskId: taskId,
     resumeEditorTaskId: taskId,
+    restoreFocusAfterDialogClose: false,
   };
 }
 
@@ -41,6 +45,7 @@ export function finishTaskEditorClose(flow: TaskDeleteFlow): TaskDeleteFlow {
     deletingTaskId: taskId,
     waitingForEditorCloseTaskId: null,
     resumeEditorTaskId: flow.resumeEditorTaskId,
+    restoreFocusAfterDialogClose: false,
   };
 }
 
@@ -54,6 +59,21 @@ export function cancelTaskDelete(
   };
 }
 
-export function confirmTaskDelete(_flow: TaskDeleteFlow): TaskDeleteFlow {
-  return createTaskDeleteFlow();
+export function confirmTaskDelete(flow: TaskDeleteFlow): TaskDeleteFlow {
+  return {
+    ...createTaskDeleteFlow(),
+    restoreFocusAfterDialogClose: Boolean(
+      flow.deletingTaskId && flow.resumeEditorTaskId,
+    ),
+  };
+}
+
+export function finishTaskDeleteDialogClose(flow: TaskDeleteFlow): {
+  flow: TaskDeleteFlow;
+  restoreTaskFocus: boolean;
+} {
+  return {
+    flow: createTaskDeleteFlow(),
+    restoreTaskFocus: flow.restoreFocusAfterDialogClose,
+  };
 }

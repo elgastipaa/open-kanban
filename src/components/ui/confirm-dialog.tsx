@@ -11,6 +11,7 @@ interface ConfirmDialogProps {
   description: string;
   confirmLabel?: string;
   loading?: boolean;
+  onAfterClose?: () => void;
 }
 
 export function ConfirmDialog({
@@ -21,9 +22,15 @@ export function ConfirmDialog({
   description,
   confirmLabel = "Delete",
   loading = false,
+  onAfterClose,
 }: ConfirmDialogProps) {
   return (
-    <Modal open={open} onClose={onClose} title={title}>
+    <Modal
+      open={open}
+      onClose={onClose}
+      onAfterClose={onAfterClose}
+      title={title}
+    >
       <p className="mb-6 text-sm text-text-secondary leading-relaxed">
         {description}
       </p>

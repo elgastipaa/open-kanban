@@ -30,6 +30,7 @@ import {
   cancelTaskDelete,
   confirmTaskDelete,
   createTaskDeleteFlow,
+  finishTaskDeleteDialogClose,
   finishTaskEditorClose,
   requestCardTaskDelete,
   requestEditorTaskDelete,
@@ -414,10 +415,10 @@ function BoardWorkspace({
   }
 
   // Task delete handler
-  async function handleDeleteTask() {
+  function handleDeleteTask() {
     const taskId = taskDeleteFlow.deletingTaskId;
     if (!taskId) return;
-    await removeTask(taskId);
+    removeTask(taskId);
     // Close modal if the deleted task was being edited
     if (editingTaskId === taskId) {
       setEditingTaskId(null);
@@ -458,6 +459,12 @@ function BoardWorkspace({
     if (result.reopenEditorTaskId) {
       setEditingTaskId(result.reopenEditorTaskId);
     }
+  }
+
+  function handleTaskDeleteDialogAfterClose() {
+    const result = finishTaskDeleteDialogClose(taskDeleteFlowRef.current);
+    storeTaskDeleteFlow(result.flow);
+    if (result.restoreTaskFocus) restoreTaskFocus();
   }
 
   // Export handler
@@ -625,6 +632,7 @@ function BoardWorkspace({
         open={taskDeleteFlow.deletingTaskId !== null}
         onClose={handleCancelTaskDelete}
         onConfirm={handleDeleteTask}
+        onAfterClose={handleTaskDeleteDialogAfterClose}
         title="Delete Task"
         description="Are you sure you want to delete this task? This action cannot be undone."
         confirmLabel="Delete Task"

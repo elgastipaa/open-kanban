@@ -41,3 +41,15 @@ Revisión final en paralelo, solo lectura, HEAD `94fa29a` contra base fija:
 - La identidad de prueba elegida por el usuario tiene una fila local explícita `pending`, `is_admin=true`, todavía sin `auth_user_id` ni sujeto Google vinculado. El valor de identidad no se copia a documentos, repo ni GitHub. La otra cuenta de prueba no tiene fila de acceso.
 - Next.js está ejecutándose con la configuración local aislada en `http://127.0.0.1:3000`; GET `/` devolvió HTTP 200. Aún falta que el usuario complete manualmente «Continuar con Google» y el selector de cuenta. No se afirma que OAuth real esté probado hasta validar la fila activada y los recorridos de acceso/denegación.
 - El secreto OAuth permanece fuera del repositorio. No leer ni mostrar `.env`; las claves del entorno local tampoco deben imprimirse.
+
+## Excepción de secuencia temporal para #5 — 2026-10-31
+
+El usuario pidió seguir avanzando sin completar el inicio manual de Google OAuth en Chrome. Para permitir trabajo verificable, se acuerda una excepción de secuencia solo para implementación de #5:
+
+- La integración local avanzó por fast-forward desde d7ebc632a5df207afda34273f6850bce68b3f146 hasta e4a1b8fe00d6d0f09e3cffb4188a462645ce6b40, que contiene el código de #4 ya revisado y las pruebas automatizadas descritas en docs/validation/issue-4.md.
+- #4 continúa abierto y ready-for-human. Login real de Google con identidad habilitada, identidad no habilitada y sin sesión, más logout/cambio de cuenta según el ticket, siguen pendientes. Fixtures no satisfacen ni se presentan como evidencia de OAuth real.
+- Se permite implementar y verificar #5 aunque la relación GitHub Blocked by #4 siga vigente, exclusivamente en el Supabase local aislado y con identidades/claims Auth sintéticos. Esto no agrega bypass a la aplicación, no debilita autenticación/autorización y no habilita acceso a datos reales.
+- Mantener la arista de dependencia en GitHub. No cerrar #4 ni #5 mientras haya criterios pendientes; ante una dependencia de OAuth real, dejar ese criterio accionable y continuar solo con trabajo independiente autorizado.
+- Esta excepción no autoriza main, producción ni migraciones remotas. En este checkpoint no se publicó ni se hizo push. Se preservan los cambios locales ajenos en docs/VALIDATION.md y .scratch/.
+
+Base de la próxima rama de trabajo: la punta de codex/openkanban-1-0 luego de este checkpoint. Reconciliar nuevamente el tracker y registrar la excepción en el comentario inicial de #5.

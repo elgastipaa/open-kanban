@@ -8,7 +8,7 @@ import {
   IconTrash,
 } from "@tabler/icons-react";
 import { motion } from "motion/react";
-import { useState } from "react";
+import { type MouseEvent, useState } from "react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -19,10 +19,11 @@ import type { ColumnWithTasks, Priority, Task } from "@/lib/types";
 
 interface MobileTaskCardProps {
   task: Task;
+  index: number;
   columns: ColumnWithTasks[];
   isFirst: boolean;
   isLast: boolean;
-  onEdit: (task: Task) => void;
+  onEdit: (task: Task, opener: HTMLButtonElement) => void;
   onDelete: (taskId: string) => void;
   onMoveToColumn: (taskId: string, targetColumnId: string) => void;
   onMoveUp: (taskId: string) => void;
@@ -47,6 +48,7 @@ const priorityConfig: Record<Priority, { label: string; className: string }> = {
 
 export function MobileTaskCard({
   task,
+  index,
   columns,
   isFirst,
   isLast,
@@ -73,8 +75,14 @@ export function MobileTaskCard({
       {/* Main tappable content area */}
       <button
         type="button"
+        data-task-trigger={task.id}
+        data-task-column={task.column_id}
+        data-task-index={index}
         className="flex min-w-0 flex-1 flex-col p-3 text-left"
-        onClick={() => onEdit(task)}
+        aria-label={`Abrir tarea: ${task.title}`}
+        onClick={(event: MouseEvent<HTMLButtonElement>) =>
+          onEdit(task, event.currentTarget)
+        }
       >
         {/* Title */}
         <p className="wrap-break-word pr-2 font-medium text-sm text-text-primary leading-snug">

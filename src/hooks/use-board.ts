@@ -14,6 +14,7 @@ export function useBoard({
   initialBoard,
   initialColumns,
   onMutation,
+  onAccessLost,
 }: UseBoardOptions) {
   const [board, setBoard] = useState<Board | null>(initialBoard);
   const [columns, setColumns] = useState<ColumnWithTasks[]>(initialColumns);
@@ -75,17 +76,19 @@ export function useBoard({
     ledger: taskMutationLedger,
   });
 
-  const { addTask, editTask, removeTask, moveTask } = useTaskOperations({
-    slug,
-    supabase,
-    columnsRef,
-    setColumns,
-    isPersistedRef,
-    onMutationRef,
-    persistBoard,
-    enqueue,
-    ledger: taskMutationLedger,
-  });
+  const { addTask, editTask, refreshTaskForEdit, removeTask, moveTask } =
+    useTaskOperations({
+      slug,
+      supabase,
+      columnsRef,
+      setColumns,
+      isPersistedRef,
+      onMutationRef,
+      persistBoard,
+      enqueue,
+      ledger: taskMutationLedger,
+      onAccessLost: onAccessLost ?? (() => undefined),
+    });
 
   return {
     board,
@@ -97,6 +100,7 @@ export function useBoard({
     removeColumn,
     addTask,
     editTask,
+    refreshTaskForEdit,
     removeTask,
     moveTask,
     moveColumn,

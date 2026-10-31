@@ -34,7 +34,7 @@ interface ColumnProps {
     operationId: string,
     reconcileFirst?: boolean,
   ) => Promise<void>;
-  onEditTask: (task: Task) => void;
+  onEditTask: (task: Task, opener: HTMLButtonElement) => void;
   onDeleteTask: (taskId: string) => void;
 }
 
@@ -57,6 +57,9 @@ export function Column({
       <motion.div
         layout
         layoutId={column.id}
+        data-column-focus={column.id}
+        aria-label={`Columna ${column.title}`}
+        tabIndex={-1}
         transition={columnTransition}
         style={willChangeTransform}
       >
@@ -96,6 +99,9 @@ export function Column({
     <motion.div
       layout
       layoutId={column.id}
+      data-column-focus={column.id}
+      aria-label={`Columna ${column.title}`}
+      tabIndex={-1}
       transition={columnTransition}
       style={willChangeTransform}
       className="z-10 flex h-full w-[calc(280px+0.5rem)] min-w-[280px] shrink-0 flex-col rounded-xl bg-surface-column p-2"

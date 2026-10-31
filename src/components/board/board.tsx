@@ -16,6 +16,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useBoard } from "@/hooks/use-board";
 import { useDevice } from "@/hooks/use-device";
 import { useHotKeys } from "@/hooks/use-hotkeys";
+import { useOnlineStatus } from "@/hooks/use-online-status";
 import { usePresence } from "@/hooks/use-presence";
 import { useRealtime } from "@/hooks/use-realtime";
 import { resolveApplicationAccess } from "@/lib/auth";
@@ -25,6 +26,7 @@ import {
   abortPendingSessionRequests,
   createClient,
 } from "@/lib/supabase/client";
+import { selectTaskFocusTarget } from "@/lib/task-edit-focus";
 import type { Board as BoardType, ColumnWithTasks, Task } from "@/lib/types";
 
 interface BoardProps {
@@ -36,6 +38,7 @@ interface BoardProps {
 
 type BoardWorkspaceProps = Omit<BoardProps, "ownerAuthUserId"> & {
   isSessionStale: boolean;
+  onAccessLost: () => void;
 };
 
 type SessionStatus = "checking" | "active" | "stale" | "denied";
@@ -48,6 +51,11 @@ export function Board({
 }: BoardProps) {
   const router = useRouter();
   const [sessionStatus, setSessionStatus] = useState<SessionStatus>("checking");
+  const onAccessLost = useCallback(() => {
+    abortPendingSessionRequests();
+    setSessionStatus("denied");
+    router.replace("/");
+  }, [router]);
 
   useEffect(() => {
     let disposed = false;
@@ -167,6 +175,7 @@ export function Board({
       initialBoard={initialBoard}
       initialColumns={initialColumns}
       isSessionStale={sessionStatus === "stale"}
+      onAccessLost={onAccessLost}
     />
   );
 }
@@ -176,6 +185,7 @@ function BoardWorkspace({
   initialBoard,
   initialColumns,
   isSessionStale,
+  onAccessLost,
 }: BoardWorkspaceProps) {
   const router = useRouter();
   const { isMobile, isReady } = useDevice();
@@ -214,6 +224,7 @@ function BoardWorkspace({
     removeColumn,
     addTask,
     editTask,
+    refreshTaskForEdit,
     removeTask,
     moveTask,
     moveColumn,
@@ -225,6 +236,7 @@ function BoardWorkspace({
     initialBoard,
     initialColumns,
     onMutation: broadcastSync,
+    onAccessLost,
   });
 
   // Wire the refs after useBoard returns
@@ -258,7 +270,79 @@ function BoardWorkspace({
   const { viewerCount, isConnected } = usePresence(initialBoard.id);
 
   // Task modal state
-  const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const taskOriginRef = useRef<{
+    taskId: string;
+    columnId: string;
+    position: number;
+  } | null>(null);
+  const { isOnline } = useOnlineStatus();
+  const editingTask = editingTaskId
+    ? (columns
+        .flatMap((column) => column.tasks)
+        .find((task) => task.id === editingTaskId) ?? null)
+    : null;
+
+  useEffect(() => {
+    if (editingTaskId && !editingTask) setEditingTaskId(null);
+  }, [editingTask, editingTaskId]);
+
+  function openTaskDetail(task: Task, _opener: HTMLButtonElement) {
+    const originColumn = columns.find((column) =>
+      column.tasks.some((candidate) => candidate.id === task.id),
+    );
+    taskOriginRef.current = {
+      taskId: task.id,
+      columnId: originColumn?.id ?? task.column_id,
+      position:
+        originColumn?.tasks.findIndex(
+          (candidate) => candidate.id === task.id,
+        ) ?? 0,
+    };
+    setEditingTaskId(task.id);
+  }
+
+  function restoreTaskFocus() {
+    const origin = taskOriginRef.current;
+    const triggers = Array.from(
+      document.querySelectorAll<HTMLButtonElement>("[data-task-trigger]"),
+    );
+    const target = selectTaskFocusTarget(
+      origin,
+      triggers.flatMap((element) => {
+        const taskId = element.dataset.taskTrigger;
+        const columnId = element.dataset.taskColumn;
+        const position = Number(element.dataset.taskIndex);
+        return taskId && columnId && Number.isFinite(position)
+          ? [{ taskId, columnId, position }]
+          : [];
+      }),
+      Array.from(
+        document.querySelectorAll<HTMLElement>("[data-column-focus]"),
+      ).flatMap((element) =>
+        element.dataset.columnFocus ? [element.dataset.columnFocus] : [],
+      ),
+      Boolean(document.querySelector("[data-board-focus]")),
+    );
+    const focusTarget =
+      target?.kind === "task"
+        ? triggers.find(
+            (element) =>
+              element.dataset.taskTrigger === target.taskId &&
+              element.dataset.taskColumn === target.columnId,
+          )
+        : target?.kind === "column"
+          ? Array.from(
+              document.querySelectorAll<HTMLElement>("[data-column-focus]"),
+            ).find((element) => element.dataset.columnFocus === target.columnId)
+          : target?.kind === "board"
+            ? document.querySelector<HTMLElement>("[data-board-focus]")
+            : null;
+    if (focusTarget?.isConnected) {
+      focusTarget.scrollIntoView({ block: "nearest" });
+      focusTarget.focus({ preventScroll: true });
+    }
+  }
 
   // Delete board confirmation
   const [showDeleteBoard, setShowDeleteBoard] = useState(false);
@@ -320,8 +404,8 @@ function BoardWorkspace({
     if (!deletingTaskId) return;
     await removeTask(deletingTaskId);
     // Close modal if the deleted task was being edited
-    if (editingTask?.id === deletingTaskId) {
-      setEditingTask(null);
+    if (editingTaskId === deletingTaskId) {
+      setEditingTaskId(null);
     }
     setDeletingTaskId(null);
   }
@@ -367,7 +451,11 @@ function BoardWorkspace({
   }
 
   return (
-    <div className="flex h-dvh flex-col bg-surface-base">
+    <div
+      data-board-focus
+      tabIndex={-1}
+      className="flex h-dvh flex-col bg-surface-base"
+    >
       {isSessionStale && (
         <output
           className="block border-border border-b bg-surface-raised px-4 py-2 text-center text-priority-medium text-sm"
@@ -418,7 +506,7 @@ function BoardWorkspace({
           onRenameColumn={renameColumn}
           onShiftColumn={moveColumn}
           onAddTask={addTask}
-          onEditTask={(task) => setEditingTask(task)}
+          onEditTask={openTaskDetail}
           onDeleteTask={requestDeleteTask}
           onMoveTask={moveTask}
           onRequestDeleteColumn={(colId) => setDeletingColumnId(colId)}
@@ -441,7 +529,7 @@ function BoardWorkspace({
                   onShiftLeft={() => moveColumn(index, index - 1)}
                   onShiftRight={() => moveColumn(index, index + 1)}
                   onAddTask={addTask}
-                  onEditTask={(task) => setEditingTask(task)}
+                  onEditTask={openTaskDetail}
                   onDeleteTask={requestDeleteTask}
                 />
               ))}
@@ -454,9 +542,14 @@ function BoardWorkspace({
 
       {/* Task edit modal */}
       <TaskModal
+        key={editingTask?.id ?? "closed"}
         task={editingTask}
-        open={editingTask !== null}
-        onClose={() => setEditingTask(null)}
+        contextLabel={`${board?.name ?? initialBoard.name} · ${columns.find((column) => column.id === editingTask?.column_id)?.title ?? "Columna"}`}
+        open={editingTaskId !== null && editingTask !== null}
+        isOnline={isOnline}
+        onClose={() => setEditingTaskId(null)}
+        onAfterClose={restoreTaskFocus}
+        onReconcileTask={refreshTaskForEdit}
         onSave={editTask}
         onDelete={(taskId) => {
           requestDeleteTask(taskId);

@@ -3,6 +3,8 @@ import type {
   BoardState,
   CreateTaskPayload,
   Task,
+  TaskEditConflicts,
+  TaskEditResult,
   TaskPositionUpdate,
   UpdateTaskPayload,
 } from "@/lib/types";
@@ -37,6 +39,23 @@ export class TaskCaptureError extends Error {
   constructor(readonly reason: TaskCaptureErrorReason) {
     super(reason);
     this.name = "TaskCaptureError";
+  }
+}
+
+export type TaskEditErrorReason =
+  | "uncertain"
+  | "retryable"
+  | "expired_unknown"
+  | "unavailable"
+  | "rejected"
+  | "conflict"
+  | "access_denied"
+  | "stale_session";
+
+export class TaskEditError extends Error {
+  constructor(readonly reason: TaskEditErrorReason) {
+    super(reason);
+    this.name = "TaskEditError";
   }
 }
 
@@ -361,20 +380,106 @@ export async function updateTask(
   supabase: SupabaseClient,
   slug: string,
   payload: UpdateTaskPayload,
-): Promise<Task> {
-  updateTaskSchema.parse(payload);
+): Promise<TaskEditResult> {
+  try {
+    updateTaskSchema.parse(payload);
+  } catch {
+    throw new TaskEditError("rejected");
+  }
 
-  const { id, ...updates } = payload;
-  const response = await supabase
-    .rpc("edit_task_fields_p", {
-      p_slug: slug,
-      p_id: id,
-      p_updates: updates,
-    })
-    .single();
+  const response = await supabase.rpc("edit_task_fields_p", {
+    p_operation_id: payload.operation_id,
+    p_slug: slug,
+    p_id: payload.id,
+    p_updates: payload.updates,
+    p_expected_versions: payload.expected_versions,
+  });
 
-  if (response.error) handleSupabaseError(response.error);
-  return response.data as Task;
+  if (response.error) {
+    if (response.error.code === "42501") {
+      throw new TaskEditError("access_denied");
+    }
+    if (response.error.code === "22023") {
+      throw new TaskEditError("rejected");
+    }
+    if (response.error.code === "23514") {
+      throw new TaskEditError("conflict");
+    }
+    throw new TaskEditError("uncertain");
+  }
+
+  if (!isTaskEditResult(response.data)) {
+    throw new TaskEditError("uncertain");
+  }
+  if (response.data.operation_id !== payload.operation_id) {
+    throw new TaskEditError("conflict");
+  }
+  if (
+    (response.data.status === "confirmed" ||
+      response.data.status === "conflict") &&
+    response.data.task.id !== payload.id
+  ) {
+    throw new TaskEditError("conflict");
+  }
+  if (
+    response.data.status === "unavailable" ||
+    response.data.status === "retryable" ||
+    response.data.status === "expired_unknown"
+  ) {
+    throw new TaskEditError(response.data.status);
+  }
+  return response.data;
+}
+
+function isTaskEditResult(value: unknown): value is TaskEditResult {
+  if (typeof value !== "object" || value === null || !("status" in value)) {
+    return false;
+  }
+  if (!("operation_id" in value) || typeof value.operation_id !== "string") {
+    return false;
+  }
+  if (value.status === "confirmed") {
+    return "task" in value && isTaskRecord(value.task);
+  }
+  if (value.status === "conflict") {
+    return (
+      "task" in value &&
+      isTaskRecord(value.task) &&
+      "conflicts" in value &&
+      isTaskEditConflicts(value.conflicts)
+    );
+  }
+  return ["unavailable", "retryable", "expired_unknown"].includes(
+    String(value.status),
+  );
+}
+
+function isTaskRecord(value: unknown): value is Task {
+  if (typeof value !== "object" || value === null || !("id" in value)) {
+    return false;
+  }
+  if (
+    !("field_versions" in value) ||
+    typeof value.field_versions !== "object" ||
+    value.field_versions === null
+  ) {
+    return false;
+  }
+  const versions = value.field_versions as Record<string, unknown>;
+  return ["title", "description", "priority"].every(
+    (field) => typeof versions[field] === "number",
+  );
+}
+
+function isTaskEditConflicts(value: unknown): value is TaskEditConflicts {
+  if (typeof value !== "object" || value === null) return false;
+  return Object.values(value).every(
+    (conflict) =>
+      typeof conflict === "object" &&
+      conflict !== null &&
+      "current_version" in conflict &&
+      typeof conflict.current_version === "number",
+  );
 }
 
 /** Delete a task */

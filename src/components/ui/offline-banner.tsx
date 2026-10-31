@@ -5,9 +5,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { useOnlineStatus } from "@/hooks/use-online-status";
 
 /**
- * A slim, fixed-position banner that appears at the top of the viewport
- * when the user goes offline. Uses accent colors for high visibility.
- * Automatically dismisses when connectivity is restored.
+ * Aviso que aparece cuando el navegador informa que no hay conexión.
  */
 export function OfflineBanner() {
   const { isOnline } = useOnlineStatus();
@@ -26,7 +24,9 @@ export function OfflineBanner() {
         >
           <div className="flex items-center justify-center gap-2 bg-accent px-4 py-2 font-medium text-sm text-text-inverse">
             <IconWifiOff size={16} />
-            <span>You are currently offline - changes may not be saved</span>
+            <span>
+              Sin conexión. Los cambios no se guardarán automáticamente.
+            </span>
           </div>
         </motion.div>
       )}

@@ -6,6 +6,8 @@ export type TShortcut = {
 };
 
 export type Priority = "low" | "medium" | "high" | "urgent";
+export type TaskEditableField = "title" | "description" | "priority";
+export type TaskFieldVersions = Record<TaskEditableField, number>;
 
 export interface Board {
   id: string;
@@ -36,7 +38,41 @@ export interface Task {
   position: number;
   created_at: string;
   updated_at: string;
+  field_versions: TaskFieldVersions;
 }
+
+export type TaskEditableFields = Pick<Task, TaskEditableField>;
+export type TaskFieldUpdates = Partial<TaskEditableFields>;
+
+export interface TaskEditCommand {
+  id: string;
+  operation_id: string;
+  updates: TaskFieldUpdates;
+  expected_versions: Partial<TaskFieldVersions>;
+}
+
+export interface TaskEditFieldConflict {
+  current: string | null;
+  draft: string | null;
+  current_version: number;
+}
+
+export type TaskEditConflicts = Partial<
+  Record<TaskEditableField, TaskEditFieldConflict>
+>;
+
+export type TaskEditResult =
+  | { status: "confirmed"; operation_id: string; task: Task }
+  | {
+      status: "conflict";
+      operation_id: string;
+      task: Task;
+      conflicts: TaskEditConflicts;
+    }
+  | {
+      status: "unavailable" | "retryable" | "expired_unknown";
+      operation_id: string;
+    };
 
 /** Column with its nested tasks, used for client-side board state */
 export interface ColumnWithTasks extends Column {
@@ -57,13 +93,8 @@ export interface CreateTaskPayload {
   priority?: Priority;
 }
 
-/** Payload for updating a task */
-export interface UpdateTaskPayload {
-  id: string;
-  title?: string;
-  description?: string | null;
-  priority?: Priority;
-}
+/** Payload for an idempotent, version-checked task field edit. */
+export type UpdateTaskPayload = TaskEditCommand;
 
 /** Position-only change made by dragging or mobile move controls. */
 export interface TaskPositionUpdate {

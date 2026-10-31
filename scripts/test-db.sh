@@ -244,6 +244,254 @@ done
 "${psql[@]}" -f "$repo_dir/tests/db/admin_authorization.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/private_boards.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/task_capture.sql"
+"${psql[@]}" -q -f "$repo_dir/tests/db/task_field_versions.sql"
+
+# Two authenticated editors start from the same field version. A genuine
+# board-row lock releases both requests into the versioned edit command; one
+# must confirm and the other must return a conflict containing both texts.
+task_field_race_dir="$test_dir/task-field-same-field-race"
+mkdir -- "$task_field_race_dir"
+task_field_race_holder_log="$task_field_race_dir/lock-holder.log"
+task_field_race_first_log="$task_field_race_dir/actor-a.log"
+task_field_race_second_log="$task_field_race_dir/actor-b.log"
+task_field_race_board_id=$("${psql[@]}" -At -c "SELECT board_id FROM public.issue8_task_field_fixture WHERE purpose = 'same-field'")
+task_field_race_slug=$("${psql[@]}" -At -c "SELECT board_slug FROM public.issue8_task_field_fixture WHERE purpose = 'same-field'")
+task_field_race_task_id=$("${psql[@]}" -At -c "SELECT task_id FROM public.issue8_task_field_fixture WHERE purpose = 'same-field'")
+
+PGAPPNAME=openkanban_task_field_lock_holder "${psql[@]}" > "$task_field_race_holder_log" 2>&1 <<SQL &
+BEGIN;
+SELECT id FROM public.boards WHERE id = '$task_field_race_board_id' FOR UPDATE;
+SELECT pg_sleep(3);
+COMMIT;
+SQL
+task_field_race_holder_pid=$!
+task_field_race_holder_active=false
+for _ in $(seq 1 100); do
+  lock_state=$("${psql[@]}" -At -c "SELECT state FROM pg_stat_activity WHERE application_name = 'openkanban_task_field_lock_holder' AND state = 'active' AND query LIKE '%pg_sleep(3)%'")
+  if [[ "$lock_state" == active ]]; then
+    task_field_race_holder_active=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$task_field_race_holder_active" != true ]]; then
+  cat -- "$task_field_race_holder_log" >&2
+  echo 'Task-field race lock holder did not start.' >&2
+  exit 1
+fi
+
+PGAPPNAME=openkanban_task_field_actor_a "${psql[@]}" -qAtF '|' \
+  -v board_slug="$task_field_race_slug" -v task_id="$task_field_race_task_id" \
+  > "$task_field_race_first_log" 2>&1 <<'SQL' &
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true) \gset
+WITH response AS (
+  SELECT public.edit_task_fields_p(
+    'e8888888-0000-4000-8000-000000000001',
+    :'board_slug',
+    :'task_id'::uuid,
+    '{"title":"Título de Ana"}'::jsonb,
+    '{"title":1}'::jsonb
+  ) AS result
+)
+SELECT result->>'status' || '|' || coalesce(result->'task'->>'title', '') || '|' || coalesce(result->'conflicts'->'title'->>'draft', '')
+FROM response;
+COMMIT;
+SQL
+task_field_race_first_pid=$!
+
+PGAPPNAME=openkanban_task_field_actor_b "${psql[@]}" -qAtF '|' \
+  -v board_slug="$task_field_race_slug" -v task_id="$task_field_race_task_id" \
+  > "$task_field_race_second_log" 2>&1 <<'SQL' &
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000005', true) \gset
+WITH response AS (
+  SELECT public.edit_task_fields_p(
+    'e8888888-0000-4000-8000-000000000002',
+    :'board_slug',
+    :'task_id'::uuid,
+    '{"title":"Título de Bruno"}'::jsonb,
+    '{"title":1}'::jsonb
+  ) AS result
+)
+SELECT result->>'status' || '|' || coalesce(result->'task'->>'title', '') || '|' || coalesce(result->'conflicts'->'title'->>'draft', '')
+FROM response;
+COMMIT;
+SQL
+task_field_race_second_pid=$!
+
+task_field_race_both_waiting=false
+for _ in $(seq 1 100); do
+  waiting_count=$("${psql[@]}" -At -c "SELECT count(*) FROM pg_stat_activity WHERE application_name IN ('openkanban_task_field_actor_a', 'openkanban_task_field_actor_b') AND wait_event_type = 'Lock'")
+  if [[ "$waiting_count" == 2 ]]; then
+    task_field_race_both_waiting=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$task_field_race_both_waiting" != true ]]; then
+  cat -- "$task_field_race_first_log" "$task_field_race_second_log" >&2
+  echo 'Both task-field editor sessions did not wait on the board lock.' >&2
+  "${psql[@]}" -q -c "SELECT pg_cancel_backend(pid) FROM pg_stat_activity WHERE application_name = 'openkanban_task_field_lock_holder'" >/dev/null
+  wait "$task_field_race_holder_pid" || true
+  wait "$task_field_race_first_pid" || true
+  wait "$task_field_race_second_pid" || true
+  exit 1
+fi
+
+wait "$task_field_race_holder_pid" || { cat -- "$task_field_race_holder_log" >&2; exit 1; }
+wait "$task_field_race_first_pid" || { cat -- "$task_field_race_first_log" >&2; exit 1; }
+wait "$task_field_race_second_pid" || { cat -- "$task_field_race_second_log" >&2; exit 1; }
+task_field_first_result=$(grep -E '^(confirmed|conflict)\|' "$task_field_race_first_log" | tail -n 1)
+task_field_second_result=$(grep -E '^(confirmed|conflict)\|' "$task_field_race_second_log" | tail -n 1)
+if [[ -z "$task_field_first_result" || -z "$task_field_second_result" ]]; then
+  echo 'Concurrent task-field edits did not return typed results.' >&2
+  cat -- "$task_field_race_first_log" "$task_field_race_second_log" >&2
+  exit 1
+fi
+task_field_first_status=${task_field_first_result%%|*}
+task_field_second_status=${task_field_second_result%%|*}
+if [[ "$task_field_first_status" == "$task_field_second_status" ]]; then
+  echo 'Same-field concurrent edits must produce one confirmation and one reviewable conflict.' >&2
+  cat -- "$task_field_race_first_log" "$task_field_race_second_log" >&2
+  exit 1
+fi
+if [[ "$task_field_first_status" == conflict ]]; then
+  task_field_conflict_result="$task_field_first_result"
+  task_field_winner_title='Título de Bruno'
+  task_field_draft_title='Título de Ana'
+else
+  task_field_conflict_result="$task_field_second_result"
+  task_field_winner_title='Título de Ana'
+  task_field_draft_title='Título de Bruno'
+fi
+if [[ "$task_field_conflict_result" != "conflict|$task_field_winner_title|$task_field_draft_title" ]]; then
+  echo 'Conflict response did not preserve the winning server title and the other editor draft.' >&2
+  cat -- "$task_field_race_first_log" "$task_field_race_second_log" >&2
+  exit 1
+fi
+task_field_same_title=$("${psql[@]}" -At -c "SELECT title FROM public.tasks WHERE id = '$task_field_race_task_id'")
+if [[ "$task_field_same_title" != 'Título de Ana' && "$task_field_same_title" != 'Título de Bruno' ]]; then
+  echo 'Same-field conflict changed the persisted title unexpectedly.' >&2
+  exit 1
+fi
+echo 'PASS: two authenticated editors race on one field; the loser sees both versions without overwriting'
+
+# Different fields retain independent versions. The second editor starts from
+# the same task snapshot but can still save description after the title edit.
+task_field_merge_dir="$test_dir/task-field-different-fields-race"
+mkdir -- "$task_field_merge_dir"
+task_field_merge_holder_log="$task_field_merge_dir/lock-holder.log"
+task_field_merge_first_log="$task_field_merge_dir/actor-a.log"
+task_field_merge_second_log="$task_field_merge_dir/actor-b.log"
+task_field_merge_board_id=$("${psql[@]}" -At -c "SELECT board_id FROM public.issue8_task_field_fixture WHERE purpose = 'different-fields'")
+task_field_merge_slug=$("${psql[@]}" -At -c "SELECT board_slug FROM public.issue8_task_field_fixture WHERE purpose = 'different-fields'")
+task_field_merge_task_id=$("${psql[@]}" -At -c "SELECT task_id FROM public.issue8_task_field_fixture WHERE purpose = 'different-fields'")
+
+PGAPPNAME=openkanban_task_field_merge_lock_holder "${psql[@]}" > "$task_field_merge_holder_log" 2>&1 <<SQL &
+BEGIN;
+SELECT id FROM public.boards WHERE id = '$task_field_merge_board_id' FOR UPDATE;
+SELECT pg_sleep(3);
+COMMIT;
+SQL
+task_field_merge_holder_pid=$!
+task_field_merge_holder_active=false
+for _ in $(seq 1 100); do
+  lock_state=$("${psql[@]}" -At -c "SELECT state FROM pg_stat_activity WHERE application_name = 'openkanban_task_field_merge_lock_holder' AND state = 'active' AND query LIKE '%pg_sleep(3)%'")
+  if [[ "$lock_state" == active ]]; then
+    task_field_merge_holder_active=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$task_field_merge_holder_active" != true ]]; then
+  cat -- "$task_field_merge_holder_log" >&2
+  echo 'Different-field race lock holder did not start.' >&2
+  exit 1
+fi
+
+PGAPPNAME=openkanban_task_field_merge_actor_a "${psql[@]}" -qAtF '|' \
+  -v board_slug="$task_field_merge_slug" -v task_id="$task_field_merge_task_id" \
+  > "$task_field_merge_first_log" 2>&1 <<'SQL' &
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true) \gset
+WITH response AS (
+  SELECT public.edit_task_fields_p(
+    'e8888888-0000-4000-8000-000000000003',
+    :'board_slug',
+    :'task_id'::uuid,
+    '{"title":"Título independiente"}'::jsonb,
+    '{"title":1}'::jsonb
+  ) AS result
+)
+SELECT result->>'status'
+FROM response;
+COMMIT;
+SQL
+task_field_merge_first_pid=$!
+
+PGAPPNAME=openkanban_task_field_merge_actor_b "${psql[@]}" -qAtF '|' \
+  -v board_slug="$task_field_merge_slug" -v task_id="$task_field_merge_task_id" \
+  > "$task_field_merge_second_log" 2>&1 <<'SQL' &
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000005', true) \gset
+WITH response AS (
+  SELECT public.edit_task_fields_p(
+    'e8888888-0000-4000-8000-000000000004',
+    :'board_slug',
+    :'task_id'::uuid,
+    '{"description":"Descripción independiente"}'::jsonb,
+    '{"description":1}'::jsonb
+  ) AS result
+)
+SELECT result->>'status'
+FROM response;
+COMMIT;
+SQL
+task_field_merge_second_pid=$!
+
+task_field_merge_both_waiting=false
+for _ in $(seq 1 100); do
+  waiting_count=$("${psql[@]}" -At -c "SELECT count(*) FROM pg_stat_activity WHERE application_name IN ('openkanban_task_field_merge_actor_a', 'openkanban_task_field_merge_actor_b') AND wait_event_type = 'Lock'")
+  if [[ "$waiting_count" == 2 ]]; then
+    task_field_merge_both_waiting=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$task_field_merge_both_waiting" != true ]]; then
+  cat -- "$task_field_merge_first_log" "$task_field_merge_second_log" >&2
+  echo 'Both different-field editor sessions did not wait on the board lock.' >&2
+  "${psql[@]}" -q -c "SELECT pg_cancel_backend(pid) FROM pg_stat_activity WHERE application_name = 'openkanban_task_field_merge_lock_holder'" >/dev/null
+  wait "$task_field_merge_holder_pid" || true
+  wait "$task_field_merge_first_pid" || true
+  wait "$task_field_merge_second_pid" || true
+  exit 1
+fi
+wait "$task_field_merge_holder_pid" || { cat -- "$task_field_merge_holder_log" >&2; exit 1; }
+wait "$task_field_merge_first_pid" || { cat -- "$task_field_merge_first_log" >&2; exit 1; }
+wait "$task_field_merge_second_pid" || { cat -- "$task_field_merge_second_log" >&2; exit 1; }
+task_field_merge_first_result=$(grep -E '^confirmed$' "$task_field_merge_first_log" | tail -n 1)
+task_field_merge_second_result=$(grep -E '^confirmed$' "$task_field_merge_second_log" | tail -n 1)
+if [[ "$task_field_merge_first_result" != 'confirmed' \
+  || "$task_field_merge_second_result" != 'confirmed' ]]; then
+  echo 'Different-field concurrent edits did not both confirm against independent versions.' >&2
+  cat -- "$task_field_merge_first_log" "$task_field_merge_second_log" >&2
+  exit 1
+fi
+task_field_merged_values=$("${psql[@]}" -AtF '|' -c "SELECT title, description, field_versions->>'title', field_versions->>'description', field_versions->>'priority' FROM public.tasks WHERE id = '$task_field_merge_task_id'")
+if [[ "$task_field_merged_values" != 'Título independiente|Descripción independiente|2|2|1' ]]; then
+  echo 'Independent-field writes did not merge or increment only their own versions.' >&2
+  echo "$task_field_merged_values" >&2
+  exit 1
+fi
+echo 'PASS: two authenticated editors concurrently save different fields using independent versions'
+
+"${psql[@]}" -q -f "$repo_dir/tests/db/task_field_versions_assertions.sql"
 
 # A reconciliation locks the actor's active membership before looking up its
 # receipt. If revocation wins the membership row first, the resolver must wait

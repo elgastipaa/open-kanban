@@ -5,13 +5,14 @@
 
 import { Draggable } from "@hello-pangea/dnd";
 import { IconGripVertical, IconTrash } from "@tabler/icons-react";
+import type { MouseEvent } from "react";
 import { createPortal } from "react-dom";
 import type { Priority, Task } from "@/lib/types";
 
 interface TaskCardProps {
   task: Task;
   index: number;
-  onEdit: (task: Task) => void;
+  onEdit: (task: Task, opener: HTMLButtonElement) => void;
   onDelete: (taskId: string) => void;
 }
 
@@ -53,23 +54,24 @@ export function TaskCard({ task, index, onEdit, onDelete }: TaskCardProps) {
               {...provided.dragHandleProps}
               role="button"
               tabIndex={0}
-              aria-label={`Task: ${task.title}. Press Space to move, Enter to edit.`}
+              aria-label={`Task: ${task.title}. Press Space to move.`}
               onClick={(e) => e.stopPropagation()}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  onEdit(task);
-                }
-              }}
               className="flex w-10 shrink-0 cursor-grab items-center justify-center border-border border-r bg-surface-base/40 text-text-muted outline-0 transition-colors hover:bg-surface-hover hover:text-text-secondary active:cursor-grabbing sm:w-8"
             >
               <IconGripVertical size={16} />
             </div>
 
-            {/* Content Area */}
-            <div
-              className="flex min-w-0 flex-1 flex-col p-3 pl-3.5"
-              onClick={() => onEdit(task)}
+            {/* Main detail trigger */}
+            <button
+              type="button"
+              data-task-trigger={task.id}
+              data-task-column={task.column_id}
+              data-task-index={index}
+              aria-label={`Abrir tarea: ${task.title}`}
+              className="flex min-w-0 flex-1 flex-col p-3 pl-3.5 text-left outline-none focus-visible:ring-1 focus-visible:ring-accent"
+              onClick={(event: MouseEvent<HTMLButtonElement>) =>
+                onEdit(task, event.currentTarget)
+              }
             >
               {/* Header / Text */}
               <div className="pr-6">
@@ -101,6 +103,7 @@ export function TaskCard({ task, index, onEdit, onDelete }: TaskCardProps) {
               {/* Delete button - visible on hover */}
               <button
                 type="button"
+                aria-label={`Eliminar tarea: ${task.title}`}
                 onClick={(e) => {
                   e.stopPropagation();
                   onDelete(task.id);
@@ -110,7 +113,7 @@ export function TaskCard({ task, index, onEdit, onDelete }: TaskCardProps) {
               >
                 <IconTrash size={14} />
               </button>
-            </div>
+            </button>
           </div>
         );
 

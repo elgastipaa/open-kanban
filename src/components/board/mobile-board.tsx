@@ -20,7 +20,7 @@ interface MobileBoardProps {
     operationId: string,
     reconcileFirst?: boolean,
   ) => Promise<void>;
-  onEditTask: (task: Task) => void;
+  onEditTask: (task: Task, opener: HTMLButtonElement) => void;
   onDeleteTask: (taskId: string) => void;
   onMoveTask: (
     sourceColId: string,
@@ -176,6 +176,9 @@ export function MobileBoard({
               dragConstraints={{ left: 0, right: 0 }}
               dragElastic={0.15}
               onDragEnd={onDragEnd}
+              data-column-focus={activeColumn.id}
+              aria-label={`Columna ${activeColumn.title}`}
+              tabIndex={-1}
               className="absolute inset-0 flex flex-col overflow-y-auto px-4 pb-4"
             >
               {/* Task cards */}
@@ -194,6 +197,7 @@ export function MobileBoard({
                     <MobileTaskCard
                       key={task.id}
                       task={task}
+                      index={index}
                       columns={columns}
                       isFirst={index === 0}
                       isLast={index === activeColumn.tasks.length - 1}

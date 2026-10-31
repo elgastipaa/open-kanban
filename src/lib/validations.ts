@@ -61,9 +61,38 @@ export const createTaskSchema = z.object({
   priority: prioritySchema.optional(),
 });
 
-export const updateTaskSchema = z.object({
-  id: z.string().uuid(),
-  title: taskTitleSchema.optional(),
-  description: taskDescriptionSchema,
-  priority: prioritySchema.optional(),
-});
+export const updateTaskSchema = z
+  .object({
+    id: z.string().uuid(),
+    operation_id: z.uuid(),
+    updates: z
+      .object({
+        title: taskTitleSchema.optional(),
+        description: taskDescriptionSchema,
+        priority: prioritySchema.optional(),
+      })
+      .strict(),
+    expected_versions: z
+      .object({
+        title: z.number().int().positive().optional(),
+        description: z.number().int().positive().optional(),
+        priority: z.number().int().positive().optional(),
+      })
+      .strict(),
+  })
+  .strict()
+  .superRefine(({ updates, expected_versions }, context) => {
+    const updatedFields = Object.keys(updates).sort();
+    const versionedFields = Object.keys(expected_versions).sort();
+    if (
+      updatedFields.length === 0 ||
+      updatedFields.length !== versionedFields.length ||
+      updatedFields.some((field, index) => field !== versionedFields[index])
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["expected_versions"],
+        message: "Each edited field requires its own current version",
+      });
+    }
+  });

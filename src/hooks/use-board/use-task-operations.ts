@@ -7,22 +7,26 @@ import {
   getFullBoard,
   reconcileTaskCreation,
   TaskCaptureError,
+  TaskEditError,
   updateTask,
   updateTaskPositions,
 } from "@/lib/db";
+import { getSessionEpoch } from "@/lib/supabase/client";
 import type {
   Board,
   ColumnWithTasks,
   CreateTaskPayload,
   Priority,
   Task,
+  TaskEditCommand,
+  TaskEditConflicts,
+  TaskEditResult,
   TaskPositionUpdate,
 } from "@/lib/types";
 import { generateUUID } from "@/lib/utils";
 import type {
   TaskMutationIntent,
   TaskMutationLedger,
-  TaskMutationResult,
 } from "./task-mutation-ledger";
 import { showMutationError, showTaskVerificationError } from "./utils";
 
@@ -36,6 +40,7 @@ interface UseTaskOperationsProps {
   persistBoard: () => Promise<Board>;
   enqueue: (op: () => Promise<void>) => void;
   ledger: TaskMutationLedger;
+  onAccessLost: () => void;
 }
 
 type TaskCreationResolution = {
@@ -72,6 +77,7 @@ export function useTaskOperations({
   persistBoard,
   enqueue,
   ledger,
+  onAccessLost,
 }: UseTaskOperationsProps) {
   const localColumnIds = useRef(new Map<string, string>());
 
@@ -216,6 +222,7 @@ export function useTaskOperations({
           created_by: null,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
+          field_versions: { title: 1, description: 1, priority: 1 },
         };
 
         ledger.beginTaskCreation(tempTask.id);
@@ -370,52 +377,111 @@ export function useTaskOperations({
   );
 
   const editTask = useCallback(
-    (
-      taskId: string,
-      updates: {
-        title?: string;
-        description?: string | null;
-        priority?: Priority;
-      },
-    ) => {
-      const intent: TaskMutationIntent = {
-        id: generateUUID(),
-        kind: "edit",
-        taskId,
-        updates,
-      };
-      const optimisticColumns = ledger.begin(intent, columnsRef.current ?? []);
-      setColumns(optimisticColumns);
-
-      if (!isPersistedRef.current || intent.taskId.startsWith("local-")) {
-        const task = optimisticColumns
-          .flatMap((column) => column.tasks)
-          .find((candidate) => candidate.id === intent.taskId);
-        const saved: TaskMutationResult | undefined = task
-          ? { kind: "task-saved", task: { ...task, ...updates } }
-          : undefined;
-        setColumns(ledger.settle(intent.id, optimisticColumns, saved));
-        return;
+    async (command: TaskEditCommand): Promise<TaskEditResult> => {
+      if (!isPersistedRef.current || command.id.startsWith("local-")) {
+        throw new TaskEditError("unavailable");
       }
-
-      enqueue(async () => {
-        try {
-          const savedTask = await updateTask(supabase, slug, {
-            id: intent.taskId,
-            ...updates,
-          });
-          setColumns(
-            ledger.settle(intent.id, columnsRef.current ?? [], {
-              kind: "task-saved",
-              task: savedTask,
-            }),
-          );
-          onMutationRef.current?.();
-        } catch {
-          setColumns(ledger.settle(intent.id, columnsRef.current ?? []));
-          showMutationError("update task");
+      const sessionEpoch = getSessionEpoch();
+      try {
+        const result = await updateTask(supabase, slug, command);
+        if (sessionEpoch !== getSessionEpoch()) {
+          throw new TaskEditError("stale_session");
         }
-      });
+        if (result.status !== "confirmed" && result.status !== "conflict") {
+          throw new TaskEditError(result.status);
+        }
+
+        const currentColumns = columnsRef.current ?? [];
+        let authoritativeColumns = currentColumns;
+        if (
+          !currentColumns.some((column) => column.id === result.task.column_id)
+        ) {
+          const latestBoard = await getFullBoard(supabase, slug);
+          if (sessionEpoch !== getSessionEpoch()) {
+            throw new TaskEditError("stale_session");
+          }
+          if (!latestBoard) throw new TaskEditError("unavailable");
+          authoritativeColumns = latestBoard.columns;
+        }
+        const nextColumns = authoritativeColumns.map((column) => ({
+          ...column,
+          tasks: [
+            ...column.tasks.filter((task) => task.id !== result.task.id),
+            ...(column.id === result.task.column_id ? [result.task] : []),
+          ],
+        }));
+        setColumns(ledger.sync(nextColumns));
+        if (result.status === "confirmed") onMutationRef.current?.();
+        return result;
+      } catch (error) {
+        if (
+          error instanceof TaskEditError &&
+          (error.reason === "expired_unknown" || error.reason === "conflict")
+        ) {
+          try {
+            const latestBoard = await getFullBoard(supabase, slug);
+            if (sessionEpoch !== getSessionEpoch()) {
+              onAccessLost();
+              throw new TaskEditError("stale_session");
+            }
+            if (!latestBoard) {
+              onAccessLost();
+              throw new TaskEditError("stale_session");
+            }
+            const latestTask = latestBoard.columns
+              .flatMap((column) => column.tasks)
+              .find((candidate) => candidate.id === command.id);
+            if (!latestTask) throw new TaskEditError("unavailable");
+
+            setColumns(ledger.sync(latestBoard.columns));
+            const conflicts: TaskEditConflicts = {};
+            if (command.updates.title !== undefined) {
+              conflicts.title = {
+                current: latestTask.title,
+                draft: command.updates.title,
+                current_version: latestTask.field_versions.title,
+              };
+            }
+            if (Object.hasOwn(command.updates, "description")) {
+              conflicts.description = {
+                current: latestTask.description,
+                draft: command.updates.description ?? null,
+                current_version: latestTask.field_versions.description,
+              };
+            }
+            if (command.updates.priority !== undefined) {
+              conflicts.priority = {
+                current: latestTask.priority,
+                draft: command.updates.priority,
+                current_version: latestTask.field_versions.priority,
+              };
+            }
+            return {
+              status: "conflict",
+              operation_id: command.operation_id,
+              task: latestTask,
+              conflicts,
+            };
+          } catch (reconcileError) {
+            if (
+              reconcileError instanceof TaskEditError &&
+              (reconcileError.reason === "access_denied" ||
+                reconcileError.reason === "stale_session")
+            ) {
+              onAccessLost();
+              throw reconcileError;
+            }
+            throw error;
+          }
+        }
+        if (
+          error instanceof TaskEditError &&
+          (error.reason === "access_denied" || error.reason === "stale_session")
+        ) {
+          onAccessLost();
+        }
+        throw error;
+      }
     },
     [
       supabase,
@@ -424,9 +490,31 @@ export function useTaskOperations({
       setColumns,
       isPersistedRef,
       ledger,
-      enqueue,
       onMutationRef,
+      onAccessLost,
     ],
+  );
+
+  const refreshTaskForEdit = useCallback(
+    async (taskId: string): Promise<Task | null> => {
+      const sessionEpoch = getSessionEpoch();
+      const latestBoard = await getFullBoard(supabase, slug);
+      if (sessionEpoch !== getSessionEpoch()) {
+        onAccessLost();
+        throw new TaskEditError("stale_session");
+      }
+      if (!latestBoard) {
+        onAccessLost();
+        return null;
+      }
+      setColumns(ledger.sync(latestBoard.columns));
+      return (
+        latestBoard.columns
+          .flatMap((column) => column.tasks)
+          .find((candidate) => candidate.id === taskId) ?? null
+      );
+    },
+    [supabase, slug, setColumns, ledger, onAccessLost],
   );
 
   const removeTask = useCallback(
@@ -625,6 +713,7 @@ export function useTaskOperations({
   return {
     addTask,
     editTask,
+    refreshTaskForEdit,
     removeTask,
     moveTask,
   };

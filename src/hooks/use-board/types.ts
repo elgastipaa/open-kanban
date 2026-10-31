@@ -6,4 +6,6 @@ export interface UseBoardOptions {
   initialColumns: ColumnWithTasks[];
   /** Called after every DB write - used to trigger broadcast sync */
   onMutation?: () => void;
+  /** Called when a board command confirms that the current user lost access. */
+  onAccessLost?: () => void;
 }

@@ -9,6 +9,7 @@ import {
 import type { ExportData } from "@/lib/export";
 import { createClient } from "@/lib/supabase/client";
 import type { Board, ColumnWithTasks, Priority } from "@/lib/types";
+import { generateUUID } from "@/lib/utils";
 import {
   columnTitleSchema,
   prioritySchema,
@@ -115,12 +116,11 @@ export async function importBoard(
 
     const tasks = [];
     for (const taskData of colData.tasks) {
-      const task = await createTask(supabase, slug, {
+      const task = await createTask(supabase, slug, generateUUID(), board.id, {
         column_id: col.id,
         title: taskData.title,
         description: taskData.description ?? undefined,
         priority: (taskData.priority as Priority) ?? "medium",
-        position: taskData.position,
       });
       tasks.push(task);
     }

@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
+  BoardState,
   CreateTaskPayload,
   Task,
   TaskPositionUpdate,
@@ -7,6 +8,209 @@ import type {
 } from "@/lib/types";
 import { createTaskSchema, updateTaskSchema } from "@/lib/validations";
 import { handleSupabaseError } from "./errors";
+
+export type TaskCaptureStatus =
+  | "confirmed"
+  | "not_found"
+  | "expired_unknown"
+  | "unavailable";
+
+interface TaskCaptureResult {
+  status: TaskCaptureStatus;
+  operation_id?: string;
+  board_id?: string;
+  column_id?: string;
+  task_id?: string;
+  task?: Task;
+}
+
+export type TaskCaptureErrorReason =
+  | "uncertain"
+  | "expired_unknown"
+  | "unavailable"
+  | "rejected"
+  | "conflict";
+
+export class TaskCaptureError extends Error {
+  constructor(readonly reason: TaskCaptureErrorReason) {
+    super(reason);
+    this.name = "TaskCaptureError";
+  }
+}
+
+function isTaskCaptureResult(value: unknown): value is TaskCaptureResult {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "status" in value &&
+    ["confirmed", "not_found", "expired_unknown", "unavailable"].includes(
+      String(value.status),
+    )
+  );
+}
+
+function throwForResult(result: TaskCaptureResult): never {
+  if (result.status === "expired_unknown") {
+    throw new TaskCaptureError("expired_unknown");
+  }
+  if (result.status === "unavailable") {
+    throw new TaskCaptureError("unavailable");
+  }
+  throw new TaskCaptureError("uncertain");
+}
+
+function taskFromResult(
+  result: TaskCaptureResult,
+  operationId: string,
+  boardId: string,
+): Task {
+  if (result.status !== "confirmed" || !result.task) {
+    throwForResult(result);
+  }
+  if (
+    result.operation_id !== operationId ||
+    result.board_id !== boardId ||
+    result.task.id !== result.task_id
+  ) {
+    throw new TaskCaptureError("conflict");
+  }
+  return result.task;
+}
+
+async function queryTaskCreationResult(
+  supabase: SupabaseClient,
+  operationId: string,
+): Promise<TaskCaptureResult> {
+  const { data, error } = await supabase.rpc("get_task_creation_result_p", {
+    p_operation_id: operationId,
+  });
+  if (error || !isTaskCaptureResult(data)) {
+    throw new TaskCaptureError("uncertain");
+  }
+  return data;
+}
+
+async function resolveExpiredTaskCreation(
+  supabase: SupabaseClient,
+  slug: string,
+  operationId: string,
+  boardId: string,
+): Promise<Task> {
+  const result = await queryTaskCreationResult(supabase, operationId);
+  if (result.status !== "expired_unknown") throwForResult(result);
+  if (
+    result.operation_id !== operationId ||
+    result.board_id !== boardId ||
+    !result.task_id
+  ) {
+    throw new TaskCaptureError("conflict");
+  }
+
+  const response = await supabase
+    .rpc("get_full_board_p", { p_slug: slug })
+    .maybeSingle();
+  if (response.error || !response.data) {
+    throw new TaskCaptureError("expired_unknown");
+  }
+
+  const boardState = response.data as BoardState;
+  if (boardState.board?.id !== boardId) {
+    throw new TaskCaptureError("unavailable");
+  }
+  const task = boardState.columns
+    .flatMap((column) => column.tasks)
+    .find((candidate) => candidate.id === result.task_id);
+  if (!task) {
+    throw new TaskCaptureError("expired_unknown");
+  }
+  return task;
+}
+
+async function taskAfterResult(
+  supabase: SupabaseClient,
+  slug: string,
+  operationId: string,
+  boardId: string,
+  result: TaskCaptureResult,
+): Promise<Task> {
+  if (result.status === "expired_unknown") {
+    return resolveExpiredTaskCreation(supabase, slug, operationId, boardId);
+  }
+  return taskFromResult(result, operationId, boardId);
+}
+
+function definiteFailure(error: unknown): TaskCaptureError | null {
+  const code =
+    typeof error === "object" && error !== null && "code" in error
+      ? String(error.code)
+      : "";
+  if (code === "42501") return new TaskCaptureError("unavailable");
+  if (code === "23514") return new TaskCaptureError("conflict");
+  if (code === "22023") return new TaskCaptureError("rejected");
+  return null;
+}
+
+async function invokeCreateTask(
+  supabase: SupabaseClient,
+  operationId: string,
+  boardId: string,
+  payload: CreateTaskPayload,
+): Promise<TaskCaptureResult> {
+  const { data, error } = await supabase.rpc("create_task_p", {
+    p_operation_id: operationId,
+    p_board_id: boardId,
+    p_column_id: payload.column_id,
+    p_title: payload.title,
+    p_description: payload.description ?? null,
+    p_priority: payload.priority ?? "medium",
+  });
+  if (error) throw error;
+  if (!isTaskCaptureResult(data)) throw new TaskCaptureError("uncertain");
+  return data;
+}
+
+async function reconcileAfterCreateFailure(
+  supabase: SupabaseClient,
+  slug: string,
+  operationId: string,
+  boardId: string,
+  payload: CreateTaskPayload,
+): Promise<Task> {
+  const priorResult = await queryTaskCreationResult(supabase, operationId);
+  if (priorResult.status !== "not_found") {
+    return taskAfterResult(supabase, slug, operationId, boardId, priorResult);
+  }
+
+  // The server confirmed there is no receipt, so retry exactly once with the
+  // same operation id and payload. Never mint a replacement intent here.
+  try {
+    const retryResult = await invokeCreateTask(
+      supabase,
+      operationId,
+      boardId,
+      payload,
+    );
+    if (retryResult.status === "not_found") {
+      throw new TaskCaptureError("uncertain");
+    }
+    return taskAfterResult(supabase, slug, operationId, boardId, retryResult);
+  } catch (retryError) {
+    if (
+      retryError instanceof TaskCaptureError &&
+      retryError.reason !== "uncertain"
+    ) {
+      throw retryError;
+    }
+    const definite = definiteFailure(retryError);
+    if (definite) throw definite;
+
+    const finalResult = await queryTaskCreationResult(supabase, operationId);
+    if (finalResult.status === "not_found") {
+      throw new TaskCaptureError("uncertain");
+    }
+    return taskAfterResult(supabase, slug, operationId, boardId, finalResult);
+  }
+}
 
 /** Fetch all tasks for a board (via its columns), ordered by position */
 export async function getTasksByBoard(
@@ -25,23 +229,67 @@ export async function getTasksByBoard(
 export async function createTask(
   supabase: SupabaseClient,
   slug: string,
+  operationId: string,
+  boardId: string,
   payload: CreateTaskPayload,
 ): Promise<Task> {
-  createTaskSchema.parse(payload);
+  let parsed: CreateTaskPayload;
+  try {
+    parsed = createTaskSchema.parse(payload);
+  } catch {
+    throw new TaskCaptureError("rejected");
+  }
+  let result: TaskCaptureResult;
+  try {
+    result = await invokeCreateTask(supabase, operationId, boardId, parsed);
+  } catch (error) {
+    const definite = definiteFailure(error);
+    if (definite) throw definite;
+    return reconcileAfterCreateFailure(
+      supabase,
+      slug,
+      operationId,
+      boardId,
+      parsed,
+    );
+  }
+  if (result.status === "not_found") {
+    return reconcileAfterCreateFailure(
+      supabase,
+      slug,
+      operationId,
+      boardId,
+      parsed,
+    );
+  }
+  return taskAfterResult(supabase, slug, operationId, boardId, result);
+}
 
-  const response = await supabase
-    .rpc("create_task_p", {
-      p_slug: slug,
-      p_column_id: payload.column_id,
-      p_title: payload.title,
-      p_description: payload.description ?? null,
-      p_priority: payload.priority ?? "medium",
-      p_position: payload.position,
-    })
-    .single();
-
-  if (response.error) handleSupabaseError(response.error);
-  return response.data as Task;
+/** Query a prior explicit capture, retrying only after a not-found receipt. */
+export async function reconcileTaskCreation(
+  supabase: SupabaseClient,
+  slug: string,
+  operationId: string,
+  boardId: string,
+  payload: CreateTaskPayload,
+): Promise<Task> {
+  let parsed: CreateTaskPayload;
+  try {
+    parsed = createTaskSchema.parse(payload);
+  } catch {
+    throw new TaskCaptureError("rejected");
+  }
+  const result = await queryTaskCreationResult(supabase, operationId);
+  if (result.status === "not_found") {
+    return reconcileAfterCreateFailure(
+      supabase,
+      slug,
+      operationId,
+      boardId,
+      parsed,
+    );
+  }
+  return taskAfterResult(supabase, slug, operationId, boardId, result);
 }
 
 /** Update only explicitly supplied task fields; null clears description. */

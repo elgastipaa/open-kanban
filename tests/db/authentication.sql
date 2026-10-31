@@ -45,7 +45,12 @@ BEGIN
   PERFORM set_config('test.admin_board_id', v_board_id::text, false);
   PERFORM set_config('test.admin_board_slug', v_board_slug, false);
   SELECT id INTO v_column_id FROM public.create_column_p(v_board_slug, v_board_id, 'Admin private', 0);
-  PERFORM public.create_task_p(v_board_slug, v_column_id, 'Admin-owned content');
+  PERFORM public.create_task_p(
+    'f7000000-0000-4000-8000-000000000001',
+    v_board_id,
+    v_column_id,
+    'Admin-owned content'
+  );
   SELECT count(*) INTO v_admin_count FROM public.list_my_boards();
   IF v_admin_count <> 1 THEN
     RAISE EXCEPTION 'Owner dashboard did not list exactly its administrator board';
@@ -142,7 +147,12 @@ BEGIN
   );
   PERFORM set_config('test.enabled_board_slug', v_board_slug, false);
   SELECT id INTO v_column_id FROM public.create_column_p(v_board_slug, v_board_id, 'Enabled private', 0);
-  PERFORM public.create_task_p(v_board_slug, v_column_id, 'Enabled content');
+  PERFORM public.create_task_p(
+    'f7000000-0000-4000-8000-000000000002',
+    v_board_id,
+    v_column_id,
+    'Enabled content'
+  );
   IF public.get_full_board_p(v_board_slug)->'columns'->0->'tasks'->0->>'title'
     IS DISTINCT FROM 'Enabled content' THEN
     RAISE EXCEPTION 'Enabled identity cannot read its own board';
@@ -184,7 +194,12 @@ BEGIN
     'Enabled delete board', 'UTC', 'bbbbbbbb-0000-4000-8000-000000000003'
   );
   SELECT id INTO v_delete_column_id FROM public.create_column_p(v_delete_board_slug, v_delete_board_id, 'To delete', 0);
-  PERFORM public.create_task_p(v_delete_board_slug, v_delete_column_id, 'Cascade fixture');
+  PERFORM public.create_task_p(
+    'f7000000-0000-4000-8000-000000000003',
+    v_delete_board_id,
+    v_delete_column_id,
+    'Cascade fixture'
+  );
   PERFORM public.delete_board_p(v_delete_board_slug, v_delete_board_id);
   IF EXISTS (SELECT 1 FROM public.boards WHERE id = v_delete_board_id) THEN
     RAISE EXCEPTION 'An owner could not delete a board and its children';

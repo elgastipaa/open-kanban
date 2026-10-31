@@ -59,7 +59,6 @@ export const createTaskSchema = z.object({
   title: taskTitleSchema,
   description: taskDescriptionSchema,
   priority: prioritySchema.optional(),
-  position: z.number().int().nonnegative(),
 });
 
 export const updateTaskSchema = z.object({

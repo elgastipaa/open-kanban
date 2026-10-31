@@ -29,6 +29,7 @@ export interface Column {
 export interface Task {
   id: string;
   column_id: string;
+  created_by?: string | null;
   title: string;
   description: string | null;
   priority: Priority;
@@ -52,9 +53,8 @@ export interface BoardState {
 export interface CreateTaskPayload {
   column_id: string;
   title: string;
-  description?: string;
+  description?: string | null;
   priority?: Priority;
-  position: number;
 }
 
 /** Payload for updating a task */

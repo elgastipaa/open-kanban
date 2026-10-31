@@ -5,6 +5,8 @@ import {
   createTask,
   deleteTask as dbDeleteTask,
   getFullBoard,
+  reconcileTaskCreation,
+  TaskCaptureError,
   updateTask,
   updateTaskPositions,
 } from "@/lib/db";
@@ -187,137 +189,170 @@ export function useTaskOperations({
   );
 
   const addTask = useCallback(
-    (columnId: string, title: string, priority: Priority = "medium") => {
-      const currentCols = columnsRef.current ?? [];
-      const col = currentCols.find((c) => c.id === columnId);
-      const position = col ? col.tasks.length : 0;
+    (
+      columnId: string,
+      title: string,
+      operationId: string,
+      reconcileFirst = false,
+      priority: Priority = "medium",
+    ): Promise<void> => {
+      return new Promise((resolve, reject) => {
+        const currentCols = columnsRef.current ?? [];
+        const col = currentCols.find((c) => c.id === columnId);
+        if (!col) {
+          reject(new TaskCaptureError("unavailable"));
+          return;
+        }
+        const position = col.tasks.length;
 
-      // Optimistic: add a temp task immediately
-      const tempTask: Task = {
-        id: `local-${generateUUID()}`,
-        column_id: columnId,
-        title,
-        description: null,
-        priority,
-        position,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      };
+        // Optimistic state is local only; the server assigns the real position.
+        const tempTask: Task = {
+          id: `local-${generateUUID()}`,
+          column_id: columnId,
+          title,
+          description: null,
+          priority,
+          position,
+          created_by: null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
 
-      ledger.beginTaskCreation(tempTask.id);
-      setColumns((prev) =>
-        prev.map((c) =>
-          c.id === columnId ? { ...c, tasks: [...c.tasks, tempTask] } : c,
-        ),
-      );
+        ledger.beginTaskCreation(tempTask.id);
+        setColumns((prev) =>
+          prev.map((candidate) =>
+            candidate.id === columnId
+              ? { ...candidate, tasks: [...candidate.tasks, tempTask] }
+              : candidate,
+          ),
+        );
 
-      enqueue(async () => {
-        try {
-          // Ensure board exists
-          const board = await persistBoard();
-          let targetColumnId = localColumnIds.current.get(columnId) ?? columnId;
+        enqueue(async () => {
+          try {
+            // Ensure board exists
+            const board = await persistBoard();
+            let targetColumnId =
+              localColumnIds.current.get(columnId) ?? columnId;
 
-          // If the target column is still unpersisted local-, create it first
-          if (targetColumnId.startsWith("local-")) {
-            const currentSnapshot = columnsRef.current ?? [];
-            const targetCol = currentSnapshot.find(
-              (column) => column.id === targetColumnId,
-            );
-            if (targetCol) {
-              const newCol = await createColumn(supabase, slug, {
-                board_id: board.id,
-                title: targetCol.title,
-                position: targetCol.position,
-              });
-              const oldColumnId = targetColumnId;
-              localColumnIds.current.set(columnId, newCol.id);
-              localColumnIds.current.set(oldColumnId, newCol.id);
-              targetColumnId = newCol.id;
-              setColumns(
-                ledger.replaceColumnId(
-                  oldColumnId,
-                  newCol.id,
-                  columnsRef.current ?? [],
-                ),
+            // If the target column is still unpersisted local-, create it first
+            if (targetColumnId.startsWith("local-")) {
+              const currentSnapshot = columnsRef.current ?? [];
+              const targetCol = currentSnapshot.find(
+                (column) => column.id === targetColumnId,
               );
-            }
-          }
-
-          const payload: CreateTaskPayload = {
-            column_id: targetColumnId,
-            title,
-            priority,
-            position,
-          };
-          const dbTask = await createTask(supabase, slug, payload);
-
-          const current = columnsRef.current ?? [];
-          let creation = ledger.completeTaskCreation(
-            tempTask.id,
-            dbTask,
-            current,
-          );
-          if (creation.needsVerification) {
-            const retryVerification = () => {
-              enqueue(async () => {
-                if (ledger.pendingTaskCreationId(tempTask.id) !== dbTask.id) {
-                  return;
-                }
-                try {
-                  const resolution = await verifyTaskCreation(
-                    tempTask.id,
-                    dbTask,
+              if (targetCol) {
+                const newCol = await createColumn(supabase, slug, {
+                  board_id: board.id,
+                  title: targetCol.title,
+                  position: targetCol.position,
+                });
+                const oldColumnId = targetColumnId;
+                localColumnIds.current.set(columnId, newCol.id);
+                localColumnIds.current.set(oldColumnId, newCol.id);
+                targetColumnId = newCol.id;
+                setColumns(
+                  ledger.replaceColumnId(
+                    oldColumnId,
+                    newCol.id,
                     columnsRef.current ?? [],
-                  );
-                  if (resolution?.deleteRequested) {
-                    await deleteCreatedTask(
+                  ),
+                );
+              }
+            }
+
+            const payload: CreateTaskPayload = {
+              column_id: targetColumnId,
+              title,
+              priority,
+            };
+            const dbTask = reconcileFirst
+              ? await reconcileTaskCreation(
+                  supabase,
+                  slug,
+                  operationId,
+                  board.id,
+                  payload,
+                )
+              : await createTask(
+                  supabase,
+                  slug,
+                  operationId,
+                  board.id,
+                  payload,
+                );
+
+            const current = columnsRef.current ?? [];
+            let creation = ledger.completeTaskCreation(
+              tempTask.id,
+              dbTask,
+              current,
+            );
+            if (creation.needsVerification) {
+              const retryVerification = () => {
+                enqueue(async () => {
+                  if (ledger.pendingTaskCreationId(tempTask.id) !== dbTask.id) {
+                    return;
+                  }
+                  try {
+                    const resolution = await verifyTaskCreation(
                       tempTask.id,
                       dbTask,
-                      resolution.columns,
+                      columnsRef.current ?? [],
                     );
-                  } else if (resolution) {
-                    onMutationRef.current?.();
+                    if (resolution?.deleteRequested) {
+                      await deleteCreatedTask(
+                        tempTask.id,
+                        dbTask,
+                        resolution.columns,
+                      );
+                    } else if (resolution) {
+                      onMutationRef.current?.();
+                    }
+                  } catch {
+                    showTaskVerificationError(retryVerification);
                   }
-                } catch {
-                  showTaskVerificationError(retryVerification);
+                });
+              };
+              try {
+                const resolution = await verifyTaskCreation(
+                  tempTask.id,
+                  dbTask,
+                  current,
+                );
+                if (!resolution) {
+                  resolve();
+                  return;
                 }
-              });
-            };
-            try {
-              const resolution = await verifyTaskCreation(
-                tempTask.id,
-                dbTask,
-                current,
-              );
-              if (!resolution) return;
-              creation = resolution;
-            } catch {
-              showTaskVerificationError(retryVerification);
+                creation = resolution;
+              } catch {
+                showTaskVerificationError(retryVerification);
+                throw new TaskCaptureError("uncertain");
+              }
+            }
+            if (creation.deleteRequested) {
+              await deleteCreatedTask(tempTask.id, dbTask, creation.columns);
+              resolve();
               return;
             }
-          }
-          if (creation.deleteRequested) {
-            await deleteCreatedTask(tempTask.id, dbTask, creation.columns);
-            return;
-          }
 
-          setColumns(creation.columns);
-          onMutationRef.current?.();
-        } catch {
-          // Rollback task addition
-          const current = columnsRef.current ?? [];
-          const creationWasDeleted = ledger.failTaskCreation(tempTask.id);
-          setColumns(
-            ledger.forgetTask(
-              tempTask.id,
-              current.map((column) => ({
-                ...column,
-                tasks: column.tasks.filter((task) => task.id !== tempTask.id),
-              })),
-            ),
-          );
-          if (!creationWasDeleted) showMutationError("add task");
-        }
+            setColumns(creation.columns);
+            onMutationRef.current?.();
+            resolve();
+          } catch (error) {
+            const current = columnsRef.current ?? [];
+            ledger.failTaskCreation(tempTask.id);
+            setColumns(
+              ledger.forgetTask(
+                tempTask.id,
+                current.map((column) => ({
+                  ...column,
+                  tasks: column.tasks.filter((task) => task.id !== tempTask.id),
+                })),
+              ),
+            );
+            reject(error);
+          }
+        });
       });
     },
     [

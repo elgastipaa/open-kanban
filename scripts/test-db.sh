@@ -243,6 +243,135 @@ done
 "${psql[@]}" -f "$repo_dir/tests/db/authentication.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/admin_authorization.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/private_boards.sql"
+"${psql[@]}" -f "$repo_dir/tests/db/task_capture.sql"
+
+# Hold the destination board row so two authenticated sessions submit the same
+# explicit task-capture intent concurrently and must both resolve one receipt.
+task_capture_race_dir="$test_dir/task-capture-race"
+mkdir -- "$task_capture_race_dir"
+task_capture_race_fixture="$task_capture_race_dir/fixture.log"
+task_capture_race_lock_log="$task_capture_race_dir/lock-holder.log"
+task_capture_race_first_log="$task_capture_race_dir/first.log"
+task_capture_race_second_log="$task_capture_race_dir/second.log"
+"${psql[@]}" -q <<'SQL'
+CREATE TABLE public.issue7_task_capture_race_fixture (
+  board_id uuid NOT NULL,
+  column_id uuid NOT NULL,
+  operation_id uuid NOT NULL
+);
+GRANT SELECT, INSERT ON public.issue7_task_capture_race_fixture TO authenticated;
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);
+DO $$
+DECLARE
+  board record;
+  column_id uuid;
+BEGIN
+  SELECT * INTO board FROM public.create_board_p(
+    'Issue 7 concurrent capture',
+    'UTC',
+    'f7777777-0000-4000-8000-000000000010'
+  );
+  SELECT id INTO column_id
+  FROM public.create_column_p(board.slug, board.id, 'Concurrent', 0);
+  INSERT INTO public.issue7_task_capture_race_fixture(board_id, column_id, operation_id)
+  VALUES (board.id, column_id, 'a7777777-0000-4000-8000-000000000010');
+END;
+$$;
+COMMIT;
+SQL
+task_capture_race_board_id=$("${psql[@]}" -At -c "SELECT board_id FROM public.issue7_task_capture_race_fixture")
+task_capture_race_column_id=$("${psql[@]}" -At -c "SELECT column_id FROM public.issue7_task_capture_race_fixture")
+task_capture_race_operation_id=$("${psql[@]}" -At -c "SELECT operation_id FROM public.issue7_task_capture_race_fixture")
+
+PGAPPNAME=openkanban_task_capture_lock_holder "${psql[@]}" > "$task_capture_race_lock_log" 2>&1 <<SQL &
+BEGIN;
+SELECT id FROM public.boards WHERE id = '$task_capture_race_board_id' FOR UPDATE;
+SELECT pg_sleep(3);
+COMMIT;
+SQL
+task_capture_race_lock_pid=$!
+task_capture_race_lock_active=false
+for _ in $(seq 1 100); do
+  lock_state=$("${psql[@]}" -At -c "SELECT state FROM pg_stat_activity WHERE application_name = 'openkanban_task_capture_lock_holder' AND state = 'active' AND query LIKE '%pg_sleep(3)%'")
+  if [[ "$lock_state" == active ]]; then
+    task_capture_race_lock_active=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$task_capture_race_lock_active" != true ]]; then
+  cat -- "$task_capture_race_lock_log" >&2
+  echo 'Task capture race lock holder did not start.' >&2
+  exit 1
+fi
+
+for attempt in first second; do
+  if [[ "$attempt" == first ]]; then
+    target_log="$task_capture_race_first_log"
+  else
+    target_log="$task_capture_race_second_log"
+  fi
+  PGAPPNAME="openkanban_task_capture_$attempt" "${psql[@]}" -At \
+    -v board_id="$task_capture_race_board_id" \
+    -v column_id="$task_capture_race_column_id" \
+    -v operation_id="$task_capture_race_operation_id" > "$target_log" 2>&1 <<'SQL' &
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true) \gset
+SELECT public.create_task_p(
+  :'operation_id'::uuid,
+  :'board_id'::uuid,
+  :'column_id'::uuid,
+  'Una intención concurrente'
+)->'task'->>'id';
+COMMIT;
+SQL
+  if [[ "$attempt" == first ]]; then
+    task_capture_race_first_pid=$!
+  else
+    task_capture_race_second_pid=$!
+  fi
+done
+
+task_capture_race_both_waiting=false
+for _ in $(seq 1 100); do
+  waiting_count=$("${psql[@]}" -At -c "SELECT count(*) FROM pg_stat_activity WHERE application_name IN ('openkanban_task_capture_first', 'openkanban_task_capture_second') AND wait_event_type = 'Lock'")
+  if [[ "$waiting_count" == 2 ]]; then
+    task_capture_race_both_waiting=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$task_capture_race_both_waiting" != true ]]; then
+  cat -- "$task_capture_race_first_log" "$task_capture_race_second_log" >&2
+  echo 'Both task capture sessions did not wait on the board lock.' >&2
+  "${psql[@]}" -q -c "SELECT pg_cancel_backend(pid) FROM pg_stat_activity WHERE application_name = 'openkanban_task_capture_lock_holder'" >/dev/null
+  wait "$task_capture_race_lock_pid" || true
+  wait "$task_capture_race_first_pid" || true
+  wait "$task_capture_race_second_pid" || true
+  exit 1
+fi
+
+wait "$task_capture_race_lock_pid" || { cat -- "$task_capture_race_lock_log" >&2; exit 1; }
+wait "$task_capture_race_first_pid" || { cat -- "$task_capture_race_first_log" >&2; exit 1; }
+wait "$task_capture_race_second_pid" || { cat -- "$task_capture_race_second_log" >&2; exit 1; }
+task_capture_uuid_pattern='[[:xdigit:]]{8}-([[:xdigit:]]{4}-){3}[[:xdigit:]]{12}'
+task_capture_first_id=$(grep -Eo "$task_capture_uuid_pattern" "$task_capture_race_first_log" | tail -n 1)
+task_capture_second_id=$(grep -Eo "$task_capture_uuid_pattern" "$task_capture_race_second_log" | tail -n 1)
+task_capture_receipt_count=$("${psql[@]}" -At \
+  -c "SELECT count(*) FROM public.task_capture_receipts WHERE actor_id = '40000000-0000-4000-8000-000000000002' AND operation_id = '$task_capture_race_operation_id'::uuid")
+task_capture_task_count=$("${psql[@]}" -At \
+  -c "SELECT count(*) FROM public.tasks WHERE id = (SELECT task_id FROM public.task_capture_receipts WHERE actor_id = '40000000-0000-4000-8000-000000000002' AND operation_id = '$task_capture_race_operation_id'::uuid)")
+if [[ -z "$task_capture_first_id" || "$task_capture_first_id" != "$task_capture_second_id" \
+  || "$task_capture_receipt_count" != 1 || "$task_capture_task_count" != 1 ]]; then
+  echo 'Concurrent capture sessions did not resolve to the one committed task.' >&2
+  cat -- "$task_capture_race_first_log" "$task_capture_race_second_log" >&2
+  exit 1
+fi
+"${psql[@]}" -q -c 'DROP TABLE public.issue7_task_capture_race_fixture'
+echo 'PASS: two authenticated concurrent task captures with one operation id produce one task'
 
 # Keep two authenticated database sessions open at once: the owner can read the
 # board while an unrelated global admin is denied its content and listing.

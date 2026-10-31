@@ -14,7 +14,12 @@ interface MobileBoardProps {
   onAddColumn: (title: string) => void;
   onRenameColumn: (columnId: string, title: string) => void;
   onShiftColumn: (fromIndex: number, toIndex: number) => void;
-  onAddTask: (columnId: string, title: string) => void;
+  onAddTask: (
+    columnId: string,
+    title: string,
+    operationId: string,
+    reconcileFirst?: boolean,
+  ) => Promise<void>;
   onEditTask: (task: Task) => void;
   onDeleteTask: (taskId: string) => void;
   onMoveTask: (
@@ -142,7 +147,12 @@ export function MobileBoard({
           ) : null}
 
           <div className="mb-3 shrink-0 px-4">
-            <AddTask onAdd={(title) => onAddTask(activeColumn.id, title)} />
+            <AddTask
+              columnId={activeColumn.id}
+              onAdd={(title, operationId, reconcileFirst, targetColumnId) =>
+                onAddTask(targetColumnId, title, operationId, reconcileFirst)
+              }
+            />
           </div>
         </div>
       )}

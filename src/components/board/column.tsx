@@ -28,7 +28,12 @@ interface ColumnProps {
   onDeleteColumn: (columnId: string) => void;
   onShiftLeft?: () => void;
   onShiftRight?: () => void;
-  onAddTask: (columnId: string, title: string) => void;
+  onAddTask: (
+    columnId: string,
+    title: string,
+    operationId: string,
+    reconcileFirst?: boolean,
+  ) => Promise<void>;
   onEditTask: (task: Task) => void;
   onDeleteTask: (taskId: string) => void;
 }
@@ -142,7 +147,12 @@ export function Column({
       </ScrollArea>
 
       <div className="mt-1 pt-1">
-        <AddTask onAdd={(title) => onAddTask(column.id, title)} />
+        <AddTask
+          columnId={column.id}
+          onAdd={(title, operationId, reconcileFirst, targetColumnId) =>
+            onAddTask(targetColumnId, title, operationId, reconcileFirst)
+          }
+        />
       </div>
     </motion.div>
   );

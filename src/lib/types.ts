@@ -40,6 +40,9 @@ export interface Task {
   created_at: string;
   updated_at: string;
   field_versions: TaskFieldVersions;
+  is_completed: boolean;
+  completed_at: string | null;
+  completion_version: number;
 }
 
 export type TaskEditableFields = Pick<Task, TaskEditableField>;
@@ -70,6 +73,20 @@ export type TaskEditResult =
       task: Task;
       conflicts: TaskEditConflicts;
     }
+  | {
+      status: "unavailable" | "retryable" | "expired_unknown";
+      operation_id: string;
+    };
+
+export interface TaskCompletionCommand {
+  id: string;
+  operation_id: string;
+  is_completed: boolean;
+  expected_version: number;
+}
+
+export type TaskCompletionResult =
+  | { status: "confirmed" | "conflict"; operation_id: string; task: Task }
   | {
       status: "unavailable" | "retryable" | "expired_unknown";
       operation_id: string;

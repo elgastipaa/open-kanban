@@ -78,19 +78,25 @@ export function useBoard({
     ledger: taskMutationLedger,
   });
 
-  const { addTask, editTask, refreshTaskForEdit, removeTask, moveTask } =
-    useTaskOperations({
-      slug,
-      supabase,
-      columnsRef,
-      setColumns,
-      isPersistedRef,
-      onMutationRef,
-      persistBoard,
-      enqueue,
-      ledger: taskMutationLedger,
-      onAccessLost: onAccessLost ?? (() => undefined),
-    });
+  const {
+    addTask,
+    editTask,
+    completeTask,
+    refreshTaskForEdit,
+    removeTask,
+    moveTask,
+  } = useTaskOperations({
+    slug,
+    supabase,
+    columnsRef,
+    setColumns,
+    isPersistedRef,
+    onMutationRef,
+    persistBoard,
+    enqueue,
+    ledger: taskMutationLedger,
+    onAccessLost: onAccessLost ?? (() => undefined),
+  });
 
   return {
     board,
@@ -102,6 +108,7 @@ export function useBoard({
     removeColumn,
     addTask,
     editTask,
+    completeTask,
     refreshTaskForEdit,
     removeTask,
     moveTask,

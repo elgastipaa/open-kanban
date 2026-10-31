@@ -491,6 +491,95 @@ if [[ "$task_field_merged_values" != 'Título independiente|Descripción indepen
 fi
 echo 'PASS: two authenticated editors concurrently save different fields using independent versions'
 
+"${psql[@]}" -q -f "$repo_dir/tests/db/task_completion.sql"
+
+# A real opposing completion/reopen race must keep the first confirmed state
+# and return a reviewable conflict to the client that used the stale version.
+task_completion_race_dir="$test_dir/task-completion-race"
+mkdir -- "$task_completion_race_dir"
+task_completion_race_first_log="$task_completion_race_dir/actor-a.log"
+task_completion_race_second_log="$task_completion_race_dir/actor-b.log"
+task_completion_race_board_id=$("${psql[@]}" -At -c "SELECT board_id FROM public.issue8_task_field_fixture WHERE purpose = 'different-fields'")
+task_completion_race_slug=$("${psql[@]}" -At -c "SELECT board_slug FROM public.issue8_task_field_fixture WHERE purpose = 'different-fields'")
+task_completion_race_task_id=$("${psql[@]}" -At -c "SELECT task_id FROM public.issue8_task_field_fixture WHERE purpose = 'different-fields'")
+
+PGAPPNAME=openkanban_task_completion_actor_a "${psql[@]}" -qAt \
+  -v board_slug="$task_completion_race_slug" -v task_id="$task_completion_race_task_id" \
+  > "$task_completion_race_first_log" 2>&1 <<'SQL' &
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);
+SELECT public.set_task_completion_p(
+  'b8888888-0000-4000-8000-000000000001',
+  :'board_slug', :'task_id'::uuid, true, 1
+)->>'status';
+SELECT pg_sleep(4);
+COMMIT;
+SQL
+task_completion_race_first_pid=$!
+
+task_completion_race_first_holds_lock=false
+for _ in $(seq 1 100); do
+  completion_state=$("${psql[@]}" -At -c "SELECT state FROM pg_stat_activity WHERE application_name = 'openkanban_task_completion_actor_a' AND state = 'active' AND query LIKE '%pg_sleep(4)%'")
+  if [[ "$completion_state" == active ]]; then
+    task_completion_race_first_holds_lock=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$task_completion_race_first_holds_lock" != true ]]; then
+  cat -- "$task_completion_race_first_log" >&2
+  echo 'The first completion client did not hold the task board lock.' >&2
+  exit 1
+fi
+
+PGAPPNAME=openkanban_task_completion_actor_b "${psql[@]}" -qAt \
+  -v board_slug="$task_completion_race_slug" -v task_id="$task_completion_race_task_id" \
+  > "$task_completion_race_second_log" 2>&1 <<'SQL' &
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000005', true);
+SELECT public.set_task_completion_p(
+  'b8888888-0000-4000-8000-000000000002',
+  :'board_slug', :'task_id'::uuid, false, 1
+)->>'status';
+COMMIT;
+SQL
+task_completion_race_second_pid=$!
+
+task_completion_race_second_waits=false
+for _ in $(seq 1 100); do
+  waiting_count=$("${psql[@]}" -At -c "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'openkanban_task_completion_actor_b' AND wait_event_type = 'Lock'")
+  if [[ "$waiting_count" == 1 ]]; then
+    task_completion_race_second_waits=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$task_completion_race_second_waits" != true ]]; then
+  cat -- "$task_completion_race_first_log" "$task_completion_race_second_log" >&2
+  echo 'The opposing completion client did not wait for the in-flight task mutation.' >&2
+  "${psql[@]}" -q -c "SELECT pg_cancel_backend(pid) FROM pg_stat_activity WHERE application_name = 'openkanban_task_completion_actor_a'" >/dev/null
+  wait "$task_completion_race_first_pid" || true
+  wait "$task_completion_race_second_pid" || true
+  exit 1
+fi
+
+wait "$task_completion_race_first_pid" || { cat -- "$task_completion_race_first_log" >&2; exit 1; }
+wait "$task_completion_race_second_pid" || { cat -- "$task_completion_race_second_log" >&2; exit 1; }
+task_completion_first_status=$(grep -E '^(confirmed|conflict)$' "$task_completion_race_first_log" | tail -n 1)
+task_completion_second_status=$(grep -E '^(confirmed|conflict)$' "$task_completion_race_second_log" | tail -n 1)
+task_completion_race_state=$("${psql[@]}" -AtF '|' -c "SELECT is_completed, completion_version FROM public.tasks WHERE id = '$task_completion_race_task_id'")
+if [[ "$task_completion_first_status" != 'confirmed' \
+  || "$task_completion_second_status" != 'conflict' \
+  || "$task_completion_race_state" != 't|2' ]]; then
+  echo 'Opposing concurrent completion commands did not preserve one confirmed completion and one conflict.' >&2
+  cat -- "$task_completion_race_first_log" "$task_completion_race_second_log" >&2
+  echo "$task_completion_race_state" >&2
+  exit 1
+fi
+echo 'PASS: two authenticated clients race to complete/reopen; the stale opposite action receives conflict'
+
 "${psql[@]}" -q -f "$repo_dir/tests/db/task_field_versions_assertions.sql"
 "${psql[@]}" -q -f "$repo_dir/tests/db/task_ordering.sql"
 

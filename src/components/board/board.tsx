@@ -26,6 +26,7 @@ import {
   abortPendingSessionRequests,
   createClient,
 } from "@/lib/supabase/client";
+import { pendingTaskInsertionIndex } from "@/lib/task-completion";
 import {
   cancelTaskDelete,
   confirmTaskDelete,
@@ -47,6 +48,7 @@ import type {
   Task,
   TaskOrderResult,
 } from "@/lib/types";
+import { generateUUID } from "@/lib/utils";
 
 interface BoardProps {
   slug: string;
@@ -243,6 +245,7 @@ function BoardWorkspace({
     removeColumn,
     addTask,
     editTask,
+    completeTask,
     refreshTaskForEdit,
     removeTask,
     moveTask,
@@ -411,16 +414,65 @@ function BoardWorkspace({
       ) {
         return;
       }
+      const sourceColumn = columns.find(
+        (column) => column.id === source.droppableId,
+      );
+      const destinationColumn = columns.find(
+        (column) => column.id === destination.droppableId,
+      );
+      if (!sourceColumn || !destinationColumn) return;
+      const sourceIndex = sourceColumn.tasks.findIndex(
+        (task) => task.id === result.draggableId,
+      );
+      const sourceTask = sourceColumn.tasks[sourceIndex];
+      if (sourceIndex < 0 || !sourceTask || sourceTask.is_completed) return;
 
+      const destinationAfterRemoval =
+        sourceColumn.id === destinationColumn.id
+          ? destinationColumn.tasks.filter(
+              (task) => task.id !== result.draggableId,
+            )
+          : destinationColumn.tasks;
+      const destinationIndex = pendingTaskInsertionIndex(
+        destinationAfterRemoval,
+        destination.index,
+      );
       moveTask(
         source.droppableId,
         destination.droppableId,
-        source.index,
-        destination.index,
+        sourceIndex,
+        destinationIndex,
       );
     },
-    [moveTask],
+    [columns, moveTask],
   );
+
+  async function handleCardCompletion(task: Task, isCompleted: boolean) {
+    try {
+      const result = await completeTask({
+        id: task.id,
+        operation_id: generateUUID(),
+        is_completed: isCompleted,
+        expected_version: task.completion_version,
+      });
+      if (result.status === "confirmed") {
+        toast.success(isCompleted ? "Tarea completada" : "Tarea reabierta");
+      } else if (result.status === "conflict") {
+        toast.error("El estado de la tarea cambió", {
+          description:
+            "Actualizamos el tablero. Abre la tarea y elige de nuevo la acción.",
+        });
+      } else {
+        toast.error("No se pudo confirmar el cambio de estado", {
+          description: "Revisa el tablero antes de volver a elegir la acción.",
+        });
+      }
+    } catch {
+      toast.error("No se pudo confirmar el cambio de estado", {
+        description: "Revisa el tablero antes de volver a elegir la acción.",
+      });
+    }
+  }
 
   // Board delete handler
   async function handleDeleteBoard() {
@@ -591,6 +643,7 @@ function BoardWorkspace({
           onAddTask={addTask}
           onEditTask={openTaskDetail}
           onDeleteTask={requestDeleteTask}
+          onCompleteTask={handleCardCompletion}
           onMoveTask={moveTask}
           onRequestDeleteColumn={(colId) => setDeletingColumnId(colId)}
         />
@@ -614,6 +667,7 @@ function BoardWorkspace({
                   onAddTask={addTask}
                   onEditTask={openTaskDetail}
                   onDeleteTask={requestDeleteTask}
+                  onCompleteTask={handleCardCompletion}
                   onMoveTask={moveTask}
                 />
               ))}
@@ -636,6 +690,7 @@ function BoardWorkspace({
         onAfterClose={handleTaskEditorAfterClose}
         onReconcileTask={refreshTaskForEdit}
         onSave={editTask}
+        onSetTaskCompletion={completeTask}
         onMoveTask={moveTaskFromEditor}
         onDelete={handleRequestEditorTaskDelete}
       />

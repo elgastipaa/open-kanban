@@ -3,6 +3,8 @@ import type {
   BoardState,
   CreateTaskPayload,
   Task,
+  TaskCompletionCommand,
+  TaskCompletionResult,
   TaskEditConflicts,
   TaskEditResult,
   TaskOrderColumnSnapshot,
@@ -58,6 +60,22 @@ export class TaskEditError extends Error {
   constructor(readonly reason: TaskEditErrorReason) {
     super(reason);
     this.name = "TaskEditError";
+  }
+}
+
+export type TaskCompletionErrorReason =
+  | "uncertain"
+  | "expired_unknown"
+  | "retryable"
+  | "unavailable"
+  | "rejected"
+  | "conflict"
+  | "access_denied";
+
+export class TaskCompletionError extends Error {
+  constructor(readonly reason: TaskCompletionErrorReason) {
+    super(reason);
+    this.name = "TaskCompletionError";
   }
 }
 
@@ -448,6 +466,84 @@ export async function updateTask(
   return response.data;
 }
 
+/** Set a task's desired completion state with a versioned idempotent command. */
+export async function setTaskCompletion(
+  supabase: SupabaseClient,
+  slug: string,
+  command: TaskCompletionCommand,
+): Promise<TaskCompletionResult> {
+  if (
+    !command.id ||
+    !command.operation_id ||
+    typeof command.is_completed !== "boolean" ||
+    !Number.isInteger(command.expected_version) ||
+    command.expected_version < 1
+  ) {
+    throw new TaskCompletionError("rejected");
+  }
+
+  const response = await supabase.rpc("set_task_completion_p", {
+    p_operation_id: command.operation_id,
+    p_slug: slug,
+    p_id: command.id,
+    p_is_completed: command.is_completed,
+    p_expected_version: command.expected_version,
+  });
+
+  if (response.error) {
+    if (response.error.code === "42501") {
+      throw new TaskCompletionError("access_denied");
+    }
+    if (response.error.code === "22023") {
+      throw new TaskCompletionError("rejected");
+    }
+    if (response.error.code === "23514") {
+      throw new TaskCompletionError("conflict");
+    }
+    throw new TaskCompletionError("uncertain");
+  }
+
+  if (!isTaskCompletionResult(response.data)) {
+    throw new TaskCompletionError("uncertain");
+  }
+  if (response.data.operation_id !== command.operation_id) {
+    throw new TaskCompletionError("conflict");
+  }
+  if (
+    (response.data.status === "confirmed" ||
+      response.data.status === "conflict") &&
+    response.data.task.id !== command.id
+  ) {
+    throw new TaskCompletionError("conflict");
+  }
+  if (
+    response.data.status === "unavailable" ||
+    response.data.status === "retryable" ||
+    response.data.status === "expired_unknown"
+  ) {
+    throw new TaskCompletionError(response.data.status);
+  }
+  return response.data;
+}
+
+function isTaskCompletionResult(value: unknown): value is TaskCompletionResult {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("status" in value) ||
+    !("operation_id" in value) ||
+    typeof value.operation_id !== "string"
+  ) {
+    return false;
+  }
+  if (value.status === "confirmed" || value.status === "conflict") {
+    return "task" in value && isTaskRecord(value.task);
+  }
+  return ["unavailable", "retryable", "expired_unknown"].includes(
+    String(value.status),
+  );
+}
+
 function isTaskEditResult(value: unknown): value is TaskEditResult {
   if (typeof value !== "object" || value === null || !("status" in value)) {
     return false;
@@ -483,8 +579,17 @@ function isTaskRecord(value: unknown): value is Task {
     return false;
   }
   const versions = value.field_versions as Record<string, unknown>;
-  return ["title", "description", "priority"].every(
-    (field) => typeof versions[field] === "number",
+  return (
+    ["title", "description", "priority"].every(
+      (field) => typeof versions[field] === "number",
+    ) &&
+    "is_completed" in value &&
+    typeof value.is_completed === "boolean" &&
+    "completed_at" in value &&
+    (typeof value.completed_at === "string" || value.completed_at === null) &&
+    "completion_version" in value &&
+    typeof value.completion_version === "number" &&
+    value.completion_version > 0
   );
 }
 

@@ -25,6 +25,8 @@ interface MobileTaskCardProps {
   isLast: boolean;
   onEdit: (task: Task, opener: HTMLButtonElement) => void;
   onDelete: (taskId: string) => void;
+  onComplete: (task: Task, isCompleted: boolean) => void;
+  isCompleted: boolean;
   onMoveToColumn: (taskId: string, targetColumnId: string) => void;
   onMoveUp: (taskId: string) => void;
   onMoveDown: (taskId: string) => void;
@@ -54,6 +56,8 @@ export function MobileTaskCard({
   isLast,
   onEdit,
   onDelete,
+  onComplete,
+  isCompleted,
   onMoveToColumn,
   onMoveUp,
   onMoveDown,
@@ -70,7 +74,7 @@ export function MobileTaskCard({
       transition={{
         duration: 0.2,
       }}
-      className="group relative flex flex-col overflow-hidden rounded-lg border border-border bg-surface-raised transition-colors duration-150 hover:border-border-hover"
+      className={`group relative flex flex-col overflow-hidden rounded-lg border border-border bg-surface-raised transition-colors duration-150 hover:border-border-hover ${isCompleted ? "opacity-70" : ""}`}
     >
       {/* Main tappable content area */}
       <button
@@ -79,15 +83,23 @@ export function MobileTaskCard({
         data-task-column={task.column_id}
         data-task-index={index}
         className="flex min-w-0 flex-1 flex-col p-3 text-left"
-        aria-label={`Abrir tarea: ${task.title}`}
+        aria-label={`${isCompleted ? "Tarea completada" : "Tarea pendiente"}. Abrir tarea: ${task.title}`}
         onClick={(event: MouseEvent<HTMLButtonElement>) =>
           onEdit(task, event.currentTarget)
         }
       >
         {/* Title */}
-        <p className="wrap-break-word pr-2 font-medium text-sm text-text-primary leading-snug">
-          {task.title}
-        </p>
+        <div className="flex items-start gap-2">
+          <span
+            className={`mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-[3px] border ${isCompleted ? "border-accent bg-accent text-text-inverse" : "border-text-muted text-transparent"}`}
+            aria-hidden="true"
+          >
+            {isCompleted && <IconCheck size={12} />}
+          </span>
+          <p className="wrap-break-word pr-2 font-medium text-sm text-text-primary leading-snug">
+            {task.title}
+          </p>
+        </div>
         {task.description && (
           <p className="mt-1 line-clamp-2 text-text-muted text-xs leading-relaxed">
             {task.description}
@@ -112,6 +124,20 @@ export function MobileTaskCard({
 
       {/* Bottom action bar - always visible on mobile */}
       <div className="flex items-center border-border border-t px-2 py-1">
+        {!isCompleted && (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onComplete(task, true);
+            }}
+            className="flex items-center gap-1 rounded-md px-1.5 py-1 text-text-muted text-xs transition-colors hover:bg-accent-muted hover:text-text-primary"
+            aria-label={`Completar tarea: ${task.title}`}
+          >
+            <IconCheck size={14} />
+            <span>Completar</span>
+          </button>
+        )}
         {/* Move to column dropdown - only shown when there are other columns */}
         {otherColumns.length > 0 ? (
           <DropdownMenu open={showMoveMenu} onOpenChange={setShowMoveMenu}>
@@ -148,32 +174,34 @@ export function MobileTaskCard({
         <div className="flex-1" />
 
         {/* Move up / down within column */}
-        <div className="flex items-center gap-0.5">
-          <button
-            type="button"
-            disabled={isFirst}
-            onClick={(e) => {
-              e.stopPropagation();
-              onMoveUp(task.id);
-            }}
-            className="flex h-7 w-7 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-surface-overlay hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-30"
-            aria-label={`Subir tarea: ${task.title}`}
-          >
-            <IconChevronUp size={15} stroke={2.5} />
-          </button>
-          <button
-            type="button"
-            disabled={isLast}
-            onClick={(e) => {
-              e.stopPropagation();
-              onMoveDown(task.id);
-            }}
-            className="flex h-7 w-7 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-surface-overlay hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-30"
-            aria-label={`Bajar tarea: ${task.title}`}
-          >
-            <IconChevronDown size={15} stroke={2.5} />
-          </button>
-        </div>
+        {!isCompleted && (
+          <div className="flex items-center gap-0.5">
+            <button
+              type="button"
+              disabled={isFirst}
+              onClick={(e) => {
+                e.stopPropagation();
+                onMoveUp(task.id);
+              }}
+              className="flex h-7 w-7 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-surface-overlay hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-30"
+              aria-label={`Subir tarea: ${task.title}`}
+            >
+              <IconChevronUp size={15} stroke={2.5} />
+            </button>
+            <button
+              type="button"
+              disabled={isLast}
+              onClick={(e) => {
+                e.stopPropagation();
+                onMoveDown(task.id);
+              }}
+              className="flex h-7 w-7 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-surface-overlay hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-30"
+              aria-label={`Bajar tarea: ${task.title}`}
+            >
+              <IconChevronDown size={15} stroke={2.5} />
+            </button>
+          </div>
+        )}
 
         {/* Separator */}
         <div className="mx-1.5 h-4 w-px bg-border-hover/50" />

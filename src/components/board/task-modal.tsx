@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Modal } from "@/components/ui/modal";
 import { TaskEditError } from "@/lib/db/tasks";
+import { taskCompletionFollowUp } from "@/lib/task-completion";
 import {
   changeTaskEditDraft,
   confirmTaskEditSave,
@@ -38,6 +39,8 @@ import type {
   ColumnWithTasks,
   Priority,
   Task,
+  TaskCompletionCommand,
+  TaskCompletionResult,
   TaskEditableField,
   TaskEditCommand,
   TaskEditConflicts,
@@ -56,6 +59,9 @@ interface TaskModalProps {
   onAfterClose: () => void;
   onReconcileTask: (taskId: string) => Promise<Task | null>;
   onSave: (command: TaskEditCommand) => Promise<TaskEditResult>;
+  onSetTaskCompletion: (
+    command: TaskCompletionCommand,
+  ) => Promise<TaskCompletionResult>;
   onMoveTask: (
     taskId: string,
     targetColumnId: string,
@@ -139,6 +145,7 @@ export function TaskModal({
   onAfterClose,
   onReconcileTask,
   onSave,
+  onSetTaskCompletion,
   onMoveTask,
   onDelete,
 }: TaskModalProps) {
@@ -156,15 +163,20 @@ export function TaskModal({
     Boolean(task?.description),
   );
   const [showCloseChoices, setShowCloseChoices] = useState(false);
-  const [closeAction, setCloseAction] = useState<"close" | "delete" | "move">(
-    "close",
-  );
+  const [closeAction, setCloseAction] = useState<
+    "close" | "delete" | "move" | "complete"
+  >("close");
   const [closeNotice, setCloseNotice] = useState("");
   const [moveNotice, setMoveNotice] = useState("");
   const [pendingMoveTargetId, setPendingMoveTargetId] = useState<string | null>(
     null,
   );
   const [isMoving, setIsMoving] = useState(false);
+  const [pendingCompletionTarget, setPendingCompletionTarget] = useState<
+    boolean | null
+  >(null);
+  const [isCompleting, setIsCompleting] = useState(false);
+  const [completionNotice, setCompletionNotice] = useState("");
   const [expiredOperation, setExpiredOperation] =
     useState<TaskEditCommand | null>(null);
   const [reconciliationRequired, setReconciliationRequired] = useState(false);
@@ -189,6 +201,9 @@ export function TaskModal({
     setMoveNotice("");
     setPendingMoveTargetId(null);
     setIsMoving(false);
+    setPendingCompletionTarget(null);
+    setIsCompleting(false);
+    setCompletionNotice("");
     setExpiredOperation(null);
     setReconciliationRequired(false);
     setReconciliationError("");
@@ -204,7 +219,7 @@ export function TaskModal({
       draft.priority !== baseTask.priority);
   const hasConflict = Object.keys(conflicts).length > 0;
   const isSaving = workflow.status === "saving";
-  const isWorking = isSaving || isReconciling || isMoving;
+  const isWorking = isSaving || isReconciling || isMoving || isCompleting;
 
   useEffect(() => {
     if (!open || !dirty) return;
@@ -220,6 +235,7 @@ export function TaskModal({
     setWorkflow((current) => changeTaskEditDraft(current, nextDraft));
     setCloseNotice("");
     setMoveNotice("");
+    setCompletionNotice("");
   }
 
   function requestClose() {
@@ -230,6 +246,7 @@ export function TaskModal({
     if (dirty) {
       setCloseAction("close");
       setPendingMoveTargetId(null);
+      setPendingCompletionTarget(null);
       setShowCloseChoices(true);
       setCloseNotice("");
       return;
@@ -245,6 +262,7 @@ export function TaskModal({
     if (dirty) {
       setCloseAction("delete");
       setPendingMoveTargetId(null);
+      setPendingCompletionTarget(null);
       setShowCloseChoices(true);
       return;
     }
@@ -264,6 +282,19 @@ export function TaskModal({
       }
       return;
     }
+    if (closeAction === "complete") {
+      const target = pendingCompletionTarget;
+      const currentTask = baseTask;
+      if (target === null || !currentTask) return;
+      setWorkflow(createTaskEditWorkflow(draftFor(currentTask)));
+      setConflicts({});
+      setShowCloseChoices(false);
+      setCompletionNotice("");
+      if (taskCompletionFollowUp("discard") === "complete") {
+        void performCompletion(target, currentTask);
+      }
+      return;
+    }
     if (closeAction === "delete") {
       if (task && baseTask) {
         setWorkflow(createTaskEditWorkflow(draftFor(baseTask)));
@@ -274,6 +305,85 @@ export function TaskModal({
       return;
     }
     onClose();
+  }
+
+  async function performCompletion(
+    target: boolean,
+    currentTask?: Task,
+    afterSave = false,
+  ) {
+    const taskSnapshot = currentTask ?? baseTask;
+    if (
+      !task ||
+      !taskSnapshot ||
+      (!afterSave && isWorking) ||
+      !isOnline ||
+      hasConflict ||
+      reconciliationRequired
+    ) {
+      return;
+    }
+    setIsCompleting(true);
+    setCompletionNotice("");
+    try {
+      const result = await onSetTaskCompletion({
+        id: task.id,
+        operation_id: generateUUID(),
+        is_completed: target,
+        expected_version: taskSnapshot.completion_version,
+      });
+      if (result.status !== "confirmed" && result.status !== "conflict") {
+        setCompletionNotice(
+          "No se pudo confirmar el cambio de estado. Revisa la tarea antes de volver a elegir la acción.",
+        );
+        return;
+      }
+      setBaseTask(result.task);
+      if (result.status === "confirmed") {
+        setWorkflow(confirmTaskEditSave(draftFor(result.task)));
+        setCompletionNotice(target ? "Tarea completada." : "Tarea reabierta.");
+      } else {
+        setCompletionNotice(
+          "El estado cambió o no se pudo confirmar. Actualizamos la tarea; vuelve a elegir la acción.",
+        );
+      }
+    } catch {
+      setCompletionNotice(
+        "No se pudo confirmar el cambio de estado. Revisa la tarea antes de volver a elegir la acción.",
+      );
+    } finally {
+      setIsCompleting(false);
+      setPendingCompletionTarget(null);
+      setCloseAction("close");
+      setShowCloseChoices(false);
+    }
+  }
+
+  function requestCompletion() {
+    if (!task || !baseTask || isWorking) return;
+    const target = !baseTask.is_completed;
+    if (!isOnline) {
+      setCompletionNotice(
+        "Estás sin conexión. La tarea no cambiará de estado.",
+      );
+      return;
+    }
+    if (hasConflict || reconciliationRequired) {
+      setCompletionNotice(
+        "Resuelve el conflicto o consulta el estado actual antes de continuar.",
+      );
+      return;
+    }
+    setCompletionNotice("");
+    if (dirty) {
+      setCloseAction("complete");
+      setPendingMoveTargetId(null);
+      setPendingCompletionTarget(target);
+      setShowCloseChoices(true);
+      setCloseNotice("");
+      return;
+    }
+    void performCompletion(target, baseTask);
   }
 
   function buildOperation(): TaskEditCommand | null {
@@ -361,6 +471,7 @@ export function TaskModal({
     if (dirty) {
       setCloseAction("move");
       setPendingMoveTargetId(targetColumnId);
+      setPendingCompletionTarget(null);
       setShowCloseChoices(true);
       setCloseNotice("");
       setMoveNotice("");
@@ -372,6 +483,7 @@ export function TaskModal({
   async function save(
     intent: TaskEditSaveIntent = "stay",
     moveAfterSave = false,
+    completeAfterSave = false,
   ) {
     if (
       !task ||
@@ -387,6 +499,14 @@ export function TaskModal({
     const operation = retry?.operation ?? buildOperation();
     if (!operation) {
       if (taskEditSaveFollowUp(intent, "confirmed") === "close") onClose();
+      if (
+        completeAfterSave &&
+        closeAction === "complete" &&
+        pendingCompletionTarget !== null &&
+        taskCompletionFollowUp("save", "confirmed") === "complete"
+      ) {
+        await performCompletion(pendingCompletionTarget, baseTask, true);
+      }
       return;
     }
 
@@ -423,6 +543,13 @@ export function TaskModal({
       if (followUp === "close") onClose();
       if (followUp === "confirm-delete") onDelete(task.id);
       if (
+        completeAfterSave &&
+        closeAction === "complete" &&
+        pendingCompletionTarget !== null &&
+        taskCompletionFollowUp("save", "confirmed") === "complete"
+      ) {
+        await performCompletion(pendingCompletionTarget, result.task, true);
+      } else if (
         moveAfterSave &&
         closeAction === "move" &&
         pendingMoveTargetId &&
@@ -508,6 +635,7 @@ export function TaskModal({
     setShowCloseChoices(false);
     setCloseAction("close");
     setPendingMoveTargetId(null);
+    setPendingCompletionTarget(null);
     window.requestAnimationFrame(() =>
       titleInputRef.current?.focus({ preventScroll: true }),
     );
@@ -692,6 +820,26 @@ export function TaskModal({
           )}
         </section>
 
+        <section className="flex items-center justify-between gap-3 border-border border-t pt-3">
+          <div>
+            <p className="font-medium text-sm text-text-primary">
+              {baseTask.is_completed ? "Tarea completada" : "Tarea pendiente"}
+            </p>
+            <p className="mt-1 text-text-muted text-xs">
+              El estado no cambia al abrir este detalle.
+            </p>
+          </div>
+          <Button
+            variant={baseTask.is_completed ? "ghost" : "primary"}
+            onClick={requestCompletion}
+            disabled={
+              isWorking || !isOnline || hasConflict || reconciliationRequired
+            }
+          >
+            {baseTask.is_completed ? "Reabrir" : "Completar"}
+          </Button>
+        </section>
+
         {otherColumns.length > 0 && (
           <section className="border-border border-t pt-3">
             <DropdownMenu>
@@ -729,6 +877,15 @@ export function TaskModal({
             className="rounded-md border border-priority-medium/30 bg-priority-medium/10 p-3 text-priority-medium text-sm"
           >
             {moveNotice}
+          </output>
+        )}
+
+        {completionNotice && (
+          <output
+            aria-live="polite"
+            className="rounded-md border border-priority-medium/30 bg-priority-medium/10 p-3 text-priority-medium text-sm"
+          >
+            {completionNotice}
           </output>
         )}
 
@@ -886,6 +1043,13 @@ export function TaskModal({
                 detiene y podrás revisar el estado actual.
               </p>
             )}
+            {closeAction === "complete" && (
+              <p className="mt-1 text-sm text-text-secondary">
+                La tarea solo cambiará de estado si confirmas el guardado o
+                descartas el borrador. Si guardar falla o hay un conflicto, la
+                acción se detiene.
+              </p>
+            )}
             {closeNotice && (
               <output
                 aria-live="polite"
@@ -944,6 +1108,24 @@ export function TaskModal({
                   Guardar y mover
                 </Button>
               )}
+              {closeAction === "complete" && (
+                <Button
+                  variant="primary"
+                  onClick={() => void save("stay", false, true)}
+                  disabled={
+                    !dirty ||
+                    !normalizedTitle ||
+                    !isOnline ||
+                    hasConflict ||
+                    isWorking ||
+                    reconciliationRequired
+                  }
+                >
+                  {pendingCompletionTarget
+                    ? "Guardar y completar"
+                    : "Guardar y reabrir"}
+                </Button>
+              )}
               <Button
                 variant="danger"
                 onClick={discardAndContinue}
@@ -953,7 +1135,11 @@ export function TaskModal({
                   ? "Descartar y continuar con la eliminación"
                   : closeAction === "move"
                     ? "Descartar cambios y mover"
-                    : "Descartar cambios"}
+                    : closeAction === "complete"
+                      ? pendingCompletionTarget
+                        ? "Descartar cambios y completar"
+                        : "Descartar cambios y reabrir"
+                      : "Descartar cambios"}
               </Button>
               <Button
                 variant="ghost"

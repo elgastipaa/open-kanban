@@ -8,7 +8,9 @@ import {
   getFullBoard,
   getFullBoardForTaskEdit,
   reconcileTaskCreation,
+  setTaskCompletion,
   TaskCaptureError,
+  TaskCompletionError,
   TaskEditError,
   TaskOrderError,
   updateTask,
@@ -22,6 +24,8 @@ import type {
   CreateTaskPayload,
   Priority,
   Task,
+  TaskCompletionCommand,
+  TaskCompletionResult,
   TaskEditCommand,
   TaskEditConflicts,
   TaskEditResult,
@@ -281,6 +285,9 @@ export function useTaskOperations({
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
           field_versions: { title: 1, description: 1, priority: 1 },
+          is_completed: false,
+          completed_at: null,
+          completion_version: 1,
         };
 
         ledger.beginTaskCreation(tempTask.id);
@@ -550,6 +557,149 @@ export function useTaskOperations({
       ledger,
       onMutationRef,
       onAccessLost,
+    ],
+  );
+
+  const completeTask = useCallback(
+    async (command: TaskCompletionCommand): Promise<TaskCompletionResult> => {
+      if (!isPersistedRef.current || command.id.startsWith("local-")) {
+        return { status: "unavailable", operation_id: command.operation_id };
+      }
+
+      const sessionEpoch = getSessionEpoch();
+      const reconcile = async (): Promise<Task | null> => {
+        const latestBoard = await getFullBoardForTaskEdit(supabase, slug);
+        if (sessionEpoch !== getSessionEpoch()) {
+          throw new TaskCompletionError("access_denied");
+        }
+        if (!latestBoard) {
+          throw new TaskCompletionError("access_denied");
+        }
+        setColumns(ledger.sync(latestBoard.columns));
+        return (
+          latestBoard.columns
+            .flatMap((column) => column.tasks)
+            .find((candidate) => candidate.id === command.id) ?? null
+        );
+      };
+
+      let result: TaskCompletionResult;
+      try {
+        result = await setTaskCompletion(supabase, slug, command);
+      } catch (error) {
+        if (
+          error instanceof TaskCompletionError &&
+          error.reason === "access_denied"
+        ) {
+          onAccessLost();
+          throw error;
+        }
+        if (
+          error instanceof TaskCompletionError &&
+          ["uncertain", "retryable", "expired_unknown", "conflict"].includes(
+            error.reason,
+          )
+        ) {
+          try {
+            const latestTask = await reconcile();
+            if (!latestTask) {
+              return {
+                status: "unavailable",
+                operation_id: command.operation_id,
+              };
+            }
+            return {
+              status: "conflict",
+              operation_id: command.operation_id,
+              task: latestTask,
+            };
+          } catch (reconcileError) {
+            if (
+              (reconcileError instanceof TaskCompletionError &&
+                reconcileError.reason === "access_denied") ||
+              (reconcileError instanceof TaskEditError &&
+                (reconcileError.reason === "access_denied" ||
+                  reconcileError.reason === "stale_session"))
+            ) {
+              onAccessLost();
+            }
+            return {
+              status: "unavailable",
+              operation_id: command.operation_id,
+            };
+          }
+        }
+        if (
+          error instanceof TaskCompletionError &&
+          error.reason === "access_denied"
+        ) {
+          onAccessLost();
+        }
+        throw error;
+      }
+
+      if (result.status !== "confirmed" && result.status !== "conflict") {
+        return result;
+      }
+
+      if (sessionEpoch !== getSessionEpoch()) {
+        onAccessLost();
+        throw new TaskCompletionError("access_denied");
+      }
+
+      const currentColumns = columnsRef.current ?? [];
+      let authoritativeColumns = currentColumns;
+      const currentTaskColumn = currentColumns.find((column) =>
+        column.tasks.some((candidate) => candidate.id === result.task.id),
+      );
+      if (
+        !currentTaskColumn ||
+        currentTaskColumn.id !== result.task.column_id
+      ) {
+        let latestBoard: Awaited<ReturnType<typeof getFullBoardForTaskEdit>>;
+        try {
+          latestBoard = await getFullBoardForTaskEdit(supabase, slug);
+        } catch (error) {
+          if (
+            error instanceof TaskEditError &&
+            (error.reason === "access_denied" ||
+              error.reason === "stale_session")
+          ) {
+            onAccessLost();
+            throw new TaskCompletionError("access_denied");
+          }
+          throw error;
+        }
+        if (sessionEpoch !== getSessionEpoch()) {
+          onAccessLost();
+          throw new TaskCompletionError("access_denied");
+        }
+        if (!latestBoard) {
+          onAccessLost();
+          return { status: "unavailable", operation_id: command.operation_id };
+        }
+        authoritativeColumns = latestBoard.columns;
+      }
+
+      const nextColumns = authoritativeColumns.map((column) => ({
+        ...column,
+        tasks: column.tasks.map((candidate) =>
+          candidate.id === result.task.id ? result.task : candidate,
+        ),
+      }));
+      setColumns(ledger.sync(nextColumns));
+      if (result.status === "confirmed") onMutationRef.current?.();
+      return result;
+    },
+    [
+      columnsRef,
+      isPersistedRef,
+      ledger,
+      onAccessLost,
+      onMutationRef,
+      setColumns,
+      slug,
+      supabase,
     ],
   );
 
@@ -862,6 +1012,7 @@ export function useTaskOperations({
   return {
     addTask,
     editTask,
+    completeTask,
     refreshTaskForEdit,
     removeTask,
     moveTask,

@@ -140,3 +140,21 @@ La implementación de «Editar desde un detalle único y resolver conflictos» s
 - Se preservó el cambio ajeno de `docs/VALIDATION.md` con SHA-256 `B8669EAAFEA1A6D41C1342470E49324D2FAA50BED03DCCCFE7E94AF17D51FD9C` y `.scratch/` sin seguimiento. No se modificó `main`, no se ejecutó SQL remoto ni hubo despliegue.
 
 El issue queda abierto/ready-for-human por bloqueo y verificación manual pendiente. Esta entrega no autoriza cerrar #8/#7, merge a `main`, ni despliegue a producción.
+
+## Entrega local de #9 — 2026-10-31
+
+La implementación de «Mover y ordenar sin perder ediciones» se hizo en `codex/issue-9` desde la base fija `03f3daf31ae38470603eef3ad5740234eaa70471`. HEAD final revisado: `cd868c322c13ba0ffa71034dfe657e21fc4b7868`; commits de implementación/fixes `92df01c`, `3b680cb` y `cd868c3`. Evidencia por criterio: [docs/validation/issue-9.md](../validation/issue-9.md). La entrega local se integró por fast-forward en `codex/openkanban-1-0` desde esa base.
+
+- TDD rojo-verde con PostgreSQL 16.15 descartable y actores/claims sintéticos. `pnpm test:db` pasó con migraciones 001–020, lote atómico de varias columnas, cruce de tablero, anclas/versiones, replay, expiración, permisos y carrera real de dos miembros: un movimiento confirmó y el otro quedó en conflicto sin posiciones parciales. Se probó reordenar enseguida después de crear y borrar una tarea con versiones leídas/autorizadas.
+- `pnpm test:unit` pasó 24/24; también pasaron `pnpm typecheck`, `pnpm build` (Next 16.4.2), Biome dirigido, `bash -n scripts/test-db.sh` y `git diff --check`.
+- Los recibos no almacenan filas ni snapshots privados. El replay vigente reconstruye el estado actual autorizado; el recibo vencido devuelve `expired_unknown` sin aplicar otra mutación. La reconciliación posterior a altas/bajas adopta el snapshot con `ledger.sync`, conserva ediciones pendientes y no mezcla una versión nueva con anclas locales antiguas.
+- Reviews Spec/Standards en paralelo sobre HEAD `cd868c3` contra la base fija `03f3daf`: Spec sin hallazgos; Standards sin infracciones duras ni smells en código de producto. Se resolvieron los hallazgos materiales. Queda un smell menor de fixtures autocontenidas repetidas entre dos pruebas unitarias.
+- El DOM/foco real, teclado, móvil, lector de pantalla, Realtime visual y Auth/PostgREST HTTP siguen parciales o pendientes; no había runner de navegador ya instalado y no se instaló uno. La evidencia los distingue de las pruebas automáticas.
+- #9 sigue OPEN/`ready-for-human`. #3 está cerrado con entrega; #8 continúa OPEN/`ready-for-human`. Las relaciones nativas/textuales `Blocked by #3` y `Blocked by #8` se conservan. No se cerró #9 ni se aceptó manualmente #8.
+- No se usaron Google OAuth, cuentas/datos reales, CUA/IAB, bypass de permisos, migraciones remotas ni producción. No se tocó `main` ni hubo despliegue.
+
+### Integración y tracker de #9 — pendiente de publicación ordinaria
+
+La integración local avanzó por fast-forward desde `03f3daf31ae38470603eef3ad5740234eaa70471` hasta el HEAD de código `cd868c322c13ba0ffa71034dfe657e21fc4b7868`. Falta completar el push ordinario autorizado de `codex/openkanban-1-0`, actualizar el body de la PR acumulada #54 en borrador y registrar la evidencia en el comentario de #9. Al terminar, verificar por lectura que #9 siga OPEN/`ready-for-human`, asignado a `elgastipaa`, con sus dos aristas bloqueadoras intactas; no cerrar ni cambiar otras relaciones.
+
+Se preservan los cambios ajenos de `docs/VALIDATION.md` con SHA-256 `B8669EAAFEA1A6D41C1342470E49324D2FAA50BED03DCCCFE7E94AF17D51FD9C` y `.scratch/` sin seguimiento. No modificar `main`, hacer force-push, ejecutar SQL remoto ni desplegar producción.

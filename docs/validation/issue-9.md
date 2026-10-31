@@ -1,6 +1,6 @@
 # Issue #9 — evidencia de implementación
 
-Fecha: 31/10/2026. Issue: «Mover y ordenar sin perder ediciones». Rama: `codex/issue-9`. Base fija: `03f3daf31ae38470603eef3ad5740234eaa70471`. Commit de código: `92df01ca18ff64a82581202dbb7c0e410a91c565`.
+Fecha: 31/10/2026. Issue: «Mover y ordenar sin perder ediciones». Rama: `codex/issue-9`. Base fija: `03f3daf31ae38470603eef3ad5740234eaa70471`. Código final revisado: `cd868c322c13ba0ffa71034dfe657e21fc4b7868`; commits de implementación/fixes: `92df01ca18ff64a82581202dbb7c0e410a91c565`, `3b680cb30e4ce6679c50067ce8b6cbf1a7c4ce1d` y `cd868c322c13ba0ffa71034dfe657e21fc4b7868`.
 
 La entrega mantiene #9 abierto. Las comprobaciones visuales con navegador aún requieren recorrido humano, por lo que el estado esperado es `ready-for-human`; no se infiere aceptación ni se cambia el issue desde esta rama.
 
@@ -24,7 +24,7 @@ La entrega mantiene #9 abierto. Las comprobaciones visuales con navegador aún r
 | Controles de teclado/móvil y etiquetas accesibles | **Código revisado; navegador pendiente** | Las tarjetas presentan acciones subir/bajar con nombres accesibles en español; las tarjetas móviles permiten elegir destino y tienen las mismas acciones de orden. El detalle permite seleccionar otra columna con teclado. El arrastre existente sigue disponible en escritorio. Falta verificar foco visible, secuencia de tabulación, zoom 200 %, movimiento reducido, lector de pantalla y presentación táctil real. |
 | Retorno estable de foco y cambios remotos | **Parcial; navegador pendiente** | El detalle captura tarea/columna/posición de origen y, al cerrarse, usa el selector existente para volver a la tarea original, vecina, columna o tablero. Las reconciliaciones remotas no invocan foco programático. Reordenar puede cambiar el DOM entre columnas; se necesita confirmar el retorno y que Realtime no robe foco con navegación humana. |
 | Permisos e aislamiento | **Probado en DB** | `anon` no puede ejecutar la mutación. Miembro activo puede mover en el tablero autorizado; admin global sin membresía no recibe acceso a contenido. La mutación valida origen y destino en el tablero/generación activos y no acepta campos protegidos. Auth HTTP/PostgREST real queda pendiente. |
-| C-95, P01/P07–P09/P17/P18 relevantes | **Implementado con parcial explícita** | Se conserva el detalle/captura de origen y la decisión Guardar/Descartar/Cancelar; el contrato de mutación está limitado a origen/destino/anclas/versiones. UI móvil, teclado, foco y cambios remotos se reservan para recorrido humano según los límites anteriores. Las revisiones Spec/Standards contra la base fija quedan a cargo del coordinador sobre el HEAD ya comprometido. |
+| C-95, P01/P07–P09/P17/P18 relevantes | **Implementado con parcial explícita** | Se conserva el detalle/captura de origen y la decisión Guardar/Descartar/Cancelar; el contrato de mutación está limitado a origen/destino/anclas/versiones. UI móvil, teclado, foco y cambios remotos se reservan para recorrido humano según los límites anteriores. Reviews finales contra la base fija `03f3daf`: Spec sin hallazgos; Standards sin infracciones duras. El único smell menor son fixtures locales duplicadas entre pruebas unitarias; se mantienen autocontenidas por archivo. |
 
 ## Seguimiento de hallazgos P2
 
@@ -32,6 +32,8 @@ La entrega mantiene #9 abierto. Las comprobaciones visuales con navegador aún r
 - Los recibos de orden ya no guardan snapshots ni filas/títulos. Conservan actor, operation ID, tablero, hash del payload, estado y fechas. Un replay vigente reconstruye el snapshot actual mediante un helper protegido y después de validar de nuevo membresía; el snapshot no se retiene en la tabla. Un receipt vencido solo devuelve `expired_unknown` y el cliente reconcilia antes de permitir otra elección.
 - La reconciliación autorizada, la comprobación de sesión y el tratamiento de pérdida de acceso se comparten en `task-order-reconciliation.ts`. Las altas y bajas comparten el refresh/toast; la agregación de snapshots `confirmed`/`conflict` comparte el helper SQL `task_order_column_snapshots_p`. Se eliminaron los wrappers de mezcla parcial de versiones.
 - Las regresiones cubren lecturas autorizadas después de create/delete: enviar la versión previa produce `conflict`, mientras que la versión actual leída permite reordenar enseguida. La prueba unitaria cambia de A,B a B,A durante la lectura autorizada y comprueba que el snapshot nuevo se presenta antes del siguiente movimiento y que la edición pendiente sigue aplicada. También comprueba replay con una tarea creada después del receipt, ausencia de `result_payload`, y receipt vencido sin snapshots/filas ni incremento de versiones.
+
+Los reviews finales de Spec/Standards se ejecutaron sobre el HEAD `cd868c322c13ba0ffa71034dfe657e21fc4b7868` contra la base fija. Se corrigieron todos los hallazgos materiales; el único smell heurístico restante corresponde a fixtures autocontenidas y no a código de producto.
 
 ## Comandos y resultados
 

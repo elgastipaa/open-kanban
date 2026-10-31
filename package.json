@@ -12,7 +12,7 @@
     "start": "next start",
     "lint": "biome check",
     "typecheck": "tsc --noEmit",
-    "test:unit": "node --experimental-strip-types --test tests/unit/private-board-intent.test.mjs",
+    "test:unit": "node --experimental-strip-types --test tests/unit/private-board-intent.test.mjs tests/unit/task-capture-state.test.mjs",
     "test:db": "bash scripts/test-db.sh",
     "format": "biome format --write"
   },

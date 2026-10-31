@@ -3,7 +3,8 @@
 
 CREATE TEMP TABLE issue7_capture_fixture (
   board_id uuid NOT NULL,
-  column_id uuid NOT NULL
+  column_id uuid NOT NULL,
+  board_slug text NOT NULL
 );
 GRANT SELECT, INSERT ON issue7_capture_fixture TO authenticated;
 
@@ -28,8 +29,8 @@ BEGIN
     'Captura',
     0
   );
-  INSERT INTO pg_temp.issue7_capture_fixture(board_id, column_id)
-  VALUES (created_board.id, created_column_id);
+  INSERT INTO pg_temp.issue7_capture_fixture(board_id, column_id, board_slug)
+  VALUES (created_board.id, created_column_id, created_board.slug);
 END;
 $$;
 COMMIT;
@@ -41,6 +42,8 @@ DO $$
 DECLARE
   v_board_id uuid;
   v_column_id uuid;
+  v_board_slug text;
+  v_target_column_id uuid;
   v_operation_id constant uuid := 'a7777777-0000-4000-8000-000000000001';
   v_result jsonb;
   v_replay jsonb;
@@ -50,9 +53,13 @@ DECLARE
   v_other_board_id uuid;
   v_other_column_id uuid;
   v_rejected boolean := false;
+  v_create_whitespace_rejected boolean := false;
+  v_query_whitespace_rejected boolean := false;
+  v_whitespace_receipt_missing boolean := false;
   v_task_count integer;
 BEGIN
-  SELECT board_id, column_id INTO v_board_id, v_column_id
+  SELECT board_id, column_id, board_slug
+  INTO v_board_id, v_column_id, v_board_slug
   FROM pg_temp.issue7_capture_fixture;
 
   -- Deliberately discard the first returned result, like a response lost after
@@ -220,6 +227,47 @@ BEGIN
     RAISE EXCEPTION 'An empty task title was accepted or left a receipt';
   END IF;
 
+  BEGIN
+    PERFORM public.get_task_creation_result_p(
+      'a7777777-0000-4000-8000-000000000006',
+      v_board_id,
+      v_column_id,
+      E'\t\n',
+      NULL,
+      'medium'
+    );
+  EXCEPTION WHEN invalid_parameter_value THEN
+    v_query_whitespace_rejected := true;
+  END;
+  BEGIN
+    PERFORM public.create_task_p(
+      'a7777777-0000-4000-8000-000000000006',
+      v_board_id,
+      v_column_id,
+      E'\t\n'
+    );
+  EXCEPTION WHEN invalid_parameter_value THEN
+    v_create_whitespace_rejected := true;
+  END;
+  BEGIN
+    v_result := public.get_task_creation_result_p(
+      'a7777777-0000-4000-8000-000000000006',
+      v_board_id,
+      v_column_id,
+      'Whitespace receipt check',
+      NULL,
+      'medium'
+    );
+    v_whitespace_receipt_missing := v_result->>'status' = 'not_found';
+  EXCEPTION WHEN check_violation THEN
+    v_whitespace_receipt_missing := false;
+  END;
+  IF NOT v_query_whitespace_rejected
+    OR NOT v_create_whitespace_rejected
+    OR NOT v_whitespace_receipt_missing THEN
+    RAISE EXCEPTION 'Whitespace-only task title was not rejected without a receipt';
+  END IF;
+
   IF NOT has_function_privilege(
       'authenticated',
       'public.create_task_p(uuid, uuid, uuid, text, text, text)',
@@ -228,6 +276,11 @@ BEGIN
     OR NOT has_function_privilege(
       'authenticated',
       'public.get_task_creation_result_p(uuid, uuid, uuid, text, text, text)',
+      'EXECUTE'
+    )
+    OR has_function_privilege(
+      'authenticated',
+      'public.task_capture_normalize_title(text)',
       'EXECUTE'
     )
     OR to_regprocedure('public.get_task_creation_result_p(uuid)') IS NOT NULL
@@ -260,6 +313,44 @@ BEGIN
   FROM public.tasks WHERE column_id = v_column_id;
   IF NOT v_rejected OR v_task_count <> 2 THEN
     RAISE EXCEPTION 'A direct protected-field write was accepted or had partial effects';
+  END IF;
+
+  SELECT id INTO v_target_column_id
+  FROM public.create_column_p(v_board_slug, v_board_id, 'Destino de captura', 1);
+  PERFORM public.update_task_positions_p(
+    v_board_slug,
+    jsonb_build_array(jsonb_build_object(
+      'id', v_task_id,
+      'column_id', v_target_column_id,
+      'position', 0
+    ))
+  );
+
+  v_result := public.get_task_creation_result_p(
+    v_operation_id,
+    v_board_id,
+    v_column_id,
+    'Comprar leche',
+    NULL,
+    'medium'
+  );
+  IF v_result->>'status' IS DISTINCT FROM 'confirmed'
+    OR (v_result->>'task_id')::uuid IS DISTINCT FROM v_task_id
+    OR (v_result->>'column_id')::uuid IS DISTINCT FROM v_target_column_id
+    OR (v_result->'task'->>'column_id')::uuid IS DISTINCT FROM v_target_column_id THEN
+    RAISE EXCEPTION 'Reconciliation lost a task moved within its board: %', v_result;
+  END IF;
+
+  v_replay := public.create_task_p(
+    p_operation_id => v_operation_id,
+    p_board_id => v_board_id,
+    p_column_id => v_column_id,
+    p_title => 'Comprar leche'
+  );
+  IF v_replay->>'status' IS DISTINCT FROM 'confirmed'
+    OR (v_replay->'task'->>'id')::uuid IS DISTINCT FROM v_task_id
+    OR (v_replay->'task'->>'column_id')::uuid IS DISTINCT FROM v_target_column_id THEN
+    RAISE EXCEPTION 'Replay did not return the current moved task: %', v_replay;
   END IF;
 END;
 $$;
@@ -463,7 +554,9 @@ BEGIN
   END IF;
 
   SELECT count(*) INTO v_task_count
-  FROM public.tasks WHERE column_id = v_column_id AND title = 'Comprar leche';
+  FROM public.tasks AS task
+  JOIN public.columns AS column_row ON column_row.id = task.column_id
+  WHERE column_row.board_id = v_board_id AND task.title = 'Comprar leche';
   IF v_task_count <> 2 THEN
     RAISE EXCEPTION 'Expired replay changed the number of tasks';
   END IF;

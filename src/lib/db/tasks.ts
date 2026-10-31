@@ -7,6 +7,7 @@ import type {
   UpdateTaskPayload,
 } from "@/lib/types";
 import { createTaskSchema, updateTaskSchema } from "@/lib/validations";
+import { taskCaptureErrorReasonFromCode } from "../task-capture-state";
 import { handleSupabaseError } from "./errors";
 
 export type TaskCaptureStatus =
@@ -29,7 +30,8 @@ export type TaskCaptureErrorReason =
   | "expired_unknown"
   | "unavailable"
   | "rejected"
-  | "conflict";
+  | "conflict"
+  | "access_denied";
 
 export class TaskCaptureError extends Error {
   constructor(readonly reason: TaskCaptureErrorReason) {
@@ -125,7 +127,12 @@ async function resolveExpiredTaskCreation(
   const response = await supabase
     .rpc("get_full_board_p", { p_slug: slug })
     .maybeSingle();
-  if (response.error || !response.data) {
+  if (response.error) {
+    const accessDenied = definiteFailure(response.error);
+    if (accessDenied?.reason === "access_denied") throw accessDenied;
+    throw new TaskCaptureError("expired_unknown");
+  }
+  if (!response.data) {
     throw new TaskCaptureError("expired_unknown");
   }
 
@@ -167,10 +174,8 @@ function definiteFailure(error: unknown): TaskCaptureError | null {
     typeof error === "object" && error !== null && "code" in error
       ? String(error.code)
       : "";
-  if (code === "42501") return new TaskCaptureError("unavailable");
-  if (code === "23514") return new TaskCaptureError("conflict");
-  if (code === "22023") return new TaskCaptureError("rejected");
-  return null;
+  const reason = taskCaptureErrorReasonFromCode(code);
+  return reason ? new TaskCaptureError(reason) : null;
 }
 
 async function invokeCreateTask(

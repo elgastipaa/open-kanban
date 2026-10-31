@@ -1,9 +1,10 @@
 "use client";
 
 import { IconPlus } from "@tabler/icons-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useDevice } from "@/hooks/use-device";
 import { TaskCaptureError, type TaskCaptureErrorReason } from "@/lib/db/tasks";
+import { taskCaptureFailureTransition } from "@/lib/task-capture-state";
 import { cn, generateUUID } from "@/lib/utils";
 
 interface AddTaskProps {
@@ -34,6 +35,8 @@ function errorMessage(reason: TaskCaptureErrorReason | null): string | null {
       return "No se pudo añadir la tarea. Conservamos el borrador.";
     case "conflict":
       return "Esta clave ya pertenece a otra captura. Conservamos el borrador; asignale una clave nueva para continuar.";
+    case "access_denied":
+      return "Ya no tenés acceso para crear tareas en este tablero. Eliminamos el borrador.";
     default:
       return null;
   }
@@ -50,15 +53,22 @@ export function AddTask({ columnId, onAdd }: AddTaskProps) {
   );
   const pendingRef = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const accessDeniedRef = useRef<HTMLParagraphElement>(null);
   const { isMobile } = useDevice();
+  const taskCaptureMessageId = useId();
   const reconciliationRequired =
     errorReason !== null && reconciliationReasons.includes(errorReason);
   const payloadConflict = errorReason === "conflict";
+  const accessDenied = errorReason === "access_denied";
   const message = errorMessage(errorReason);
 
   useEffect(() => {
     if (isOpen) inputRef.current?.focus();
   }, [isOpen]);
+
+  useEffect(() => {
+    if (accessDenied) accessDeniedRef.current?.focus();
+  }, [accessDenied]);
 
   useEffect(() => {
     if (!title && !pending && !reconciliationRequired) {
@@ -85,9 +95,18 @@ export function AddTask({ columnId, onAdd }: AddTaskProps) {
       setErrorReason(null);
       inputRef.current?.focus();
     } catch (error) {
-      setErrorReason(
+      const transition = taskCaptureFailureTransition(
+        title,
         error instanceof TaskCaptureError ? error.reason : "uncertain",
       );
+      setTitle(transition.title);
+      setErrorReason(transition.errorReason);
+      if (transition.removeComposer) {
+        setOperationId(generateUUID());
+        setOperationColumnId(columnId);
+        setIsOpen(false);
+        return;
+      }
       inputRef.current?.focus();
     } finally {
       pendingRef.current = false;
@@ -108,6 +127,19 @@ export function AddTask({ columnId, onAdd }: AddTaskProps) {
     setOperationId(generateUUID());
     setErrorReason(null);
     inputRef.current?.focus();
+  }
+
+  if (accessDenied) {
+    return (
+      <p
+        ref={accessDeniedRef}
+        role="alert"
+        tabIndex={-1}
+        className="rounded-xl border border-border bg-surface-raised p-3 text-sm text-text-muted"
+      >
+        {message}
+      </p>
+    );
   }
 
   if (!isOpen) {
@@ -150,7 +182,7 @@ export function AddTask({ columnId, onAdd }: AddTaskProps) {
           }}
           placeholder="¿Qué hay que hacer?"
           aria-label="Título de la tarea"
-          aria-describedby={message ? "task-capture-message" : undefined}
+          aria-describedby={message ? taskCaptureMessageId : undefined}
           className="w-full flex-1 bg-transparent px-3 py-1.5 font-medium text-sm text-text-primary placeholder-text-muted outline-none read-only:opacity-70"
         />
         <button
@@ -176,7 +208,7 @@ export function AddTask({ columnId, onAdd }: AddTaskProps) {
       </div>
       {message ? (
         <output
-          id="task-capture-message"
+          id={taskCaptureMessageId}
           aria-live="polite"
           className="px-3 py-2 text-text-muted text-xs"
         >

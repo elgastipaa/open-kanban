@@ -52,6 +52,36 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION public.task_capture_normalize_title(p_title text)
+RETURNS text
+LANGUAGE plpgsql
+IMMUTABLE
+SET search_path = pg_catalog
+AS $$
+DECLARE
+  v_title text;
+BEGIN
+  IF p_title IS NULL THEN
+    RAISE EXCEPTION 'Enter a task title' USING ERRCODE = '22023';
+  END IF;
+
+  v_title := pg_catalog.regexp_replace(
+    p_title,
+    '^[[:space:]]+|[[:space:]]+$',
+    '',
+    'g'
+  );
+  IF v_title = '' THEN
+    RAISE EXCEPTION 'Enter a task title' USING ERRCODE = '22023';
+  END IF;
+  IF pg_catalog.char_length(v_title) > 200 THEN
+    RAISE EXCEPTION 'Task titles must be 200 characters or fewer'
+      USING ERRCODE = '22023';
+  END IF;
+  RETURN v_title;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION public.resolve_task_capture_receipt_p(
   p_operation_id uuid,
   p_expected_payload_hash bytea DEFAULT NULL
@@ -157,7 +187,7 @@ BEGIN
   JOIN public.boards AS board ON board.id = column_row.board_id
   WHERE task.id = v_receipt.task_id
     AND board.id = v_receipt.board_id
-    AND column_row.id = v_column_id;
+    AND column_row.generation_id = board.active_generation_id;
   IF NOT FOUND THEN
     RETURN jsonb_build_object('status', 'unavailable');
   END IF;
@@ -213,15 +243,7 @@ BEGIN
   IF p_board_id IS NULL OR p_column_id IS NULL THEN
     RAISE EXCEPTION 'Choose a board and column' USING ERRCODE = '22023';
   END IF;
-  IF p_title IS NULL OR btrim(p_title) = '' THEN
-    RAISE EXCEPTION 'Enter a task title' USING ERRCODE = '22023';
-  END IF;
-
-  v_title := btrim(p_title);
-  IF char_length(v_title) > 200 THEN
-    RAISE EXCEPTION 'Task titles must be 200 characters or fewer'
-      USING ERRCODE = '22023';
-  END IF;
+  v_title := public.task_capture_normalize_title(p_title);
   IF p_description IS NOT NULL AND char_length(p_description) > 2000 THEN
     RAISE EXCEPTION 'Task descriptions must be 2000 characters or fewer'
       USING ERRCODE = '22023';
@@ -375,15 +397,7 @@ BEGIN
     RAISE EXCEPTION 'A task creation operation, board, and column are required'
       USING ERRCODE = '22023';
   END IF;
-  IF p_title IS NULL OR btrim(p_title) = '' THEN
-    RAISE EXCEPTION 'Enter a task title' USING ERRCODE = '22023';
-  END IF;
-
-  v_title := btrim(p_title);
-  IF char_length(v_title) > 200 THEN
-    RAISE EXCEPTION 'Task titles must be 200 characters or fewer'
-      USING ERRCODE = '22023';
-  END IF;
+  v_title := public.task_capture_normalize_title(p_title);
   IF p_description IS NOT NULL AND char_length(p_description) > 2000 THEN
     RAISE EXCEPTION 'Task descriptions must be 2000 characters or fewer'
       USING ERRCODE = '22023';
@@ -412,6 +426,8 @@ END;
 $$;
 
 REVOKE ALL ON FUNCTION public.task_capture_payload_hash(jsonb)
+  FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.task_capture_normalize_title(text)
   FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.resolve_task_capture_receipt_p(uuid, bytea)
   FROM PUBLIC, anon, authenticated, service_role;

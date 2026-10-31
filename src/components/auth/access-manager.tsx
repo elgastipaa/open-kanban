@@ -24,7 +24,7 @@ interface AccessRpcError {
 
 function getAccessErrorMessage(error: AccessRpcError): string {
   if (error.code === "55000") {
-    return "No se puede suspender esta cuenta porque posee tableros. La gestión de propiedad corresponde al issue #19.";
+    return "No se puede suspender esta cuenta mientras tenga tableros a su nombre. Resolvé la propiedad antes de continuar.";
   }
   if (
     error.code === "23514" &&

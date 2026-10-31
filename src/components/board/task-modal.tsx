@@ -28,7 +28,9 @@ import {
   reviewTaskEditConflict,
   startTaskEditSave,
   type TaskEditDraft,
+  type TaskEditSaveIntent,
   type TaskEditWorkflowState,
+  taskEditSaveFollowUp,
 } from "@/lib/task-edit-workflow";
 import type {
   Priority,
@@ -265,7 +267,7 @@ export function TaskModal({
     };
   }
 
-  async function save(closeAfterConfirmation = false) {
+  async function save(intent: TaskEditSaveIntent = "stay") {
     if (
       !task ||
       !baseTask ||
@@ -279,7 +281,7 @@ export function TaskModal({
     const retry = retryTaskEditSave(workflow);
     const operation = retry?.operation ?? buildOperation();
     if (!operation) {
-      if (closeAfterConfirmation) onClose();
+      if (taskEditSaveFollowUp(intent, "confirmed") === "close") onClose();
       return;
     }
 
@@ -312,7 +314,9 @@ export function TaskModal({
       setReconciliationRequired(false);
       setReconciliationError("");
       setShowCloseChoices(false);
-      if (closeAfterConfirmation) onClose();
+      const followUp = taskEditSaveFollowUp(intent, "confirmed");
+      if (followUp === "close") onClose();
+      if (followUp === "confirm-delete") onDelete(task.id);
     } catch (error) {
       if (
         error instanceof TaskEditError &&
@@ -711,8 +715,9 @@ export function TaskModal({
             </p>
             {closeAction === "delete" && (
               <p className="mt-1 text-sm text-text-secondary">
-                Guardar conserva este detalle abierto. La eliminación se
-                confirma por separado después.
+                Si se confirma el guardado, aparecerá la confirmación de
+                eliminación. Si hay un error o conflicto, el borrador seguirá
+                aquí.
               </p>
             )}
             {closeNotice && (
@@ -727,7 +732,7 @@ export function TaskModal({
               {closeAction === "close" && (
                 <Button
                   variant="primary"
-                  onClick={() => void save(true)}
+                  onClick={() => void save("close")}
                   disabled={
                     !dirty ||
                     !normalizedTitle ||
@@ -743,7 +748,7 @@ export function TaskModal({
               {closeAction === "delete" && (
                 <Button
                   variant="primary"
-                  onClick={() => void save(false)}
+                  onClick={() => void save("delete")}
                   disabled={
                     !dirty ||
                     !normalizedTitle ||
@@ -753,7 +758,7 @@ export function TaskModal({
                     reconciliationRequired
                   }
                 >
-                  Guardar cambios
+                  Guardar y continuar
                 </Button>
               )}
               <Button

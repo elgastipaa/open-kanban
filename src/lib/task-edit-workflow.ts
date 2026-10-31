@@ -24,6 +24,25 @@ export type TaskEditWorkflowStatus =
   | "error"
   | "conflict";
 
+export type TaskEditSaveIntent = "stay" | "close" | "delete";
+export type TaskEditSaveOutcome =
+  | "confirmed"
+  | "conflict"
+  | "error"
+  | "reconciliation";
+export type TaskEditSaveFollowUp = "none" | "close" | "confirm-delete";
+
+/** Destructive follow-up is allowed only after the save itself is confirmed. */
+export function taskEditSaveFollowUp(
+  intent: TaskEditSaveIntent,
+  outcome: TaskEditSaveOutcome,
+): TaskEditSaveFollowUp {
+  if (outcome !== "confirmed") return "none";
+  if (intent === "close") return "close";
+  if (intent === "delete") return "confirm-delete";
+  return "none";
+}
+
 export interface TaskEditWorkflowState {
   draft: TaskEditDraft;
   status: TaskEditWorkflowStatus;

@@ -7,6 +7,7 @@ import {
   requireTaskEditReconciliation,
   retryTaskEditSave,
   startTaskEditSave,
+  taskEditSaveFollowUp,
 } from "../../src/lib/task-edit-workflow.ts";
 
 const initialDraft = {
@@ -76,4 +77,13 @@ test("changing a draft after an uncertain save starts a new intent", () => {
   assert.equal(changed.operation, null);
   assert.equal(changed.draft.title, "Texto corregido");
   assert.equal(retryTaskEditSave(changed), null);
+});
+
+test("delete confirmation follows only a confirmed save", () => {
+  assert.equal(taskEditSaveFollowUp("delete", "confirmed"), "confirm-delete");
+  assert.equal(taskEditSaveFollowUp("delete", "conflict"), "none");
+  assert.equal(taskEditSaveFollowUp("delete", "error"), "none");
+  assert.equal(taskEditSaveFollowUp("delete", "reconciliation"), "none");
+  assert.equal(taskEditSaveFollowUp("close", "confirmed"), "close");
+  assert.equal(taskEditSaveFollowUp("stay", "confirmed"), "none");
 });

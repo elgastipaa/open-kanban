@@ -125,3 +125,18 @@ La implementación de «Capturar tareas consecutivas sin duplicados» se revisó
 - Se preservaron los cambios ajenos de `docs/VALIDATION.md` y `.scratch/` sin stage/commit.
 
 Próximo paso: completar Auth/PostgREST y recorrido de navegador con sesión sintética legítima cuando el prerequisito #6 y el runner permitan hacerlo. Mantener #7 abierto y su dependencia intacta hasta verificar todos sus criterios.
+
+## Entrega local de #8 — 2026-10-31
+
+La implementación de «Editar desde un detalle único y resolver conflictos» se completó en `codex/issue-8` desde la base fija `8200bab94d74bd53f7f6148e0259ff787adcc667`. HEAD final de código/evidencia y revisión: `8bbc6f33c55ab8282cf61f2667155a170e96820c`; matriz por criterio: [docs/validation/issue-8.md](../validation/issue-8.md). La rama se integró por fast-forward en `codex/openkanban-1-0`.
+
+- TDD con migración 019, PostgreSQL desechable 16.15 y actores Auth sintéticos. `pnpm test:db` pasa en el árbol con la migración 019; commits posteriores solo modificaron UI y estados de foco/borrado. La DB cubre dos editores sobre mismo campo, combinación de campos distintos, receipts/replay/colisión/expiración, movimiento independiente, permisos y revocación.
+- En HEAD final pasan `pnpm test:unit` (18/18), `pnpm typecheck`, `pnpm build` (Next 16.4.2), Biome dirigido y `git diff --check`. El lint completo sigue mostrando diagnósticos de formato/lint previos en archivos fuera del diff.
+- Reviews finales Spec y Standards contra la base fija `8200bab`: sin hallazgos materiales ni infracciones de normas. Quedan olores de mantenimiento bajos documentados en `test-db.sh` (andamiaje concurrente duplicado) y `TaskEditOperation` (forma duplicada de `TaskEditCommand`).
+- `TaskModal` permanece parcial respecto de UI-05: hoy se abre desde el tablero y edita título, descripción y prioridad; faltan entradas desde Mis tareas/búsqueda/vistas/novedades y acciones/campos todavía no implementados. DOM, Escape, recorrido móvil/escritorio, Auth/PostgREST HTTP y mala conexión real requieren recorrido humano; no se instaló runner de navegador.
+- C-95: al borrar con cambios, Guardar y continuar solo abre la confirmación tras `confirmed`; error/conflicto no borran. Se cierra el detalle antes de la confirmación; Cancelar reabre el detalle guardado si la tarea existe y confirmar restaura foco al vecino/columna/tablero después del borrado. Borrado directo desde tarjeta no reutiliza un origen anterior. Transiciones unitarias prueban este flujo; Escape/DOM sigue manual.
+- GitHub #8 permanece OPEN, asignado a `elgastipaa`, label `ready-for-human`, con `Blocked by #7` sin cambios; evidencia comentada en https://github.com/elgastipaa/open-kanban/issues/8#issuecomment-6550002568. #7 continúa OPEN/`ready-for-human` y conserva `Blocked by #6`.
+- PR acumulada #54 continúa OPEN/draft, base `main`, head `codex/openkanban-1-0`; body actualizado con #8, evidencia y límites. Evidencia remota: https://github.com/elgastipaa/open-kanban/blob/codex/openkanban-1-0/docs/validation/issue-8.md.
+- Se preservó el cambio ajeno de `docs/VALIDATION.md` con SHA-256 `B8669EAAFEA1A6D41C1342470E49324D2FAA50BED03DCCCFE7E94AF17D51FD9C` y `.scratch/` sin seguimiento. No se modificó `main`, no se ejecutó SQL remoto ni hubo despliegue.
+
+El issue queda abierto/ready-for-human por bloqueo y verificación manual pendiente. Esta entrega no autoriza cerrar #8/#7, merge a `main`, ni despliegue a producción.

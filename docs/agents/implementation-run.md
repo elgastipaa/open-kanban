@@ -153,8 +153,12 @@ La implementación de «Mover y ordenar sin perder ediciones» se hizo en `codex
 - #9 sigue OPEN/`ready-for-human`. #3 está cerrado con entrega; #8 continúa OPEN/`ready-for-human`. Las relaciones nativas/textuales `Blocked by #3` y `Blocked by #8` se conservan. No se cerró #9 ni se aceptó manualmente #8.
 - No se usaron Google OAuth, cuentas/datos reales, CUA/IAB, bypass de permisos, migraciones remotas ni producción. No se tocó `main` ni hubo despliegue.
 
-### Integración y tracker de #9 — pendiente de publicación ordinaria
+### Integración y tracker de #9 — publicado
 
-La integración local avanzó por fast-forward desde `03f3daf31ae38470603eef3ad5740234eaa70471` hasta el HEAD de código `cd868c322c13ba0ffa71034dfe657e21fc4b7868`. Falta completar el push ordinario autorizado de `codex/openkanban-1-0`, actualizar el body de la PR acumulada #54 en borrador y registrar la evidencia en el comentario de #9. Al terminar, verificar por lectura que #9 siga OPEN/`ready-for-human`, asignado a `elgastipaa`, con sus dos aristas bloqueadoras intactas; no cerrar ni cambiar otras relaciones.
+La integración de código `cd868c322c13ba0ffa71034dfe657e21fc4b7868` avanzó por fast-forward desde `03f3daf31ae38470603eef3ad5740234eaa70471`; el push ordinario inicial publicó `dadba7dadc2435b59ff2bb2dc6a40dea9def62ec` en `origin/codex/openkanban-1-0`. Este commit registra el estado final de integración y tracker. La PR acumulada #54 está OPEN/draft, base `main`, head `codex/openkanban-1-0`, título `OpenKanban 1.0 — implementación progresiva (#3–#9)`; su body incluye la evidencia de #9 y los pendientes humanos.
 
-Se preservan los cambios ajenos de `docs/VALIDATION.md` con SHA-256 `B8669EAAFEA1A6D41C1342470E49324D2FAA50BED03DCCCFE7E94AF17D51FD9C` y `.scratch/` sin seguimiento. No modificar `main`, hacer force-push, ejecutar SQL remoto ni desplegar producción.
+- GitHub #9 está OPEN, asignado a `elgastipaa` y etiquetado `ready-for-human`. Evidencia comentada: https://github.com/elgastipaa/open-kanban/issues/9#issuecomment-6550598906. No se cerró ni se cambiaron sus aristas.
+- #3 está CLOSED con entrega; #8 continúa OPEN/`ready-for-human`. El body de #9 conserva `Blocked by #3` y `Blocked by #8`; #8 conserva su `Blocked by #7`.
+- La PR se mantuvo en borrador y con base `main`; no se hizo merge ni se tocó `main`.
+
+Se preservan los cambios ajenos de `docs/VALIDATION.md` con SHA-256 `B8669EAAFEA1A6D41C1342470E49324D2FAA50BED03DCCCFE7E94AF17D51FD9C` y `.scratch/` sin seguimiento. No hacer force-push, ejecutar SQL remoto ni desplegar producción.

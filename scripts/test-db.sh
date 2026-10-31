@@ -243,6 +243,122 @@ done
 "${psql[@]}" -f "$repo_dir/tests/db/authentication.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/admin_authorization.sql"
 
+# An active non-admin must be rejected before waiting on another transaction's
+# access-management lock, for every admin mutation.
+nonadmin_race_dir="$test_dir/admin-nonadmin-lock-race"
+mkdir -- "$nonadmin_race_dir"
+nonadmin_lock_log="$nonadmin_race_dir/lock-holder.log"
+nonadmin_attempt_log="$nonadmin_race_dir/nonadmin-attempt.log"
+
+PGAPPNAME=openkanban_admin_nonadmin_lock_holder "${psql[@]}" > "$nonadmin_lock_log" 2>&1 <<'SQL' &
+BEGIN;
+LOCK TABLE public.application_access IN SHARE ROW EXCLUSIVE MODE;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000001', true);
+DO $$
+BEGIN
+  IF NOT public.is_application_admin() THEN
+    RAISE EXCEPTION 'The lock holder is not an active administrator.';
+  END IF;
+END;
+$$;
+SELECT pg_sleep(7);
+COMMIT;
+SQL
+nonadmin_lock_pid=$!
+
+nonadmin_lock_acquired=false
+for _ in $(seq 1 100); do
+  holder_state=$("${psql[@]}" -At -c "SELECT state FROM pg_stat_activity WHERE application_name = 'openkanban_admin_nonadmin_lock_holder' AND state = 'active' AND query LIKE '%pg_sleep(7)%'")
+  if [[ "$holder_state" == active ]]; then
+    nonadmin_lock_acquired=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$nonadmin_lock_acquired" != true ]]; then
+  cat -- "$nonadmin_lock_log" >&2
+  echo 'The administrator lock holder did not start its wait.' >&2
+  wait "$nonadmin_lock_pid" || true
+  exit 1
+fi
+
+PGAPPNAME=openkanban_admin_nonadmin_lock_attempt "${psql[@]}" > "$nonadmin_attempt_log" 2>&1 <<'SQL' &
+\set VERBOSITY verbose
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);
+DO $$
+DECLARE
+  v_sqlstate text;
+BEGIN
+  BEGIN
+    PERFORM public.admin_enable_access('unauthorized-lock-test@example.test');
+    RAISE EXCEPTION 'An active non-admin enabled access';
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_sqlstate = RETURNED_SQLSTATE;
+    IF v_sqlstate <> '42501' THEN
+      RAISE;
+    END IF;
+  END;
+  BEGIN
+    PERFORM public.admin_remove_pending_access('pending-target@example.test');
+    RAISE EXCEPTION 'An active non-admin removed pending access';
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_sqlstate = RETURNED_SQLSTATE;
+    IF v_sqlstate <> '42501' THEN
+      RAISE;
+    END IF;
+  END;
+  BEGIN
+    PERFORM public.admin_suspend_access('revocation-user@example.test');
+    RAISE EXCEPTION 'An active non-admin suspended access';
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_sqlstate = RETURNED_SQLSTATE;
+    IF v_sqlstate <> '42501' THEN
+      RAISE;
+    END IF;
+  END;
+END;
+$$;
+COMMIT;
+\echo 'PASS: active non-admin admin RPCs return 42501 before waiting for the access lock.'
+SQL
+nonadmin_attempt_pid=$!
+
+nonadmin_attempt_passed=false
+nonadmin_attempt_waited=false
+for _ in $(seq 1 100); do
+  if grep -q 'PASS: active non-admin admin RPCs return 42501 before waiting' "$nonadmin_attempt_log"; then
+    nonadmin_attempt_passed=true
+    break
+  fi
+  waiting_count=$("${psql[@]}" -At -c "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'openkanban_admin_nonadmin_lock_attempt' AND wait_event_type = 'Lock'")
+  if [[ "$waiting_count" == 1 ]]; then
+    nonadmin_attempt_waited=true
+    break
+  fi
+  sleep 0.05
+done
+
+if [[ "$nonadmin_attempt_passed" != true ]]; then
+  if [[ "$nonadmin_attempt_waited" == true ]]; then
+    echo 'An active non-admin waited on the access lock before authorization was checked.' >&2
+  else
+    echo 'An active non-admin RPC did not finish promptly with an authorization error.' >&2
+  fi
+  cat -- "$nonadmin_attempt_log" >&2
+  "${psql[@]}" -q -c "SELECT pg_cancel_backend(pid) FROM pg_stat_activity WHERE application_name = 'openkanban_admin_nonadmin_lock_holder'" >/dev/null
+  wait "$nonadmin_lock_pid" || true
+  wait "$nonadmin_attempt_pid" || true
+  exit 1
+fi
+
+"${psql[@]}" -q -c "SELECT pg_cancel_backend(pid) FROM pg_stat_activity WHERE application_name = 'openkanban_admin_nonadmin_lock_holder'" >/dev/null
+wait "$nonadmin_lock_pid" || true
+wait "$nonadmin_attempt_pid" || { cat -- "$nonadmin_attempt_log" >&2; exit 1; }
+echo 'PASS: active non-admin admin RPCs return 42501 before waiting for the access lock.'
+
 # A former administrator must lose authority if another administrator
 # suspends their account while a second admin action is waiting on the lock.
 admin_race_dir="$test_dir/admin-access-race"

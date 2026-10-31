@@ -11,6 +11,7 @@ AS $$
 DECLARE
   v_email text := lower(btrim(p_email));
 BEGIN
+  PERFORM public.require_application_admin();
   LOCK TABLE public.application_access IN SHARE ROW EXCLUSIVE MODE;
   PERFORM public.require_application_admin();
 
@@ -41,6 +42,7 @@ AS $$
 DECLARE
   v_removed boolean;
 BEGIN
+  PERFORM public.require_application_admin();
   LOCK TABLE public.application_access IN SHARE ROW EXCLUSIVE MODE;
   PERFORM public.require_application_admin();
 
@@ -62,6 +64,7 @@ AS $$
 DECLARE
   v_access public.application_access%ROWTYPE;
 BEGIN
+  PERFORM public.require_application_admin();
   LOCK TABLE public.application_access IN SHARE ROW EXCLUSIVE MODE;
   -- Recheck the actor after waiting for another administrator's operation.
   PERFORM public.require_application_admin();

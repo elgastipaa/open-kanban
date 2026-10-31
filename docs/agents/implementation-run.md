@@ -128,7 +128,7 @@ Próximo paso: completar Auth/PostgREST y recorrido de navegador con sesión sin
 
 ## Entrega local de #8 — 2026-10-31
 
-La implementación de «Editar desde un detalle único y resolver conflictos» se completó en `codex/issue-8` desde la base fija `8200bab94d74bd53f7f6148e0259ff787adcc667`. HEAD final de código/evidencia y revisión: `8bbc6f33c55ab8282cf61f2667155a170e96820c`; matriz por criterio: [docs/validation/issue-8.md](../validation/issue-8.md). La rama se integró por fast-forward en `codex/openkanban-1-0`.
+La implementación de «Editar desde un detalle único y resolver conflictos» se completó en `codex/issue-8` desde la base fija `8200bab94d74bd53f7f6148e0259ff787adcc667`. HEAD de código revisado: `8bbc6f33c55ab8282cf61f2667155a170e96820c`; matriz por criterio y estado final de revisiones/tracker: [docs/validation/issue-8.md](../validation/issue-8.md). La rama se integró por fast-forward en `codex/openkanban-1-0`.
 
 - TDD con migración 019, PostgreSQL desechable 16.15 y actores Auth sintéticos. `pnpm test:db` pasa en el árbol con la migración 019; commits posteriores solo modificaron UI y estados de foco/borrado. La DB cubre dos editores sobre mismo campo, combinación de campos distintos, receipts/replay/colisión/expiración, movimiento independiente, permisos y revocación.
 - En HEAD final pasan `pnpm test:unit` (18/18), `pnpm typecheck`, `pnpm build` (Next 16.4.2), Biome dirigido y `git diff --check`. El lint completo sigue mostrando diagnósticos de formato/lint previos en archivos fuera del diff.

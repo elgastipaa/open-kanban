@@ -79,3 +79,5 @@ El smoke de #5 reveló hidratación fallida en login: `src/app/login/page.tsx` e
 - #4 sigue OPEN/`ready-for-human`; OAuth/Auth real con identidad habilitada y no habilitada, logout y cambio de cuenta aún requieren recorrido manual. Este hotfix no satisface esos criterios.
 - Evidencia comentada en el issue #4: https://github.com/elgastipaa/open-kanban/issues/4#issuecomment-6547402399.
 - No se hizo push ni se operó main/producción. Se preservan `docs/VALIDATION.md` y `.scratch/` ajenos.
+
+Integración final de #4: el fast-forward local desde b8b6bb32524070b4cd829ce11302e5a8124c3602 dejó codex/issue-4 y codex/openkanban-1-0 en 5711755888a59d44845d3fb6d2de8ac68c8712ee (corrección de código d810d45, evidencia c0698f1, comentario de issue 5711755). No se hizo push; #4 permanece abierto/ready-for-human hasta OAuth real.

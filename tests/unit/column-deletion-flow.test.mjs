@@ -5,6 +5,7 @@ import {
   columnDeletionDecision,
   columnDeletionErrorMessage,
   columnDeletionNoDestinationMessage,
+  columnDeletionSuccessMessage,
   createColumnDeletionCommand,
   failColumnDeletionPreview,
   failColumnDeletionSubmission,
@@ -68,6 +69,22 @@ test("no destination copy distinguishes an empty last column from tasks to move"
   assert.equal(
     columnDeletionNoDestinationMessage(2),
     "No se puede borrar la última columna. Agrega otra columna para trasladar allí las tareas o cancela para dejar esta columna.",
+  );
+});
+
+test("successful deletion toast distinguishes no transfer, singular, and plural tasks while retaining expiry", () => {
+  const expiry = "8 nov 2026, 14:30";
+  assert.equal(
+    columnDeletionSuccessMessage(0, expiry),
+    `No se trasladaron tareas. La estructura se podrá recuperar hasta ${expiry}.`,
+  );
+  assert.equal(
+    columnDeletionSuccessMessage(1, expiry),
+    `1 tarea quedó en la columna elegida. La estructura se podrá recuperar hasta ${expiry}.`,
+  );
+  assert.equal(
+    columnDeletionSuccessMessage(3, expiry),
+    `3 tareas quedaron en la columna elegida. La estructura se podrá recuperar hasta ${expiry}.`,
   );
 });
 

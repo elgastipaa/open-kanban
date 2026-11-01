@@ -227,3 +227,19 @@ export function columnDeletionNoDestinationMessage(taskCount: number): string {
     ? "No se puede borrar la última columna. Agrega otra columna para trasladar allí las tareas o cancela para dejar esta columna."
     : "No se puede borrar la última columna. Agrega otra columna o cancela para dejar esta columna.";
 }
+
+export function columnDeletionSuccessMessage(
+  movedTaskCount: number | undefined,
+  recoverableUntil: string,
+): string {
+  const recoveryMessage = `La estructura se podrá recuperar hasta ${recoverableUntil}.`;
+  if (movedTaskCount === undefined) return recoveryMessage;
+  if (movedTaskCount <= 0) {
+    return `No se trasladaron tareas. ${recoveryMessage}`;
+  }
+  const taskMessage =
+    movedTaskCount === 1
+      ? "1 tarea quedó en la columna elegida."
+      : `${movedTaskCount} tareas quedaron en la columna elegida.`;
+  return `${taskMessage} ${recoveryMessage}`;
+}

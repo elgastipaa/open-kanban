@@ -22,6 +22,7 @@ import { useOnlineStatus } from "@/hooks/use-online-status";
 import { usePresence } from "@/hooks/use-presence";
 import { useRealtime } from "@/hooks/use-realtime";
 import { resolveApplicationAccess } from "@/lib/auth";
+import { columnDeletionSuccessMessage } from "@/lib/column-deletion-flow";
 import {
   BoardRecoveryError,
   previewBoardTimeZone,
@@ -1009,7 +1010,13 @@ function BoardWorkspace({
         onDelete={handleDeleteColumn}
         onDeleted={(result) => {
           toast.success("Columna eliminada", {
-            description: `Su estructura se podrá recuperar hasta ${new Date(result.expires_at ?? Date.now()).toLocaleString("es-AR", { timeZone: board?.time_zone ?? initialBoard.time_zone })}. Las tareas quedaron en la columna elegida.`,
+            description: columnDeletionSuccessMessage(
+              result.moved_task_count,
+              new Date(result.expires_at ?? Date.now()).toLocaleString(
+                "es-AR",
+                { timeZone: board?.time_zone ?? initialBoard.time_zone },
+              ),
+            ),
           });
         }}
       />

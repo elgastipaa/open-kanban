@@ -101,3 +101,36 @@ test("a remote reorder read after create/delete replaces old order and preserves
   );
   assert.equal(accessLostCalls, 0);
 });
+
+test("an unresolved delete settles its optimistic intent and restores the task for review", () => {
+  const originalTask = task(
+    "task-uncertain",
+    "source",
+    0,
+    "Tarea pendiente de confirmar",
+  );
+  const originalColumns = [column("source", [originalTask], 1)];
+  const ledger = new TaskMutationLedger(originalColumns);
+  const optimisticColumns = ledger.begin(
+    {
+      id: "delete-operation",
+      kind: "delete",
+      taskId: originalTask.id,
+    },
+    originalColumns,
+  );
+  assert.deepEqual(optimisticColumns[0].tasks, []);
+
+  const settledColumns = ledger.settle("delete-operation", optimisticColumns);
+  const reviewableColumns = ledger.restoreTaskAfterFailedDelete(
+    originalTask,
+    settledColumns,
+  );
+
+  assert.equal(ledger.revision > 0, true);
+  assert.deepEqual(
+    reviewableColumns[0].tasks.map(({ id }) => id),
+    [originalTask.id],
+  );
+  assert.equal(reviewableColumns[0].tasks[0].title, originalTask.title);
+});

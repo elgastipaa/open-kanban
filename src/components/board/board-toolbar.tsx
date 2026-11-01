@@ -31,6 +31,8 @@ interface BoardToolbarProps {
   name: string;
   timeZone: string;
   canRename: boolean;
+  canRecoverTasks: boolean;
+  onOpenTaskRecovery: () => void;
   onPreviewTimeZone: (timeZone: string) => Promise<BoardTimeZonePreview>;
   onSaveTimeZone: (expectedTimeZone: string, timeZone: string) => Promise<void>;
   viewerCount: number;
@@ -46,6 +48,8 @@ export function BoardToolbar({
   name,
   timeZone,
   canRename,
+  canRecoverTasks,
+  onOpenTaskRecovery,
   onPreviewTimeZone,
   onSaveTimeZone,
   viewerCount,
@@ -212,33 +216,47 @@ export function BoardToolbar({
       </div>
 
       <div className="flex items-center gap-1">
+        {canRename || canRecoverTasks ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              title="Más acciones del tablero"
+              aria-label={`Opciones del tablero ${name}`}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-transparent text-text-secondary transition-colors hover:bg-surface-overlay hover:text-text-primary focus-visible:ring-1 focus-visible:ring-accent"
+            >
+              <IconDots size={18} aria-hidden="true" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-56">
+              {canRecoverTasks ? (
+                <DropdownMenuItem
+                  onClick={onOpenTaskRecovery}
+                  className="cursor-pointer"
+                >
+                  Recuperación de tareas
+                </DropdownMenuItem>
+              ) : null}
+              {canRename ? (
+                <>
+                  <DropdownMenuItem
+                    onClick={() => setIsTimeZoneDialogOpen(true)}
+                    className="cursor-pointer"
+                  >
+                    <IconWorld size={16} aria-hidden="true" />
+                    Zona horaria del tablero
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => setIsInvitationsDialogOpen(true)}
+                    className="cursor-pointer"
+                  >
+                    <IconUsers size={16} aria-hidden="true" />
+                    Invitaciones
+                  </DropdownMenuItem>
+                </>
+              ) : null}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : null}
         {canRename ? (
           <>
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                title="Más acciones del tablero"
-                aria-label="Más acciones del tablero"
-                className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-transparent text-text-secondary transition-colors hover:bg-surface-overlay hover:text-text-primary focus-visible:ring-1 focus-visible:ring-accent"
-              >
-                <IconDots size={18} aria-hidden="true" />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="min-w-56">
-                <DropdownMenuItem
-                  onClick={() => setIsTimeZoneDialogOpen(true)}
-                  className="cursor-pointer"
-                >
-                  <IconWorld size={16} aria-hidden="true" />
-                  Zona horaria del tablero
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() => setIsInvitationsDialogOpen(true)}
-                  className="cursor-pointer"
-                >
-                  <IconUsers size={16} aria-hidden="true" />
-                  Invitaciones
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
             <BoardTimeZoneDialog
               open={isTimeZoneDialogOpen}
               onClose={() => setIsTimeZoneDialogOpen(false)}

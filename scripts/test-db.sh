@@ -246,6 +246,196 @@ done
 "${psql[@]}" -q -f "$repo_dir/tests/db/board_invitations.sql"
 "${psql[@]}" -q -f "$repo_dir/tests/db/board_invitation_operation_receipts.sql"
 "${psql[@]}" -q -f "$repo_dir/tests/db/my_tasks.sql"
+"${psql[@]}" -q -f "$repo_dir/tests/db/task_recovery.sql"
+
+# Restore and expiry purge lock the same task deletion. Exercise both possible
+# winners with independent psql sessions and the private controlled-clock seam.
+task_recovery_race_dir="$test_dir/task-recovery-race"
+mkdir -- "$task_recovery_race_dir"
+purge_wins_dir="$task_recovery_race_dir/purge-wins"
+restore_wins_dir="$task_recovery_race_dir/restore-wins"
+mkdir -- "$purge_wins_dir" "$restore_wins_dir"
+purge_wins_task_id=$(
+  "${psql[@]}" -At -c "SELECT task_id FROM public.issue14_task_recovery_race_fixture WHERE scenario = 'purge_wins'"
+)
+purge_wins_board_slug=$(
+  "${psql[@]}" -At -c "SELECT board_slug FROM public.issue14_task_recovery_race_fixture WHERE scenario = 'purge_wins'"
+)
+restore_wins_task_id=$(
+  "${psql[@]}" -At -c "SELECT task_id FROM public.issue14_task_recovery_race_fixture WHERE scenario = 'restore_wins'"
+)
+restore_wins_board_slug=$(
+  "${psql[@]}" -At -c "SELECT board_slug FROM public.issue14_task_recovery_race_fixture WHERE scenario = 'restore_wins'"
+)
+recovery_boundary='2030-01-08 00:00:00+00'
+"${psql[@]}" -q -v purge_wins_task_id="$purge_wins_task_id" \
+  -v restore_wins_task_id="$restore_wins_task_id" \
+  -v recovery_boundary="$recovery_boundary" <<'SQL'
+UPDATE public.task_deletions
+SET deleted_at = :'recovery_boundary'::timestamptz - interval '7 days',
+    expires_at = :'recovery_boundary'::timestamptz
+WHERE task_id IN (:'purge_wins_task_id'::uuid, :'restore_wins_task_id'::uuid);
+UPDATE public.issue14_task_recovery_race_fixture
+SET expires_at = :'recovery_boundary'::timestamptz;
+SQL
+
+purge_wins_first_log="$purge_wins_dir/purger.log"
+purge_wins_second_log="$purge_wins_dir/restorer.log"
+PGAPPNAME=openkanban_issue14_purge_wins_purger "${psql[@]}" -qAt \
+  -v task_id="$purge_wins_task_id" -v expires_at="$recovery_boundary" \
+  > "$purge_wins_first_log" 2>&1 <<'SQL' &
+BEGIN;
+SELECT task_id FROM public.task_deletions WHERE task_id = :'task_id'::uuid FOR UPDATE;
+SELECT pg_sleep(4);
+SELECT public.purge_expired_task_internal_p(:'task_id'::uuid, :'expires_at'::timestamptz);
+COMMIT;
+SQL
+purge_wins_first_pid=$!
+purge_wins_first_holds_lock=false
+for _ in $(seq 1 100); do
+  purge_wins_state=$("${psql[@]}" -At -c "SELECT state FROM pg_stat_activity WHERE application_name = 'openkanban_issue14_purge_wins_purger' AND state = 'active' AND query LIKE '%pg_sleep(4)%'")
+  if [[ "$purge_wins_state" == active ]]; then
+    purge_wins_first_holds_lock=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$purge_wins_first_holds_lock" != true ]]; then
+  cat -- "$purge_wins_first_log" >&2
+  echo 'The purger did not acquire the task-deletion lock.' >&2
+  exit 1
+fi
+
+PGAPPNAME=openkanban_issue14_purge_wins_restorer "${psql[@]}" -qAt \
+  -v task_id="$purge_wins_task_id" -v board_slug="$purge_wins_board_slug" \
+  -v expires_at="$recovery_boundary" \
+  > "$purge_wins_second_log" 2>&1 <<'SQL' &
+BEGIN;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);
+SELECT public.restore_task_internal_p(
+  '14000000-0000-4000-8000-000000000101', :'board_slug', :'task_id'::uuid,
+  NULL, :'expires_at'::timestamptz
+)->>'status';
+COMMIT;
+SQL
+purge_wins_second_pid=$!
+purge_wins_second_waits=false
+for _ in $(seq 1 100); do
+  purge_wins_waiters=$("${psql[@]}" -At -c "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'openkanban_issue14_purge_wins_restorer' AND wait_event_type = 'Lock'")
+  if [[ "$purge_wins_waiters" == 1 ]]; then
+    purge_wins_second_waits=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$purge_wins_second_waits" != true ]]; then
+  cat -- "$purge_wins_second_log" >&2
+  echo 'The restorer did not wait for the concurrent purge.' >&2
+  "${psql[@]}" -q -c "SELECT pg_cancel_backend(pid) FROM pg_stat_activity WHERE application_name = 'openkanban_issue14_purge_wins_purger'" >/dev/null
+  wait "$purge_wins_first_pid" || true
+  wait "$purge_wins_second_pid" || true
+  exit 1
+fi
+wait "$purge_wins_first_pid" || { cat -- "$purge_wins_first_log" >&2; exit 1; }
+wait "$purge_wins_second_pid" || { cat -- "$purge_wins_second_log" >&2; exit 1; }
+if ! grep -Fxq 'purged' "$purge_wins_first_log" \
+  || ! grep -Fxq 'unavailable' "$purge_wins_second_log"; then
+  echo 'Purge-first task recovery race did not produce one terminal result.' >&2
+  cat -- "$purge_wins_first_log" "$purge_wins_second_log" >&2
+  exit 1
+fi
+purge_wins_final=$("${psql[@]}" -At -v task_id="$purge_wins_task_id" <<'SQL'
+SELECT CASE WHEN deletion.state = 'purged' AND deletion.task_snapshot IS NULL
+  AND NOT EXISTS (SELECT 1 FROM public.tasks AS task WHERE task.id = deletion.task_id)
+  THEN 'valid' ELSE 'invalid' END
+FROM public.task_deletions AS deletion
+WHERE deletion.task_id = :'task_id'::uuid;
+SQL
+)
+if [[ "$purge_wins_final" != valid ]]; then
+  echo 'Purge-first recovery race left partial task content or a restored row.' >&2
+  exit 1
+fi
+echo 'PASS: an exact-deadline purge wins atomically over a waiting restore.'
+
+restore_wins_first_log="$restore_wins_dir/restorer.log"
+restore_wins_second_log="$restore_wins_dir/purger.log"
+PGAPPNAME=openkanban_issue14_restore_wins_restorer "${psql[@]}" -qAt \
+  -v task_id="$restore_wins_task_id" -v board_slug="$restore_wins_board_slug" \
+  -v expires_at="$recovery_boundary" \
+  > "$restore_wins_first_log" 2>&1 <<'SQL' &
+BEGIN;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);
+SELECT public.restore_task_internal_p(
+  '14000000-0000-4000-8000-000000000102', :'board_slug', :'task_id'::uuid,
+  NULL, :'expires_at'::timestamptz - interval '1 microsecond'
+)->>'status';
+SELECT pg_sleep(4);
+COMMIT;
+SQL
+restore_wins_first_pid=$!
+restore_wins_first_holds_lock=false
+for _ in $(seq 1 100); do
+  restore_wins_state=$("${psql[@]}" -At -c "SELECT state FROM pg_stat_activity WHERE application_name = 'openkanban_issue14_restore_wins_restorer' AND state = 'active' AND query LIKE '%pg_sleep(4)%'")
+  if [[ "$restore_wins_state" == active ]]; then
+    restore_wins_first_holds_lock=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$restore_wins_first_holds_lock" != true ]]; then
+  cat -- "$restore_wins_first_log" >&2
+  echo 'The restorer did not retain the task-deletion lock.' >&2
+  exit 1
+fi
+
+PGAPPNAME=openkanban_issue14_restore_wins_purger "${psql[@]}" -qAt \
+  -v task_id="$restore_wins_task_id" -v expires_at="$recovery_boundary" \
+  > "$restore_wins_second_log" 2>&1 <<'SQL' &
+BEGIN;
+SELECT public.purge_expired_task_internal_p(:'task_id'::uuid, :'expires_at'::timestamptz);
+COMMIT;
+SQL
+restore_wins_second_pid=$!
+restore_wins_second_waits=false
+for _ in $(seq 1 100); do
+  restore_wins_waiters=$("${psql[@]}" -At -c "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'openkanban_issue14_restore_wins_purger' AND wait_event_type = 'Lock'")
+  if [[ "$restore_wins_waiters" == 1 ]]; then
+    restore_wins_second_waits=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$restore_wins_second_waits" != true ]]; then
+  cat -- "$restore_wins_second_log" >&2
+  echo 'The purger did not wait for the concurrent restore.' >&2
+  "${psql[@]}" -q -c "SELECT pg_cancel_backend(pid) FROM pg_stat_activity WHERE application_name = 'openkanban_issue14_restore_wins_restorer'" >/dev/null
+  wait "$restore_wins_first_pid" || true
+  wait "$restore_wins_second_pid" || true
+  exit 1
+fi
+wait "$restore_wins_first_pid" || { cat -- "$restore_wins_first_log" >&2; exit 1; }
+wait "$restore_wins_second_pid" || { cat -- "$restore_wins_second_log" >&2; exit 1; }
+if ! grep -Fxq 'confirmed' "$restore_wins_first_log" \
+  || ! grep -Fxq 'already_terminal' "$restore_wins_second_log"; then
+  echo 'Restore-first task recovery race did not produce one terminal result.' >&2
+  cat -- "$restore_wins_first_log" "$restore_wins_second_log" >&2
+  exit 1
+fi
+restore_wins_final=$("${psql[@]}" -At -v task_id="$restore_wins_task_id" <<'SQL'
+SELECT CASE WHEN deletion.state = 'restored' AND deletion.task_snapshot IS NULL
+  AND EXISTS (SELECT 1 FROM public.tasks AS task WHERE task.id = deletion.task_id)
+  THEN 'valid' ELSE 'invalid' END
+FROM public.task_deletions AS deletion
+WHERE deletion.task_id = :'task_id'::uuid;
+SQL
+)
+if [[ "$restore_wins_final" != valid ]]; then
+  echo 'Restore-first recovery race purged content or failed to restore the task.' >&2
+  exit 1
+fi
+echo 'PASS: a restore before expiry wins atomically over a waiting purge.'
+"${psql[@]}" -q -c 'DROP TABLE public.issue14_task_recovery_race_fixture'
 
 # Two current board members race to assign one task from the same version.
 # The board lock serializes the operation and the later command receives a

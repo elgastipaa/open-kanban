@@ -528,7 +528,14 @@ BEGIN
   SELECT task_order_version INTO STRICT v_before_delete_version
   FROM public.get_columns_p(v_fixture.board_id)
   WHERE id = v_fixture.source_column_id;
-  PERFORM public.delete_task_p(v_fixture.board_slug, v_deleted_task_id);
+  v_result := public.delete_task_p(
+    'f9999999-0000-4000-8000-000000000117',
+    v_fixture.board_slug,
+    v_deleted_task_id
+  );
+  IF v_result->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Deleting a task did not return a confirmed recovery record: %', v_result;
+  END IF;
   SELECT task_order_version INTO STRICT v_after_delete_version
   FROM public.get_columns_p(v_fixture.board_id)
   WHERE id = v_fixture.source_column_id;

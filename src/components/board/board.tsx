@@ -12,6 +12,7 @@ import { Column } from "@/components/board/column";
 import { KeyboardShortcuts } from "@/components/board/keyboard-shortcuts";
 import { MobileBoard } from "@/components/board/mobile-board";
 import { TaskModal } from "@/components/board/task-modal";
+import { TaskRecoveryDialog } from "@/components/board/task-recovery-dialog";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useBoard } from "@/hooks/use-board";
 import { useDevice } from "@/hooks/use-device";
@@ -476,6 +477,8 @@ function BoardWorkspace({
   // Delete board confirmation
   const [showDeleteBoard, setShowDeleteBoard] = useState(false);
   const [isDeletingBoard, setIsDeletingBoard] = useState(false);
+  const [isTaskRecoveryDialogOpen, setIsTaskRecoveryDialogOpen] =
+    useState(false);
 
   // Delete column confirmation
   const [deletingColumnId, setDeletingColumnId] = useState<string | null>(null);
@@ -713,6 +716,10 @@ function BoardWorkspace({
         name={board?.name ?? initialBoard.name}
         timeZone={board?.time_zone ?? initialBoard.time_zone}
         canRename={board?.role === "owner"}
+        canRecoverTasks={
+          initialBoard.role === "owner" || initialBoard.role === "collaborator"
+        }
+        onOpenTaskRecovery={() => setIsTaskRecoveryDialogOpen(true)}
         onPreviewTimeZone={handlePreviewTimeZone}
         onSaveTimeZone={handleSaveTimeZone}
         viewerCount={viewerCount}
@@ -817,6 +824,21 @@ function BoardWorkspace({
         onDelete={handleRequestEditorTaskDelete}
       />
 
+      <TaskRecoveryDialog
+        open={isTaskRecoveryDialogOpen}
+        onClose={() => setIsTaskRecoveryDialogOpen(false)}
+        onRestored={async () => {
+          await refreshBoardFromDB();
+          broadcastSync();
+        }}
+        slug={slug}
+        timeZone={board?.time_zone ?? initialBoard.time_zone}
+        columns={columns.map((column) => ({
+          id: column.id,
+          title: column.title,
+        }))}
+      />
+
       {/* Delete board confirmation */}
       <ConfirmDialog
         open={showDeleteBoard}
@@ -844,9 +866,9 @@ function BoardWorkspace({
         onClose={handleCancelTaskDelete}
         onConfirm={handleDeleteTask}
         onAfterClose={handleTaskDeleteDialogAfterClose}
-        title="Delete Task"
-        description="Are you sure you want to delete this task? This action cannot be undone."
-        confirmLabel="Delete Task"
+        title="Eliminar tarea"
+        description="La tarea se podrá recuperar desde Opciones del tablero durante siete días (7 × 24 horas). Después no se podrá recuperar."
+        confirmLabel="Eliminar tarea"
       />
     </div>
   );

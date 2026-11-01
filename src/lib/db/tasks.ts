@@ -95,6 +95,42 @@ export class TaskOrderError extends Error {
   }
 }
 
+export interface TaskRecoveryItem {
+  task_id: string;
+  title: string;
+  original_column_id: string;
+  cause: string;
+  deleted_at: string;
+  expires_at: string;
+  can_restore: boolean;
+  original_column_available: boolean;
+}
+
+export type TaskRecoveryResultStatus =
+  | "confirmed"
+  | "needs_destination"
+  | "expired"
+  | "unavailable";
+
+export interface TaskRecoveryResult {
+  status: TaskRecoveryResultStatus;
+  operation_id: string;
+}
+
+export type TaskRecoveryErrorReason =
+  | "uncertain"
+  | "unavailable"
+  | "expired"
+  | "rejected"
+  | "access_denied";
+
+export class TaskRecoveryError extends Error {
+  constructor(readonly reason: TaskRecoveryErrorReason) {
+    super(reason);
+    this.name = "TaskRecoveryError";
+  }
+}
+
 function isTaskCaptureResult(value: unknown): value is TaskCaptureResult {
   return (
     typeof value === "object" &&
@@ -657,17 +693,156 @@ function isTaskOrderResult(value: unknown): value is TaskOrderResult {
   ].includes(String(value.status));
 }
 
-/** Delete a task */
+function isTaskRecoveryItem(value: unknown): value is TaskRecoveryItem {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "task_id" in value &&
+    typeof value.task_id === "string" &&
+    "title" in value &&
+    typeof value.title === "string" &&
+    "original_column_id" in value &&
+    typeof value.original_column_id === "string" &&
+    "cause" in value &&
+    typeof value.cause === "string" &&
+    "deleted_at" in value &&
+    typeof value.deleted_at === "string" &&
+    "expires_at" in value &&
+    typeof value.expires_at === "string" &&
+    "can_restore" in value &&
+    typeof value.can_restore === "boolean" &&
+    "original_column_available" in value &&
+    typeof value.original_column_available === "boolean"
+  );
+}
+
+function isTaskRecoveryResult(value: unknown): value is TaskRecoveryResult {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "status" in value &&
+    ["confirmed", "needs_destination", "expired", "unavailable"].includes(
+      String(value.status),
+    ) &&
+    "operation_id" in value &&
+    typeof value.operation_id === "string"
+  );
+}
+
+function taskRecoveryErrorForCode(code: string): TaskRecoveryError | null {
+  if (code === "42501") return new TaskRecoveryError("access_denied");
+  if (code === "22023" || code === "22P02" || code === "23514") {
+    return new TaskRecoveryError("rejected");
+  }
+  return null;
+}
+
+/** Load only the current member's deleted tasks for this board. */
+export async function listDeletedTasks(
+  supabase: SupabaseClient,
+  slug: string,
+): Promise<TaskRecoveryItem[]> {
+  const { data, error } = await supabase.rpc("list_deleted_tasks_p", {
+    p_slug: slug,
+  });
+  if (error) {
+    throw (
+      taskRecoveryErrorForCode(error.code ?? "") ??
+      new TaskRecoveryError("uncertain")
+    );
+  }
+  if (!Array.isArray(data) || !data.every(isTaskRecoveryItem)) {
+    throw new TaskRecoveryError("uncertain");
+  }
+  return data;
+}
+
+/**
+ * Delete with a durable operation id. Repeating one intent reconciles a lost
+ * response instead of issuing a second deletion command.
+ */
 export async function deleteTask(
   supabase: SupabaseClient,
   slug: string,
+  operationId: string,
   taskId: string,
 ): Promise<void> {
-  const { error } = await supabase.rpc("delete_task_p", {
-    p_slug: slug,
-    p_id: taskId,
-  });
-  if (error) handleSupabaseError(error);
+  if (!operationId || !taskId || !slug) {
+    throw new TaskRecoveryError("rejected");
+  }
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let response: Awaited<ReturnType<SupabaseClient["rpc"]>>;
+    try {
+      response = await supabase.rpc("delete_task_p", {
+        p_operation_id: operationId,
+        p_slug: slug,
+        p_id: taskId,
+        p_cause: "user_requested",
+      });
+    } catch {
+      if (attempt === 1) throw new TaskRecoveryError("uncertain");
+      continue;
+    }
+    if (response.error) {
+      const definite = taskRecoveryErrorForCode(response.error.code ?? "");
+      if (definite) throw definite;
+      if (attempt === 1) throw new TaskRecoveryError("uncertain");
+      continue;
+    }
+    if (!isTaskRecoveryResult(response.data)) {
+      throw new TaskRecoveryError("uncertain");
+    }
+    if (response.data.operation_id !== operationId) {
+      throw new TaskRecoveryError("uncertain");
+    }
+    if (response.data.status === "confirmed") return;
+    if (response.data.status === "expired") {
+      throw new TaskRecoveryError("expired");
+    }
+    throw new TaskRecoveryError("unavailable");
+  }
+  throw new TaskRecoveryError("uncertain");
+}
+
+/** Restore with the same operation key when reconciling a lost response. */
+export async function restoreTask(
+  supabase: SupabaseClient,
+  slug: string,
+  operationId: string,
+  taskId: string,
+  targetColumnId: string | null,
+): Promise<TaskRecoveryResult> {
+  if (!operationId || !taskId || !slug) {
+    throw new TaskRecoveryError("rejected");
+  }
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let response: Awaited<ReturnType<SupabaseClient["rpc"]>>;
+    try {
+      response = await supabase.rpc("restore_task_p", {
+        p_operation_id: operationId,
+        p_slug: slug,
+        p_id: taskId,
+        p_target_column_id: targetColumnId,
+      });
+    } catch {
+      if (attempt === 1) throw new TaskRecoveryError("uncertain");
+      continue;
+    }
+    if (response.error) {
+      const definite = taskRecoveryErrorForCode(response.error.code ?? "");
+      if (definite) throw definite;
+      if (attempt === 1) throw new TaskRecoveryError("uncertain");
+      continue;
+    }
+    if (!isTaskRecoveryResult(response.data)) {
+      throw new TaskRecoveryError("uncertain");
+    }
+    if (response.data.operation_id !== operationId) {
+      throw new TaskRecoveryError("uncertain");
+    }
+    return response.data;
+  }
+  throw new TaskRecoveryError("uncertain");
 }
 
 /** Maximum batch size for position updates (Finding #4) */

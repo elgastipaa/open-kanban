@@ -13,6 +13,7 @@ import {
   TaskCompletionError,
   TaskEditError,
   TaskOrderError,
+  TaskRecoveryError,
   updateTask,
   updateTaskPositions,
 } from "@/lib/db";
@@ -225,8 +226,51 @@ export function useTaskOperations({
       const optimisticDelete = ledger.begin(deleteIntent, columns);
       setColumns(optimisticDelete);
       try {
-        await dbDeleteTask(supabase, slug, task.id);
-      } catch {
+        await dbDeleteTask(supabase, slug, deleteIntent.id, task.id);
+      } catch (deleteError) {
+        if (
+          deleteError instanceof TaskRecoveryError &&
+          deleteError.reason === "uncertain"
+        ) {
+          const latestBoard = await getFullBoard(supabase, slug).catch(
+            () => null,
+          );
+          if (
+            latestBoard &&
+            !latestBoard.columns
+              .flatMap((column) => column.tasks)
+              .some((candidate) => candidate.id === task.id)
+          ) {
+            const settled = ledger.settle(
+              deleteIntent.id,
+              latestBoard.columns,
+              { kind: "task-deleted" },
+            );
+            setColumns(settled);
+            await reconcileAfterTaskMutation("deleted");
+            onMutationRef.current?.();
+            return;
+          }
+          if (latestBoard) {
+            const settled = ledger.settle(deleteIntent.id, latestBoard.columns);
+            setColumns(ledger.restoreTaskAfterFailedDelete(task, settled));
+            toast.error("No se pudo confirmar la eliminación", {
+              description:
+                "La tarea sigue en el tablero. Revisa su estado antes de volver a intentarlo.",
+            });
+            return;
+          }
+          toast.error("No se pudo confirmar la eliminación", {
+            description:
+              "Actualiza el tablero y revisa Recuperación antes de volver a intentarlo.",
+          });
+          const settled = ledger.settle(
+            deleteIntent.id,
+            columnsRef.current ?? optimisticDelete,
+          );
+          setColumns(ledger.restoreTaskAfterFailedDelete(task, settled));
+          return;
+        }
         const rolledBack = ledger.settle(
           deleteIntent.id,
           columnsRef.current ?? optimisticDelete,
@@ -780,7 +824,7 @@ export function useTaskOperations({
 
       enqueue(async () => {
         try {
-          await dbDeleteTask(supabase, slug, intent.taskId);
+          await dbDeleteTask(supabase, slug, intent.id, intent.taskId);
           const columnsWithoutTask = ledger.settle(
             intent.id,
             columnsRef.current ?? [],
@@ -789,7 +833,44 @@ export function useTaskOperations({
           setColumns(columnsWithoutTask);
           await reconcileAfterTaskMutation("deleted");
           onMutationRef.current?.();
-        } catch {
+        } catch (deleteError) {
+          if (
+            deleteError instanceof TaskRecoveryError &&
+            deleteError.reason === "uncertain"
+          ) {
+            const latestBoard = await getFullBoard(supabase, slug).catch(
+              () => null,
+            );
+            if (latestBoard) {
+              if (
+                !latestBoard.columns
+                  .flatMap((column) => column.tasks)
+                  .some((task) => task.id === intent.taskId)
+              ) {
+                const settled = ledger.settle(intent.id, latestBoard.columns, {
+                  kind: "task-deleted",
+                });
+                setColumns(settled);
+                await reconcileAfterTaskMutation("deleted");
+                onMutationRef.current?.();
+                return;
+              }
+              setColumns(ledger.settle(intent.id, latestBoard.columns));
+              toast.error("No se pudo confirmar la eliminación", {
+                description:
+                  "La tarea sigue en el tablero. Revisa su estado antes de volver a intentarlo.",
+              });
+              return;
+            }
+            toast.error("No se pudo confirmar la eliminación", {
+              description:
+                "Actualiza el tablero y revisa Recuperación antes de volver a intentarlo.",
+            });
+            setColumns(
+              ledger.settle(intent.id, columnsRef.current ?? optimisticColumns),
+            );
+            return;
+          }
           setColumns(ledger.settle(intent.id, columnsRef.current ?? []));
           showMutationError("delete task");
         }

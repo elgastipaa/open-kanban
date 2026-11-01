@@ -67,6 +67,7 @@ import {
   captureTaskDraftForAuthorizationRefresh,
   type PreservedTaskDraft,
   resolveTaskDraftAfterAuthorizationRefresh,
+  shouldRetryTaskDraftAuthorizationRefresh,
 } from "@/lib/task-draft-preservation";
 import {
   captureTaskFocusOrigin,
@@ -85,6 +86,8 @@ import type {
   TaskAssigneeResult,
   TaskCompletionCommand,
   TaskCompletionResult,
+  TaskEditableField,
+  TaskFieldVersions,
   TaskOrderResult,
 } from "@/lib/types";
 import { generateUUID } from "@/lib/utils";
@@ -367,11 +370,7 @@ function BoardWorkspace({
   const [restoredTaskDraft, setRestoredTaskDraft] =
     useState<PreservedTaskDraft | null>(null);
   const isAuthorizationRefreshPending = pendingTaskDraft !== null;
-  const dirtyTaskDraftRef = useRef<{
-    actorId: string;
-    taskId: string;
-    draft: TaskEditDraft;
-  } | null>(null);
+  const dirtyTaskDraftRef = useRef<PreservedTaskDraft | null>(null);
   const authorizationRefreshGenerationRef = useRef(0);
   const actorIdRef = useRef(actorId);
   actorIdRef.current = actorId;
@@ -380,20 +379,21 @@ function BoardWorkspace({
   authEpochRef.current = realtimeContext.auth_epoch;
 
   const onEditDraftChange = useCallback(
-    (taskId: string, draft: TaskEditDraft, isDirty: boolean) => {
+    (
+      taskId: string,
+      draft: TaskEditDraft,
+      dirtyFields: TaskEditableField[],
+      baseVersions: TaskFieldVersions,
+    ) => {
       if (actorIdRef.current !== actorId) return;
-      if (isDirty) {
-        dirtyTaskDraftRef.current = {
-          actorId,
-          taskId,
-          draft: { ...draft },
-        };
-      } else if (
-        dirtyTaskDraftRef.current?.actorId === actorId &&
-        dirtyTaskDraftRef.current.taskId === taskId
-      ) {
-        dirtyTaskDraftRef.current = null;
-      }
+      dirtyTaskDraftRef.current = captureTaskDraftForAuthorizationRefresh({
+        actorId,
+        taskId,
+        authEpoch: authEpochRef.current,
+        draft,
+        dirtyFields,
+        baseVersions,
+      });
     },
     [actorId],
   );
@@ -479,30 +479,23 @@ function BoardWorkspace({
   const refreshAfterAuthorizationEpochChange = useCallback(
     (preservedDraft: PreservedTaskDraft | null) => {
       const generation = ++authorizationRefreshGenerationRef.current;
+      const requestActorId = actorIdRef.current;
+      const requestAuthEpoch = authEpochRef.current;
       setPendingTaskDraft(preservedDraft);
       setRestoredTaskDraft(null);
       replaceState(null, []);
 
+      const isCurrentRefresh = () =>
+        generation === authorizationRefreshGenerationRef.current &&
+        actorIdRef.current === requestActorId &&
+        String(authEpochRef.current) === String(requestAuthEpoch);
+
       const finishRefresh = (
         outcome:
           | BoardRefreshOutcome
-          | { status: "unavailable" },
-        retry = 0,
+          | { status: "retryable" },
       ) => {
-        if (generation !== authorizationRefreshGenerationRef.current) return;
-        if (
-          outcome.status === "discarded" &&
-          preservedDraft !== null &&
-          retry === 0 &&
-          preservedDraft.actorId === actorIdRef.current &&
-          String(preservedDraft.authEpoch) ===
-            String(authEpochRef.current)
-        ) {
-          void refreshFromDB()
-            .then((nextOutcome) => finishRefresh(nextOutcome, 1))
-            .catch(() => finishRefresh({ status: "unavailable" }, 1));
-          return;
-        }
+        if (!isCurrentRefresh()) return;
         const resolution = resolveTaskDraftAfterAuthorizationRefresh({
           preserved: preservedDraft,
           currentActorId: actorIdRef.current,
@@ -510,20 +503,53 @@ function BoardWorkspace({
           outcome,
         });
         setPendingTaskDraft(null);
-        if (resolution.status === "restore" && preservedDraft) {
-          setRestoredTaskDraft({
-            ...preservedDraft,
-            draft: resolution.draft,
-          });
+        if (resolution.status === "restore") {
+          setRestoredTaskDraft(resolution.preserved);
           return;
         }
         setRestoredTaskDraft(null);
         setEditingTaskId(null);
       };
 
-      void refreshFromDB()
-        .then(finishRefresh)
-        .catch(() => finishRefresh({ status: "unavailable" }));
+      const refreshUntilResolved = async () => {
+        let discardedCount = 0;
+        let transientFailureCount = 0;
+        while (isCurrentRefresh()) {
+          let outcome: BoardRefreshOutcome | { status: "retryable" };
+          try {
+            outcome = await refreshFromDB();
+          } catch {
+            outcome = { status: "retryable" };
+          }
+          if (
+            shouldRetryTaskDraftAuthorizationRefresh({
+              preserved: preservedDraft,
+              currentActorId: actorIdRef.current,
+              currentAuthEpoch: authEpochRef.current,
+              isCurrentRefresh: isCurrentRefresh(),
+              outcome,
+            })
+          ) {
+            const retryDelay =
+              outcome.status === "retryable"
+                ? Math.min(
+                    30_000,
+                    1_000 * 2 ** Math.min(transientFailureCount, 5),
+                  )
+                : Math.min(1_000, 100 * 2 ** Math.min(discardedCount, 3));
+            if (outcome.status === "retryable") transientFailureCount += 1;
+            else discardedCount += 1;
+            await new Promise((resolve) =>
+              window.setTimeout(resolve, retryDelay),
+            );
+            continue;
+          }
+          finishRefresh(outcome);
+          return;
+        }
+      };
+
+      void refreshUntilResolved();
     },
     [refreshFromDB, replaceState],
   );
@@ -558,11 +584,7 @@ function BoardWorkspace({
       latestDraft &&
       latestDraft.actorId === actorIdRef.current &&
       latestDraft.taskId === editingTaskIdRef.current
-        ? captureTaskDraftForAuthorizationRefresh({
-            ...latestDraft,
-            authEpoch: currentAuthorizationEpoch,
-            isDirty: true,
-          })
+        ? { ...latestDraft, authEpoch: currentAuthorizationEpoch }
         : null;
     refreshAfterAuthorizationEpochChange(preservedDraft);
   }, [
@@ -639,7 +661,7 @@ function BoardWorkspace({
       String(realtimeContext.auth_epoch) &&
     board?.auth_epoch !== undefined &&
     String(board.auth_epoch) === String(realtimeContext.auth_epoch)
-      ? restoredTaskDraft.draft
+      ? restoredTaskDraft
       : null;
 
   useEffect(() => {

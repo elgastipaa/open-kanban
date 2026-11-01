@@ -9,7 +9,7 @@ import {
   IconTrash,
   IconTypography,
 } from "@tabler/icons-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { TaskConversation } from "@/components/board/task-conversation";
 import { TaskDueDate } from "@/components/board/task-due-date";
 import { Button } from "@/components/ui/button";
@@ -37,6 +37,10 @@ import {
 import type { TaskCommentCreateOperationStore } from "@/lib/task-comments-state";
 import { taskCompletionFollowUp } from "@/lib/task-completion";
 import { formatTaskDueDate, isDateOnly } from "@/lib/task-date";
+import {
+  type PreservedTaskDraft,
+  rebasePreservedTaskDraft,
+} from "@/lib/task-draft-preservation";
 import {
   changeTaskEditDraft,
   confirmTaskEditSave,
@@ -67,17 +71,19 @@ import type {
   TaskEditCommand,
   TaskEditConflicts,
   TaskEditResult,
+  TaskFieldVersions,
   TaskOrderResult,
 } from "@/lib/types";
 import { generateUUID } from "@/lib/utils";
 
 interface TaskModalProps {
   task: Task | null;
-  restoredDraft: TaskEditDraft | null;
+  restoredDraft: PreservedTaskDraft | null;
   onEditDraftChange: (
     taskId: string,
     draft: TaskEditDraft,
-    isDirty: boolean,
+    dirtyFields: TaskEditableField[],
+    baseVersions: TaskFieldVersions,
   ) => void;
   onEditDraftRestored: () => void;
   slug: string;
@@ -138,13 +144,23 @@ function draftFor(task: Task): TaskEditDraft {
   };
 }
 
-function isTaskEditDraftDirty(task: Task, draft: TaskEditDraft) {
-  return (
-    draft.title.trim() !== task.title ||
-    (draft.description.trim() || null) !== task.description ||
-    draft.priority !== task.priority ||
-    (draft.due_on || null) !== task.due_on
-  );
+function dirtyTaskEditFields(
+  task: Task,
+  draft: TaskEditDraft,
+): TaskEditableField[] {
+  return editableFields.filter((field) => {
+    switch (field) {
+      case "title":
+        return draft.title.trim() !== task.title;
+      case "description":
+        return (draft.description.trim() || null) !== task.description;
+      case "priority":
+        return draft.priority !== task.priority;
+      case "due_on":
+        return (draft.due_on || null) !== task.due_on;
+    }
+    return false;
+  });
 }
 
 function fieldLabel(field: TaskEditableField) {
@@ -227,16 +243,24 @@ export function TaskModal({
   onMoveTask,
   onDelete,
 }: TaskModalProps) {
+  const initialRestoration =
+    task && restoredDraft
+      ? rebasePreservedTaskDraft(task, restoredDraft)
+      : null;
   const [baseTask, setBaseTask] = useState<Task | null>(task);
   const [workflow, setWorkflow] = useState<TaskEditWorkflowState>(() =>
     createTaskEditWorkflow(
-      restoredDraft ??
+      initialRestoration?.draft ??
         (task
           ? draftFor(task)
           : { title: "", description: "", priority: "medium", due_on: "" }),
     ),
   );
-  const [conflicts, setConflicts] = useState<TaskEditConflicts>({});
+  const [conflicts, setConflicts] = useState<TaskEditConflicts>(
+    () => initialRestoration?.conflicts ?? {},
+  );
+  const [draftPreservationBaseVersions, setDraftPreservationBaseVersions] =
+    useState<TaskFieldVersions | null>(() => task?.field_versions ?? null);
   const [showDetails, setShowDetails] = useState(false);
   const [showDescription, setShowDescription] = useState(
     Boolean(task?.description),
@@ -292,16 +316,31 @@ export function TaskModal({
   // biome-ignore lint/correctness/useExhaustiveDependencies: task identity is the reset boundary; live task refreshes must preserve the draft
   useEffect(() => {
     if (!open || !task) return;
-    const initialDraft = restoredDraft ?? draftFor(task);
+    const restoration =
+      restoredDraft !== null
+        ? rebasePreservedTaskDraft(task, restoredDraft)
+        : null;
+    const initialDraft = restoration?.draft ?? draftFor(task);
+    const preservationVersions = { ...task.field_versions };
+    if (restoredDraft) {
+      for (const field of restoredDraft.dirtyFields) {
+        const originalVersion = restoredDraft.baseVersions[field];
+        if (originalVersion !== undefined) {
+          preservationVersions[field] = originalVersion;
+        }
+      }
+    }
     setBaseTask(task);
     setWorkflow(createTaskEditWorkflow(initialDraft));
+    setConflicts(restoration?.conflicts ?? {});
+    setDraftPreservationBaseVersions(preservationVersions);
     onEditDraftChange(
       task.id,
       initialDraft,
-      isTaskEditDraftDirty(task, initialDraft),
+      dirtyTaskEditFields(task, initialDraft),
+      preservationVersions,
     );
     if (restoredDraft) onEditDraftRestored();
-    setConflicts({});
     setShowDetails(false);
     setShowDescription(Boolean(task.description));
     setShowCloseChoices(false);
@@ -343,7 +382,11 @@ export function TaskModal({
   const draft = workflow.draft;
   const normalizedTitle = draft.title.trim();
   const normalizedDescription = draft.description.trim() || null;
-  const dirty = baseTask !== null && isTaskEditDraftDirty(baseTask, draft);
+  const dirtyFields = useMemo(
+    () => (baseTask ? dirtyTaskEditFields(baseTask, draft) : []),
+    [baseTask, draft],
+  );
+  const dirty = dirtyFields.length > 0;
   const hasConflict = Object.keys(conflicts).length > 0;
   const isSaving = workflow.status === "saving";
   const isWorking =
@@ -355,9 +398,21 @@ export function TaskModal({
     isChecklistWorking;
 
   useEffect(() => {
-    if (!task) return;
-    onEditDraftChange(task.id, draft, dirty);
-  }, [draft, dirty, onEditDraftChange, task]);
+    if (!task || !baseTask) return;
+    onEditDraftChange(
+      task.id,
+      draft,
+      dirtyFields,
+      draftPreservationBaseVersions ?? baseTask.field_versions,
+    );
+  }, [
+    baseTask,
+    draft,
+    dirtyFields,
+    draftPreservationBaseVersions,
+    onEditDraftChange,
+    task,
+  ]);
 
   useEffect(() => {
     if (!open || !dirty) return;
@@ -371,11 +426,12 @@ export function TaskModal({
 
   function updateDraft(nextDraft: TaskEditDraft) {
     setWorkflow((current) => changeTaskEditDraft(current, nextDraft));
-    if (task) {
+    if (task && baseTask) {
       onEditDraftChange(
         task.id,
         nextDraft,
-        baseTask !== null && isTaskEditDraftDirty(baseTask, nextDraft),
+        dirtyTaskEditFields(baseTask, nextDraft),
+        draftPreservationBaseVersions ?? baseTask.field_versions,
       );
     }
     setDueOnError("");
@@ -948,6 +1004,7 @@ export function TaskModal({
       setBaseTask(result.task);
       const confirmedDraft = draftFor(result.task);
       setWorkflow(confirmTaskEditSave(confirmedDraft));
+      setDraftPreservationBaseVersions(result.task.field_versions);
       setConflicts({});
       setExpiredOperation(null);
       setReconciliationRequired(false);
@@ -1080,15 +1137,30 @@ export function TaskModal({
     const nextConflicts = { ...conflicts };
     delete nextConflicts[field];
     setConflicts(nextConflicts);
+    let nextDraft = draft;
     if (!keepDraft) {
       const currentValue = baseTask[field];
-      updateDraft({
+      nextDraft = {
         ...draft,
         [field]:
           field === "description" || field === "due_on"
             ? (currentValue ?? "")
             : currentValue,
-      });
+      };
+      updateDraft(nextDraft);
+    }
+    const nextBaseVersions = {
+      ...(draftPreservationBaseVersions ?? baseTask.field_versions),
+      [field]: baseTask.field_versions[field],
+    };
+    setDraftPreservationBaseVersions(nextBaseVersions);
+    if (task) {
+      onEditDraftChange(
+        task.id,
+        nextDraft,
+        dirtyTaskEditFields(baseTask, nextDraft),
+        nextBaseVersions,
+      );
     }
     if (Object.keys(nextConflicts).length === 0) {
       setWorkflow((current) => ({

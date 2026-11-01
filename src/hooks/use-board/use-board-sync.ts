@@ -6,6 +6,7 @@ import {
   deleteBoard as dbDeleteBoard,
   getFullBoard,
 } from "@/lib/db";
+import { BoardSnapshotReadError } from "@/lib/db/boards";
 import { getSessionEpoch } from "@/lib/supabase/client";
 import type { Board, ColumnWithTasks } from "@/lib/types";
 import type { TaskMutationLedger } from "./task-mutation-ledger";
@@ -24,7 +25,7 @@ interface UseBoardSyncProps {
 
 export type BoardRefreshOutcome =
   | { status: "authorized"; authEpoch: string | number; taskIds: string[] }
-  | { status: "denied" | "discarded" };
+  | { status: "denied" | "unavailable" | "discarded" };
 
 export function useBoardSync({
   slug,
@@ -50,7 +51,24 @@ export function useBoardSync({
     try {
       data = await getFullBoard(supabase, slug);
     } catch (error) {
-      if (sessionEpoch !== getSessionEpoch()) return { status: "discarded" };
+      if (
+        sessionEpoch !== getSessionEpoch() ||
+        String(authorizationEpoch) !==
+          String(authorizationEpochRef.current) ||
+        generation !== refreshGenerationRef.current ||
+        ledgerRevision !== taskMutationLedger.revision
+      ) {
+        return { status: "discarded" };
+      }
+      if (error instanceof BoardSnapshotReadError) {
+        if (error.reason === "unavailable") return { status: "unavailable" };
+        boardRef.current = null;
+        isPersistedRef.current = false;
+        setBoard(null);
+        setColumns(taskMutationLedger.sync([], true));
+        onAccessLost?.();
+        return { status: "denied" };
+      }
       throw error;
     }
     if (

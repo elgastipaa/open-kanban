@@ -11,6 +11,13 @@ export type BoardTimeZoneErrorReason =
   | "conflict"
   | "uncertain";
 
+export class BoardSnapshotReadError extends Error {
+  constructor(readonly reason: "denied" | "unavailable") {
+    super("No se pudo consultar el tablero.");
+    this.name = "BoardSnapshotReadError";
+  }
+}
+
 export interface RecoverableBoard {
   id: string;
   slug: string;
@@ -347,7 +354,16 @@ export async function getFullBoard(
     .rpc("get_full_board_p", { p_slug: slug })
     .maybeSingle();
 
-  if (response.error) handleSupabaseError(response.error);
+  if (response.error) {
+    const reason = isTaskEditReadAccessDeniedCode(response.error.code)
+      ? "denied"
+      : "unavailable";
+    try {
+      handleSupabaseError(response.error);
+    } catch {
+      throw new BoardSnapshotReadError(reason);
+    }
+  }
   return response.data as { board: Board; columns: ColumnWithTasks[] } | null;
 }
 

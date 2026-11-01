@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   captureTaskDraftForAuthorizationRefresh,
+  rebasePreservedTaskDraft,
   resolveTaskDraftAfterAuthorizationRefresh,
+  shouldRetryTaskDraftAuthorizationRefresh,
 } from "../../src/lib/task-draft-preservation.ts";
 
 const draft = {
@@ -11,6 +13,14 @@ const draft = {
   priority: "high",
   due_on: "2026-11-01",
 };
+const versions = { title: 4, description: 2, priority: 1, due_on: 3 };
+const currentTask = {
+  title: "Título actual",
+  description: "Descripción actualizada por otra persona",
+  priority: "medium",
+  due_on: null,
+  field_versions: { title: 4, description: 3, priority: 1, due_on: 3 },
+};
 
 function capture(overrides = {}) {
   return captureTaskDraftForAuthorizationRefresh({
@@ -18,14 +28,26 @@ function capture(overrides = {}) {
     taskId: "task-a",
     authEpoch: "9",
     draft,
-    isDirty: true,
+    dirtyFields: ["title"],
+    baseVersions: versions,
     ...overrides,
   });
 }
 
-test("only a dirty task draft is kept in transient memory during a pending refetch", () => {
-  const preserved = capture();
+test("only dirty field values and their original versions stay in transient memory", () => {
+  assert.deepEqual(capture(), {
+    actorId: "actor-a",
+    taskId: "task-a",
+    authEpoch: "9",
+    draft: { title: "Borrador privado" },
+    dirtyFields: ["title"],
+    baseVersions: { title: 4 },
+  });
+  assert.equal(capture({ dirtyFields: [] }), null);
+});
 
+test("a draft stays pending and restores only for the same actor, epoch and authorized task", () => {
+  const preserved = capture();
   assert.deepEqual(
     resolveTaskDraftAfterAuthorizationRefresh({
       preserved,
@@ -35,13 +57,18 @@ test("only a dirty task draft is kept in transient memory during a pending refet
     }),
     { status: "pending" },
   );
-  assert.equal(capture({ isDirty: false }), null);
-});
-
-test("a draft returns only after an authorized snapshot has the same actor, epoch and task", () => {
   assert.deepEqual(
     resolveTaskDraftAfterAuthorizationRefresh({
-      preserved: capture(),
+      preserved,
+      currentActorId: "actor-a",
+      currentAuthEpoch: 9,
+      outcome: { status: "retryable" },
+    }),
+    { status: "pending" },
+  );
+  assert.deepEqual(
+    resolveTaskDraftAfterAuthorizationRefresh({
+      preserved,
       currentActorId: "actor-a",
       currentAuthEpoch: 9,
       outcome: {
@@ -50,11 +77,53 @@ test("a draft returns only after an authorized snapshot has the same actor, epoc
         taskIds: ["task-a", "task-b"],
       },
     }),
-    { status: "restore", draft },
+    { status: "restore", preserved },
   );
 });
 
-test("denial, unavailable, stale authorization, account change and missing task discard the draft", () => {
+test("a rebase takes untouched fields from the authorized snapshot", () => {
+  const preserved = capture();
+
+  assert.deepEqual(
+    rebasePreservedTaskDraft(currentTask, preserved),
+    {
+      draft: {
+        title: "Borrador privado",
+        description: currentTask.description,
+        priority: currentTask.priority,
+        due_on: "",
+      },
+      conflicts: {},
+    },
+  );
+});
+
+test("a dirty field changed since its captured version returns an explicit conflict", () => {
+  const preserved = capture();
+  const snapshot = {
+    ...currentTask,
+    title: "Título guardado por otra persona",
+    field_versions: { ...currentTask.field_versions, title: 5 },
+  };
+
+  assert.deepEqual(rebasePreservedTaskDraft(snapshot, preserved), {
+    draft: {
+      title: "Borrador privado",
+      description: snapshot.description,
+      priority: snapshot.priority,
+      due_on: "",
+    },
+    conflicts: {
+      title: {
+        current: "Título guardado por otra persona",
+        draft: "Borrador privado",
+        current_version: 5,
+      },
+    },
+  });
+});
+
+test("denial, unavailable, stale response, account change and missing task discard the draft", () => {
   const preserved = capture();
   const resolve = (overrides = {}) =>
     resolveTaskDraftAfterAuthorizationRefresh({
@@ -77,5 +146,65 @@ test("denial, unavailable, stale authorization, account change and missing task 
   assert.deepEqual(
     resolve({ outcome: { status: "authorized", authEpoch: 9, taskIds: ["task-b"] } }),
     { status: "discard" },
+  );
+});
+
+test("discarded refreshes retry only while the saved actor and epoch remain current", () => {
+  const preserved = capture();
+  const discarded = { status: "discarded" };
+  let retries = 0;
+  for (const outcome of [discarded, discarded, { status: "retryable" }]) {
+    assert.equal(
+      shouldRetryTaskDraftAuthorizationRefresh({
+        preserved,
+        currentActorId: "actor-a",
+        currentAuthEpoch: 9,
+        isCurrentRefresh: true,
+        outcome,
+      }),
+      true,
+    );
+    retries += 1;
+  }
+  assert.equal(retries, 3);
+  assert.equal(
+    shouldRetryTaskDraftAuthorizationRefresh({
+      preserved,
+      currentActorId: "actor-b",
+      currentAuthEpoch: 9,
+      isCurrentRefresh: true,
+      outcome: discarded,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldRetryTaskDraftAuthorizationRefresh({
+      preserved,
+      currentActorId: "actor-a",
+      currentAuthEpoch: 10,
+      isCurrentRefresh: true,
+      outcome: discarded,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldRetryTaskDraftAuthorizationRefresh({
+      preserved,
+      currentActorId: "actor-a",
+      currentAuthEpoch: 9,
+      isCurrentRefresh: false,
+      outcome: discarded,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldRetryTaskDraftAuthorizationRefresh({
+      preserved,
+      currentActorId: "actor-a",
+      currentAuthEpoch: 9,
+      isCurrentRefresh: true,
+      outcome: { status: "unavailable" },
+    }),
+    false,
   );
 });

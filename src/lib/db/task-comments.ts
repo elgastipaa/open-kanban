@@ -11,7 +11,7 @@ import type {
 } from "../types";
 
 export type TaskCommentErrorReason =
-  | "access_denied"
+  | "forbidden"
   | "conflict"
   | "expired_unknown"
   | "rejected"
@@ -183,7 +183,7 @@ export function parseTaskCommentPage(value: unknown): TaskCommentPage | null {
 }
 
 function commentErrorForCode(code: string | undefined): TaskCommentError {
-  if (code === "42501") return new TaskCommentError("access_denied");
+  if (code === "42501") return new TaskCommentError("forbidden");
   if (code === "22023" || code === "22P02") {
     return new TaskCommentError("rejected");
   }
@@ -224,6 +224,7 @@ function parseMutationResult(
     "confirmed",
     "conflict",
     "unavailable",
+    "forbidden",
     "expired",
     "expired_unknown",
   ];

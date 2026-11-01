@@ -424,11 +424,8 @@ BEGIN
     AND comment_row.board_id = v_context.context_board_id
     AND comment_row.task_id = v_task_id
   FOR UPDATE;
-  IF NOT FOUND OR v_comment.deleted_at IS NOT NULL THEN
+  IF NOT FOUND THEN
     RETURN pg_catalog.jsonb_build_object('status', 'unavailable');
-  END IF;
-  IF v_comment.author_id IS DISTINCT FROM v_actor_id THEN
-    RAISE EXCEPTION 'Only the comment author can edit it' USING ERRCODE = '42501';
   END IF;
 
   v_hash := extensions.digest(
@@ -453,6 +450,8 @@ BEGIN
   IF FOUND THEN
     IF v_receipt.action IS DISTINCT FROM 'edit'
       OR v_receipt.comment_id IS DISTINCT FROM p_comment_id
+      OR v_receipt.board_id IS DISTINCT FROM v_context.context_board_id
+      OR v_receipt.task_id IS DISTINCT FROM v_task_id
       OR v_receipt.payload_hash IS DISTINCT FROM v_hash THEN
       RAISE EXCEPTION 'This comment operation was already used for different content'
         USING ERRCODE = '23514';
@@ -467,6 +466,22 @@ BEGIN
       'operation_id', p_operation_id,
       'comment_id', p_comment_id,
       'version', v_receipt.result_version
+    );
+  END IF;
+
+  IF v_comment.deleted_at IS NOT NULL THEN
+    RETURN pg_catalog.jsonb_build_object(
+      'status', 'conflict',
+      'operation_id', p_operation_id,
+      'comment_id', p_comment_id,
+      'version', v_comment.version
+    );
+  END IF;
+  IF v_comment.author_id IS DISTINCT FROM v_actor_id THEN
+    RETURN pg_catalog.jsonb_build_object(
+      'status', 'forbidden',
+      'operation_id', p_operation_id,
+      'comment_id', p_comment_id
     );
   END IF;
 
@@ -566,8 +581,11 @@ BEGIN
   ELSIF v_context.context_role = 'owner' THEN
     v_cause := 'moderation';
   ELSE
-    RAISE EXCEPTION 'Only the author or current board owner can delete this comment'
-      USING ERRCODE = '42501';
+    RETURN pg_catalog.jsonb_build_object(
+      'status', 'forbidden',
+      'operation_id', p_operation_id,
+      'comment_id', p_comment_id
+    );
   END IF;
 
   v_hash := extensions.digest(
@@ -876,14 +894,20 @@ BEGIN
   END IF;
   IF v_comment.deletion_cause = 'moderation'
     AND v_context.context_role <> 'owner' THEN
-    RAISE EXCEPTION 'Only the current board owner can restore a moderated comment'
-      USING ERRCODE = '42501';
+    RETURN pg_catalog.jsonb_build_object(
+      'status', 'forbidden',
+      'operation_id', p_operation_id,
+      'comment_id', p_comment_id
+    );
   END IF;
   IF v_comment.deletion_cause = 'author'
     AND v_comment.author_id <> v_actor_id
     AND v_context.context_role <> 'owner' THEN
-    RAISE EXCEPTION 'Only the comment author or current board owner can restore it'
-      USING ERRCODE = '42501';
+    RETURN pg_catalog.jsonb_build_object(
+      'status', 'forbidden',
+      'operation_id', p_operation_id,
+      'comment_id', p_comment_id
+    );
   END IF;
 
   INSERT INTO public.task_comment_receipts (

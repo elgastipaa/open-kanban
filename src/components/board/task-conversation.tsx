@@ -25,6 +25,7 @@ import {
   mergeTaskComments,
   shouldRetainTaskCommentCommand,
   type TaskCommentCreateOperationStore,
+  taskCommentAccessEffect,
   taskCommentCreateFollowUp,
   taskCommentTextSegments,
 } from "@/lib/task-comments-state";
@@ -115,6 +116,9 @@ function appendMemberMention(
 }
 
 function mutationMessage(reason: string): string {
+  if (taskCommentAccessEffect(reason).preserveDraft) {
+    return "No tienes permiso para realizar esta acción. La conversación y el borrador se conservan.";
+  }
   if (reason === "rejected") {
     return "No se guardó el comentario. Revisa el texto y las menciones actuales.";
   }
@@ -247,7 +251,7 @@ export function TaskConversation({
     } catch (error) {
       if (
         error instanceof TaskCommentError &&
-        error.reason === "access_denied"
+        taskCommentAccessEffect(error.reason).accessLost
       ) {
         clearPrivateConversation();
         return null;
@@ -338,7 +342,7 @@ export function TaskConversation({
         if (!active) return;
         if (
           error instanceof TaskCommentError &&
-          error.reason === "access_denied"
+          taskCommentAccessEffect(error.reason).accessLost
         ) {
           clearPrivateConversation();
         } else {
@@ -393,7 +397,7 @@ export function TaskConversation({
     } catch (error) {
       if (
         error instanceof TaskCommentError &&
-        error.reason === "access_denied"
+        taskCommentAccessEffect(error.reason).accessLost
       ) {
         clearPrivateConversation();
       } else {
@@ -480,7 +484,9 @@ export function TaskConversation({
       setNotice(
         result.status === "confirmed"
           ? "Comentario enviado."
-          : result.status === "expired_unknown" || result.status === "conflict"
+          : result.status === "expired_unknown" ||
+              result.status === "conflict" ||
+              result.status === "forbidden"
             ? mutationMessage(result.status)
             : "No se pudo enviar el comentario.",
       );
@@ -493,7 +499,7 @@ export function TaskConversation({
     } catch (error) {
       if (
         error instanceof TaskCommentError &&
-        error.reason === "access_denied"
+        taskCommentAccessEffect(error.reason).accessLost
       ) {
         clearPrivateConversation();
         return;
@@ -581,6 +587,10 @@ export function TaskConversation({
         setEditingDraft("");
         setEditingMentions([]);
         setNotice("Comentario actualizado.");
+      } else if (result.status === "forbidden") {
+        operations.clearEdit(taskId, comment.id);
+        setPendingEdit(null);
+        setNotice(mutationMessage(result.status));
       } else if (shouldRetainTaskCommentCommand(result.status)) {
         operations.markEditExpiredUnknown(taskId, comment.id);
         setPendingEdit(null);
@@ -599,7 +609,7 @@ export function TaskConversation({
     } catch (error) {
       if (
         error instanceof TaskCommentError &&
-        error.reason === "access_denied"
+        taskCommentAccessEffect(error.reason).accessLost
       ) {
         clearPrivateConversation();
         return;
@@ -663,7 +673,7 @@ export function TaskConversation({
     } catch (error) {
       if (
         error instanceof TaskCommentError &&
-        error.reason === "access_denied"
+        taskCommentAccessEffect(error.reason).accessLost
       ) {
         clearPrivateConversation();
         return;
@@ -724,7 +734,7 @@ export function TaskConversation({
     } catch (error) {
       if (
         error instanceof TaskCommentError &&
-        error.reason === "access_denied"
+        taskCommentAccessEffect(error.reason).accessLost
       ) {
         clearPrivateConversation();
         return;

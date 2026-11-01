@@ -139,6 +139,57 @@ test("edit/delete/restore adapters preserve operation IDs on expired receipts", 
   );
 });
 
+test("edit/delete/restore map narrow action denials without exposing private details", async () => {
+  const calls = [];
+  const supabase = {
+    async rpc(name, args) {
+      calls.push({ name, args });
+      return {
+        data: {
+          status: "forbidden",
+          operation_id: args.p_operation_id,
+          comment_id: "comment-1",
+        },
+        error: null,
+      };
+    },
+  };
+
+  const edit = await editTaskComment(supabase, "board", {
+    task_id: "task-1",
+    comment_id: "comment-1",
+    operation_id: "edit-forbidden",
+    expected_version: 1,
+    content: "Borrador local",
+    mentions: [],
+  });
+  const deletion = await deleteTaskComment(
+    supabase,
+    "board",
+    "delete-forbidden",
+    "comment-1",
+  );
+  const restoration = await restoreTaskComment(
+    supabase,
+    "board",
+    "restore-forbidden",
+    "comment-1",
+  );
+
+  assert.deepEqual(
+    [edit, deletion, restoration].map(({ status, operation_id }) => ({
+      status,
+      operation_id,
+    })),
+    [
+      { status: "forbidden", operation_id: "edit-forbidden" },
+      { status: "forbidden", operation_id: "delete-forbidden" },
+      { status: "forbidden", operation_id: "restore-forbidden" },
+    ],
+  );
+  assert.equal(calls.length, 3);
+});
+
 test("restore adapter preserves an explicit deadline expiry result", async () => {
   const supabase = {
     async rpc(_name, args) {
@@ -162,7 +213,7 @@ test("restore adapter preserves an explicit deadline expiry result", async () =>
 
 test("comment RPC errors expose only typed denial/rejection reasons", async () => {
   for (const [code, reason] of [
-    ["42501", "access_denied"],
+    ["42501", "forbidden"],
     ["22023", "rejected"],
     ["23514", "conflict"],
   ]) {

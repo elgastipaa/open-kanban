@@ -431,24 +431,19 @@ DECLARE
   v_fixture record;
   v_edit jsonb;
   v_page jsonb;
-  v_rejected boolean := false;
 BEGIN
   SELECT * INTO STRICT v_fixture
   FROM pg_temp.issue16_comment_operation_fixture;
-  BEGIN
-    v_edit := public.edit_task_comment_p(
-      p_operation_id => 'a6160000-0000-4000-8000-000000000007',
-      p_slug => v_fixture.board_slug,
-      p_comment_id => v_fixture.member_comment_id,
-      p_expected_version => 1,
-      p_content => 'El propietario intentó reescribirlo.',
-      p_mentions => '[]'::jsonb
-    );
-  EXCEPTION WHEN insufficient_privilege THEN
-    v_rejected := true;
-  END;
-  IF NOT v_rejected THEN
-    RAISE EXCEPTION 'The board owner edited another member comment: %', v_edit;
+  v_edit := public.edit_task_comment_p(
+    p_operation_id => 'a6160000-0000-4000-8000-000000000007',
+    p_slug => v_fixture.board_slug,
+    p_comment_id => v_fixture.member_comment_id,
+    p_expected_version => 1,
+    p_content => 'El propietario intentó reescribirlo.',
+    p_mentions => '[]'::jsonb
+  );
+  IF v_edit->>'status' IS DISTINCT FROM 'forbidden' THEN
+    RAISE EXCEPTION 'The denied owner edit did not return forbidden: %', v_edit;
   END IF;
 
   v_page := public.get_task_comments_p(
@@ -521,7 +516,7 @@ DECLARE
   v_fixture record;
   v_page jsonb;
   v_owner_comment_id uuid;
-  v_denied boolean := false;
+  v_deleted jsonb;
 BEGIN
   SELECT * INTO STRICT v_fixture
   FROM pg_temp.issue16_comment_operation_fixture;
@@ -533,17 +528,27 @@ BEGIN
   SELECT (row_value->>'id')::uuid INTO STRICT v_owner_comment_id
   FROM pg_catalog.jsonb_array_elements(v_page->'comments') AS row_value
   WHERE row_value->>'content' = v_fixture.content;
-  BEGIN
-    PERFORM public.delete_task_comment_p(
-      p_operation_id => 'a6160000-0000-4000-8000-000000000020',
-      p_slug => v_fixture.board_slug,
-      p_comment_id => v_owner_comment_id
-    );
-  EXCEPTION WHEN insufficient_privilege THEN
-    v_denied := true;
-  END;
-  IF NOT v_denied THEN
-    RAISE EXCEPTION 'A collaborator deleted another author comment';
+  v_deleted := public.delete_task_comment_p(
+    p_operation_id => 'a6160000-0000-4000-8000-000000000020',
+    p_slug => v_fixture.board_slug,
+    p_comment_id => v_owner_comment_id
+  );
+  IF v_deleted->>'status' IS DISTINCT FROM 'forbidden' THEN
+    RAISE EXCEPTION 'The denied collaborator deletion did not return forbidden: %', v_deleted;
+  END IF;
+  v_page := public.get_task_comments_p(
+    p_slug => v_fixture.board_slug,
+    p_task_id => v_fixture.task_id,
+    p_limit => 50
+  );
+  IF v_page->>'status' IS DISTINCT FROM 'available'
+    OR NOT EXISTS (
+      SELECT 1 FROM pg_catalog.jsonb_array_elements(v_page->'comments') AS row_value
+      WHERE row_value->>'id' = v_owner_comment_id::text
+        AND row_value->>'content' = v_fixture.content
+        AND row_value->>'deleted' = 'false'
+    ) THEN
+    RAISE EXCEPTION 'A forbidden delete hid or changed accessible conversation content: %', v_page;
   END IF;
 END;
 $$;
@@ -583,6 +588,69 @@ BEGIN
   IF v_tombstone->>'can_restore' IS DISTINCT FROM 'true'
     OR v_tombstone->>'expires_at' IS NULL THEN
     RAISE EXCEPTION 'The current owner did not receive current recovery eligibility: %', v_tombstone;
+  END IF;
+END;
+$$;
+COMMIT;
+
+\echo 'Testing an edit replay reconciles after a later moderation tombstone'
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '41600000-0000-4000-8000-000000000002', true);
+DO $$
+DECLARE
+  v_fixture record;
+  v_replay jsonb;
+  v_new_edit jsonb;
+  v_page jsonb;
+  v_tombstone jsonb;
+BEGIN
+  SELECT * INTO STRICT v_fixture
+  FROM pg_temp.issue16_comment_operation_fixture;
+
+  v_replay := public.edit_task_comment_p(
+    p_operation_id => 'a6160000-0000-4000-8000-000000000008',
+    p_slug => v_fixture.board_slug,
+    p_comment_id => v_fixture.member_comment_id,
+    p_expected_version => 1,
+    p_content => 'La autora actualizó el texto.',
+    p_mentions => '[]'::jsonb
+  );
+  IF v_replay->>'status' IS DISTINCT FROM 'confirmed'
+    OR v_replay->>'operation_id' IS DISTINCT FROM 'a6160000-0000-4000-8000-000000000008'
+    OR v_replay->>'version' IS DISTINCT FROM '2'
+    OR v_replay->>'comment_id' IS DISTINCT FROM v_fixture.member_comment_id::text THEN
+    RAISE EXCEPTION 'The exact edit replay did not reconcile after moderation: %', v_replay;
+  END IF;
+
+  v_new_edit := public.edit_task_comment_p(
+    p_operation_id => 'a6160000-0000-4000-8000-000000000016',
+    p_slug => v_fixture.board_slug,
+    p_comment_id => v_fixture.member_comment_id,
+    p_expected_version => 2,
+    p_content => 'No debe reemplazar el tombstone.',
+    p_mentions => '[]'::jsonb
+  );
+  IF v_new_edit->>'status' IS DISTINCT FROM 'conflict' THEN
+    RAISE EXCEPTION 'A new edit against a tombstone should be an action conflict: %', v_new_edit;
+  END IF;
+
+  v_page := public.get_task_comments_p(
+    p_slug => v_fixture.board_slug,
+    p_task_id => v_fixture.task_id,
+    p_limit => 50
+  );
+  SELECT row_value INTO STRICT v_tombstone
+  FROM pg_catalog.jsonb_array_elements(v_page->'comments') AS row_value
+  WHERE row_value->>'id' = v_fixture.member_comment_id::text;
+  IF v_page->>'status' IS DISTINCT FROM 'available'
+    OR v_tombstone->>'deleted' IS DISTINCT FROM 'true'
+    OR v_tombstone ? 'content'
+    OR v_tombstone ? 'version'
+    OR (SELECT count(*)
+        FROM pg_catalog.jsonb_array_elements(v_page->'comments') AS row_value
+        WHERE row_value->>'id' = v_fixture.member_comment_id::text) <> 1 THEN
+    RAISE EXCEPTION 'Edit reconciliation restored, duplicated, or disclosed the tombstone: %', v_page;
   END IF;
 END;
 $$;
@@ -632,21 +700,31 @@ DO $$
 DECLARE
   v_fixture record;
   v_restore jsonb;
-  v_denied boolean := false;
+  v_page jsonb;
+  v_tombstone jsonb;
 BEGIN
   SELECT * INTO STRICT v_fixture
   FROM pg_temp.issue16_comment_operation_fixture;
-  BEGIN
-    v_restore := public.restore_task_comment_p(
-      p_operation_id => 'a6160000-0000-4000-8000-000000000010',
-      p_slug => v_fixture.board_slug,
-      p_comment_id => v_fixture.member_comment_id
-    );
-  EXCEPTION WHEN insufficient_privilege THEN
-    v_denied := true;
-  END;
-  IF NOT v_denied THEN
-    RAISE EXCEPTION 'The comment author restored an owner-moderated comment: %', v_restore;
+  v_restore := public.restore_task_comment_p(
+    p_operation_id => 'a6160000-0000-4000-8000-000000000010',
+    p_slug => v_fixture.board_slug,
+    p_comment_id => v_fixture.member_comment_id
+  );
+  IF v_restore->>'status' IS DISTINCT FROM 'forbidden' THEN
+    RAISE EXCEPTION 'The author restoring a moderated comment did not return forbidden: %', v_restore;
+  END IF;
+  v_page := public.get_task_comments_p(
+    p_slug => v_fixture.board_slug,
+    p_task_id => v_fixture.task_id,
+    p_limit => 50
+  );
+  SELECT row_value INTO STRICT v_tombstone
+  FROM pg_catalog.jsonb_array_elements(v_page->'comments') AS row_value
+  WHERE row_value->>'id' = v_fixture.member_comment_id::text;
+  IF v_page->>'status' IS DISTINCT FROM 'available'
+    OR v_tombstone->>'deleted' IS DISTINCT FROM 'true'
+    OR v_tombstone ? 'content' THEN
+    RAISE EXCEPTION 'Forbidden restore lost authorized conversation or leaked content: %', v_page;
   END IF;
 END;
 $$;

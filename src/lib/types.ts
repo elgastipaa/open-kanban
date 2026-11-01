@@ -141,7 +141,7 @@ export type TaskCommentMutationResult =
       deleted_at?: string;
     }
   | {
-      status: "conflict" | "unavailable" | "expired_unknown";
+      status: "conflict" | "unavailable" | "forbidden" | "expired_unknown";
       operation_id: string;
       comment_id?: string;
       version?: number;

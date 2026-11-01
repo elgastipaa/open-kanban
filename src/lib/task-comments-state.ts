@@ -12,6 +12,7 @@ type TaskCommentCreateStatus =
   | "confirmed"
   | "conflict"
   | "unavailable"
+  | "forbidden"
   | "expired_unknown"
   | "uncertain"
   | "retryable"
@@ -23,6 +24,13 @@ export type TaskCommentThreadViewState =
   | "access-lost"
   | "empty"
   | "ready";
+
+export function taskCommentAccessEffect(outcome: string) {
+  return {
+    accessLost: outcome === "unavailable" || outcome === "access_lost",
+    preserveDraft: outcome === "forbidden",
+  } as const;
+}
 
 export function shouldRetainTaskCommentCommand(
   status: TaskCommentMutationResult["status"],
@@ -178,6 +186,14 @@ export function taskCommentCreateFollowUp(status: TaskCommentCreateStatus) {
         requiresReview: false,
       } as const;
     case "rejected":
+      return {
+        clearDraft: false,
+        clearPendingCommand: true,
+        clearThread: false,
+        refreshThread: false,
+        requiresReview: false,
+      } as const;
+    case "forbidden":
       return {
         clearDraft: false,
         clearPendingCommand: true,

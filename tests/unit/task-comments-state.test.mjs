@@ -7,6 +7,7 @@ import {
   mergeTaskComments,
   shouldRetainTaskCommentCommand,
   TaskCommentCreateOperationStore,
+  taskCommentAccessEffect,
   taskCommentCreateFollowUp,
   taskCommentTextSegments,
 } from "../../src/lib/task-comments-state.ts";
@@ -58,6 +59,17 @@ test("unavailable comment pages never retain or expose private rows", () => {
     }),
     "access-lost",
   );
+});
+
+test("a narrow forbidden action preserves private conversation and draft state", () => {
+  assert.deepEqual(taskCommentAccessEffect("forbidden"), {
+    accessLost: false,
+    preserveDraft: true,
+  });
+  assert.deepEqual(taskCommentAccessEffect("unavailable"), {
+    accessLost: true,
+    preserveDraft: false,
+  });
 });
 
 test("thread view maps initial loading, recoverable error, empty, and ready separately", () => {

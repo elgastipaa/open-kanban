@@ -208,9 +208,11 @@ export function AdminBoardRecovery({
                     <p className="mt-2 text-neutral-400 text-sm">
                       {board.owner_is_valid
                         ? "El dueño habilitado actual conserva la autoridad de recuperación."
-                        : board.active_member_count > 1
-                          ? "El dueño actual ya no es válido. Elige otro miembro habilitado del tablero."
-                          : "No queda un dueño vigente. Elige una identidad habilitada para incorporarla como nuevo dueño."}
+                        : board.recovery_owner_id
+                          ? "Hay una identidad asignada a la recuperación. Puedes reemplazarla al elegir un nuevo dueño para restaurar."
+                          : board.active_member_count > 1
+                            ? "El dueño actual ya no es válido. Elige otro miembro habilitado del tablero."
+                            : "No queda un dueño vigente. Elige una identidad habilitada para incorporarla como nuevo dueño."}
                     </p>
                   </div>
                   {adminCanResolve ? (

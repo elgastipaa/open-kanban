@@ -253,6 +253,148 @@ done
 "${psql[@]}" -q -f "$repo_dir/tests/db/board_membership_departure.sql"
 "${psql[@]}" -q -f "$repo_dir/tests/db/board_recovery.sql"
 "${psql[@]}" -q -f "$repo_dir/tests/db/board_member_removal.sql"
+"${psql[@]}" -q -f "$repo_dir/tests/db/access_suspension.sql"
+
+# Suspension takes the account lock before boards. A waiting task write and
+# outgoing invitation must observe the committed suspension before touching a
+# board or creating durable state.
+issue19_suspension_race_dir="$test_dir/issue19-suspension-race"
+mkdir -- "$issue19_suspension_race_dir"
+issue19_suspension_admin_log="$issue19_suspension_race_dir/admin.log"
+issue19_suspension_write_log="$issue19_suspension_race_dir/write.log"
+issue19_suspension_invite_log="$issue19_suspension_race_dir/invite.log"
+IFS='|' read -r issue19_suspension_board_id issue19_suspension_board_slug \
+  issue19_suspension_column_id issue19_suspension_successor_id \
+  issue19_suspension_invite_board_id issue19_suspension_invite_slug \
+  issue19_suspension_invitee_email < <(
+    "${psql[@]}" -AtF '|' -c "SELECT board_id, slug, column_id, successor_id, invite_board_id, invite_slug, invitee_email FROM public.issue19_suspension_race_fixture WHERE name = 'suspend_write_invite'"
+  )
+
+PGAPPNAME=openkanban_issue19_suspension_admin "${psql[@]}" \
+  -v board_id="$issue19_suspension_board_id" \
+  -v successor_id="$issue19_suspension_successor_id" \
+  -v invite_board_id="$issue19_suspension_invite_board_id" \
+  > "$issue19_suspension_admin_log" 2>&1 <<'SQL' &
+BEGIN;
+SELECT access.auth_user_id
+FROM public.application_access AS access
+WHERE access.auth_user_id = '41900000-0000-4000-8000-000000000006'
+FOR UPDATE;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000001', true);
+SELECT pg_sleep(4);
+SELECT public.admin_suspend_access_with_successions_p(
+  'race-target@example.test',
+  jsonb_build_array(
+    jsonb_build_object('board_id', :'board_id'::uuid, 'action', 'transfer', 'successor_id', :'successor_id'::uuid),
+    jsonb_build_object('board_id', :'invite_board_id'::uuid, 'action', 'recover', 'successor_id', NULL)
+  )
+);
+COMMIT;
+SQL
+issue19_suspension_admin_pid=$!
+
+issue19_suspension_admin_locking=false
+for _ in $(seq 1 100); do
+  issue19_suspension_admin_state=$("${psql[@]}" -At -c "SELECT state FROM pg_stat_activity WHERE application_name = 'openkanban_issue19_suspension_admin' AND state = 'active' AND query LIKE '%pg_sleep(4)%'")
+  if [[ "$issue19_suspension_admin_state" == active ]]; then
+    issue19_suspension_admin_locking=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$issue19_suspension_admin_locking" != true ]]; then
+  cat -- "$issue19_suspension_admin_log" >&2
+  echo 'The issue #19 administrator did not acquire the account lock before suspension.' >&2
+  wait "$issue19_suspension_admin_pid" || true
+  exit 1
+fi
+
+PGAPPNAME=openkanban_issue19_suspension_writer "${psql[@]}" \
+  -v board_id="$issue19_suspension_board_id" \
+  -v column_id="$issue19_suspension_column_id" \
+  > "$issue19_suspension_write_log" 2>&1 <<'SQL' &
+\set VERBOSITY verbose
+\set ON_ERROR_STOP off
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '41900000-0000-4000-8000-000000000006', true);
+SELECT public.create_task_p(
+  'a9190000-0000-4000-8000-000000000018',
+  :'board_id'::uuid,
+  :'column_id'::uuid,
+  'Issue 19 write racing suspension'
+);
+COMMIT;
+SQL
+issue19_suspension_writer_pid=$!
+
+PGAPPNAME=openkanban_issue19_suspension_inviter "${psql[@]}" \
+  -v invite_slug="$issue19_suspension_invite_slug" \
+  -v invitee_email="$issue19_suspension_invitee_email" \
+  > "$issue19_suspension_invite_log" 2>&1 <<'SQL' &
+\set VERBOSITY verbose
+\set ON_ERROR_STOP off
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '41900000-0000-4000-8000-000000000006', true);
+SELECT public.create_direct_board_invitation_p(:'invite_slug', :'invitee_email');
+COMMIT;
+SQL
+issue19_suspension_inviter_pid=$!
+
+issue19_suspension_writers_waiting=false
+for _ in $(seq 1 100); do
+  issue19_suspension_write_waiting=$("${psql[@]}" -At -c "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'openkanban_issue19_suspension_writer' AND wait_event_type = 'Lock'")
+  issue19_suspension_invite_waiting=$("${psql[@]}" -At -c "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'openkanban_issue19_suspension_inviter' AND wait_event_type = 'Lock'")
+  if [[ "$issue19_suspension_write_waiting" == 1 && "$issue19_suspension_invite_waiting" == 1 ]]; then
+    issue19_suspension_writers_waiting=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$issue19_suspension_writers_waiting" != true ]]; then
+  cat -- "$issue19_suspension_admin_log" "$issue19_suspension_write_log" "$issue19_suspension_invite_log" >&2
+  echo 'A task write and invitation did not wait on the suspended account lock.' >&2
+  "${psql[@]}" -q -c "SELECT pg_cancel_backend(pid) FROM pg_stat_activity WHERE application_name = 'openkanban_issue19_suspension_admin'" >/dev/null
+  wait "$issue19_suspension_admin_pid" || true
+  wait "$issue19_suspension_writer_pid" || true
+  wait "$issue19_suspension_inviter_pid" || true
+  exit 1
+fi
+
+wait "$issue19_suspension_admin_pid" || { cat -- "$issue19_suspension_admin_log" >&2; exit 1; }
+wait "$issue19_suspension_writer_pid" || { cat -- "$issue19_suspension_write_log" >&2; exit 1; }
+wait "$issue19_suspension_inviter_pid" || { cat -- "$issue19_suspension_invite_log" >&2; exit 1; }
+if ! grep -Eq '42501:' "$issue19_suspension_write_log" \
+  || ! grep -Eq '42501:' "$issue19_suspension_invite_log"; then
+  echo 'A write or outgoing invitation committed after account suspension.' >&2
+  cat -- "$issue19_suspension_admin_log" "$issue19_suspension_write_log" "$issue19_suspension_invite_log" >&2
+  exit 1
+fi
+
+issue19_suspension_write_count=$("${psql[@]}" -At -v board_id="$issue19_suspension_board_id" <<'SQL'
+SELECT count(*)
+FROM public.tasks AS task
+JOIN public.columns AS column_row ON column_row.id = task.column_id
+WHERE column_row.board_id = :'board_id'::uuid
+  AND task.title = 'Issue 19 write racing suspension';
+SQL
+)
+issue19_suspension_invite_count=$("${psql[@]}" -At -v invite_board_id="$issue19_suspension_invite_board_id" <<'SQL'
+SELECT count(*)
+FROM public.board_invitations AS invitation
+WHERE invitation.board_id = :'invite_board_id'::uuid
+  AND invitation.recipient_id = '41900000-0000-4000-8000-000000000008'
+  AND invitation.status = 'pending';
+SQL
+)
+if [[ "$issue19_suspension_write_count" != 0 || "$issue19_suspension_invite_count" != 0 ]]; then
+  echo 'A concurrent write or invitation survived the account suspension.' >&2
+  cat -- "$issue19_suspension_admin_log" "$issue19_suspension_write_log" "$issue19_suspension_invite_log" >&2
+  exit 1
+fi
+echo 'PASS: suspension serializes with a concurrent task write and outgoing invitation.'
 
 # The owner departure is atomic even when two sessions submit the same
 # operation after one has committed but before its response reaches the client.

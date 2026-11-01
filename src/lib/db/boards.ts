@@ -21,9 +21,13 @@ export interface RecoverableBoard {
 }
 
 export interface AdminRecoverableBoard extends RecoverableBoard {
+  recovery_owner_id: string | null;
   owner_is_valid: boolean;
   active_member_count: number;
-  cause: "owner_confirmed_last_member" | "owner_requested";
+  cause:
+    | "owner_confirmed_last_member"
+    | "owner_requested"
+    | "admin_suspended_owner";
 }
 
 export interface BoardRecoveryOwner {
@@ -271,13 +275,17 @@ export async function listAdminRecoverableBoards(
     !data.every(
       (board) =>
         isRecoverableBoard(board) &&
+        "recovery_owner_id" in board &&
+        (typeof board.recovery_owner_id === "string" ||
+          board.recovery_owner_id === null) &&
         "owner_is_valid" in board &&
         typeof board.owner_is_valid === "boolean" &&
         "active_member_count" in board &&
         typeof board.active_member_count === "number" &&
         "cause" in board &&
         (board.cause === "owner_confirmed_last_member" ||
-          board.cause === "owner_requested"),
+          board.cause === "owner_requested" ||
+          board.cause === "admin_suspended_owner"),
     )
   ) {
     throw new Error("The administrative recovery list could not be read.");

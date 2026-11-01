@@ -38,4 +38,4 @@ La confirmación de completado cuando quedan pasos pendientes no está implement
 
 Con dos cuentas de prueba ya habilitadas y miembro de dos tableros, revisar en escritorio y móvil: responsable visible en tarjetas y selector (incluidos quitar, conflicto y error); lista por vencimiento y creación; tareas sin fecha y completadas; carga, error y lista vacía; apertura de una tarea al tablero/columna correctos; completar desde lista y completar/reabrir desde detalle; vuelta a la lista conservando el orden; y redirección de login con el mismo task ID/contexto. También revisar navegación por teclado y lector de pantalla. Este entorno no valida el DOM ni sesiones Auth reales.
 
-No se instaló runner de navegador ni se usó CUA/IAB. No se modificó GitHub, el checkpoint ni el estado de #10/#11/#12. No se cerró #13, no se integró la rama y no se hizo push.
+No se instaló runner de navegador ni se usó CUA/IAB. La asignación de #13 y el kickoff ocurrieron antes de esta implementación; durante el trabajo local no hubo cambios adicionales en GitHub. No se modificó el checkpoint ni el estado de #10/#11/#12. No se cerró #13, no se integró la rama y no se hizo push.

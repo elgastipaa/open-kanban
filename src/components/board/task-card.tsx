@@ -214,7 +214,7 @@ export function TaskCard({
               type="button"
               aria-label={`Eliminar tarea: ${task.title}`}
               onClick={() => onDelete(task.id)}
-              className="absolute top-1.5 right-1.5 cursor-pointer rounded-md p-1.5 text-text-muted opacity-0 transition-colors hover:bg-red-500/10 hover:text-red-400 focus:opacity-100 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent group-hover:opacity-100"
+              className="absolute top-1.5 right-1.5 cursor-pointer rounded-md p-1.5 text-text-muted opacity-0 transition-colors hover:bg-priority-urgent/10 hover:text-priority-urgent focus:opacity-100 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent group-hover:opacity-100"
             >
               <IconTrash size={14} />
             </button>

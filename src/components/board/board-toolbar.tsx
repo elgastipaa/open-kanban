@@ -207,7 +207,7 @@ export function BoardToolbar({
           {error ? (
             <p
               id="board-rename-error"
-              className="text-red-300 text-xs"
+              className="text-priority-urgent text-xs"
               role="alert"
             >
               {error}
@@ -220,7 +220,7 @@ export function BoardToolbar({
           <div className="flex items-center gap-1.5 rounded-full bg-surface-overlay px-2.5 py-1">
             <span
               className={`h-1.5 w-1.5 rounded-full ${
-                isConnected ? "bg-green-500" : "bg-red-500"
+                isConnected ? "bg-status-connected" : "bg-priority-urgent"
               }`}
               style={
                 isConnected
@@ -264,7 +264,7 @@ export function BoardToolbar({
               ) : null}
               <DropdownMenuItem
                 onClick={() => setIsDepartureDialogOpen(true)}
-                className="cursor-pointer text-red-300"
+                className="cursor-pointer text-priority-urgent"
               >
                 <IconLogout size={16} aria-hidden="true" />
                 Salir del tablero
@@ -356,6 +356,12 @@ export function BoardToolbar({
             <span className="hidden sm:inline">Eliminar</span>
           </Button>
         ) : null}
+        <Link
+          href="/account"
+          className="rounded-md px-2 py-1 text-sm text-text-secondary hover:bg-surface-overlay hover:text-text-primary"
+        >
+          Cuenta
+        </Link>
         <BoardSignOutButton />
       </div>
     </header>

@@ -34,13 +34,13 @@ export default async function HomePage() {
 
   if (!authData.user) {
     return (
-      <main className="flex min-h-dvh items-center justify-center bg-black px-5 py-12 text-white">
-        <section className="w-full max-w-md rounded-3xl border border-white/10 bg-neutral-950 p-8 shadow-2xl sm:p-10">
+      <main className="flex min-h-dvh items-center justify-center bg-surface-base px-5 py-12 text-text-primary">
+        <section className="w-full max-w-md rounded-3xl border border-border bg-surface-raised p-8 shadow-2xl sm:p-10">
           <Logo />
           <h1 className="mt-10 font-bold font-display text-3xl tracking-tight">
             Tus tableros, en privado
           </h1>
-          <p className="mt-3 text-neutral-400 text-sm leading-6">
+          <p className="mt-3 text-sm text-text-secondary leading-6">
             Inicia sesión con Google. El acceso a OpenKanban requiere una
             habilitación explícita.
           </p>
@@ -58,8 +58,8 @@ export default async function HomePage() {
       accessMessages[access.status] ??
       "No se pudo comprobar el acceso. Inténtalo de nuevo más tarde.";
     return (
-      <main className="flex min-h-dvh items-center justify-center bg-black px-5 py-12 text-white">
-        <section className="w-full max-w-lg rounded-3xl border border-white/10 bg-neutral-950 p-8 shadow-2xl sm:p-10">
+      <main className="flex min-h-dvh items-center justify-center bg-surface-base px-5 py-12 text-text-primary">
+        <section className="w-full max-w-lg rounded-3xl border border-border bg-surface-raised p-8 shadow-2xl sm:p-10">
           <div className="flex items-center justify-between gap-4">
             <Logo />
             <SignOutButton />
@@ -67,10 +67,10 @@ export default async function HomePage() {
           <h1 className="mt-10 font-bold font-display text-3xl tracking-tight">
             Acceso a OpenKanban
           </h1>
-          <output className="mt-3 text-neutral-300 text-sm leading-6">
+          <output className="mt-3 text-sm text-text-secondary leading-6">
             {message}
           </output>
-          <p className="mt-3 text-neutral-500 text-sm leading-6">
+          <p className="mt-3 text-sm text-text-muted leading-6">
             Si acabas de recibir habilitación, cierra la sesión y vuelve a
             entrar con la cuenta de Google autorizada.
           </p>
@@ -106,20 +106,26 @@ export default async function HomePage() {
   }
 
   return (
-    <main className="mx-auto min-h-dvh max-w-5xl bg-black px-5 py-8 text-white sm:px-8">
-      <header className="flex items-center justify-between gap-4 border-white/10 border-b pb-6">
+    <main className="mx-auto min-h-dvh max-w-5xl bg-surface-base px-5 py-8 text-text-primary sm:px-8">
+      <header className="flex flex-wrap items-center justify-between gap-4 border-border border-b pb-6">
         <Logo />
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center justify-end gap-3">
+          <Link
+            href="/account"
+            className="rounded-lg border border-border px-4 py-2 text-sm text-text-secondary transition hover:bg-surface-hover hover:text-text-primary"
+          >
+            Cuenta
+          </Link>
           <Link
             href="/my-tasks?order=due"
-            className="rounded-lg border border-white/15 px-4 py-2 text-neutral-300 text-sm transition hover:bg-white/5 hover:text-white"
+            className="rounded-lg border border-border px-4 py-2 text-sm text-text-secondary transition hover:bg-surface-hover hover:text-text-primary"
           >
             Mis tareas
           </Link>
           {access.isAdmin ? (
             <Link
               href="/admin/access"
-              className="rounded-lg border border-white/15 px-4 py-2 text-neutral-300 text-sm transition hover:bg-white/5 hover:text-white"
+              className="rounded-lg border border-border px-4 py-2 text-sm text-text-secondary transition hover:bg-surface-hover hover:text-text-primary"
             >
               Administrar accesos
             </Link>
@@ -130,7 +136,7 @@ export default async function HomePage() {
 
       <section className="mt-12 flex flex-col justify-between gap-6 sm:flex-row sm:items-end">
         <div>
-          <p className="text-neutral-400 text-sm">Espacio privado</p>
+          <p className="text-sm text-text-secondary">Espacio privado</p>
           <h1 className="mt-1 font-bold font-display text-4xl tracking-tight">
             Tus tableros
           </h1>

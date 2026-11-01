@@ -2,18 +2,18 @@ import { Logo } from "@/components/ui/logo";
 
 export function Footer() {
   return (
-    <footer className="relative z-20 mx-auto w-full border-neutral-900 border-t bg-black px-6 py-12 md:px-12">
+    <footer className="relative z-20 mx-auto w-full border-border border-t bg-surface-base px-6 py-12 md:px-12">
       <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-8 md:flex-row">
         <div className="flex flex-col items-center gap-3 md:items-start">
           <Logo size={32} />
 
-          <p className="max-w-xs text-center text-neutral-500 text-sm md:text-left">
+          <p className="max-w-xs text-center text-sm text-text-muted md:text-left">
             The fastest way to organize your thoughts. No signups, no downloads,
             just flow.
           </p>
         </div>
 
-        <div className="flex items-center gap-6 font-medium text-neutral-400 text-sm tracking-wide">
+        <div className="flex items-center gap-6 font-medium text-sm text-text-secondary tracking-wide">
           <a
             href="https://github.com/Slogllykop/OpenKanban"
             target="_blank"
@@ -45,7 +45,7 @@ export function Footer() {
         </div>
       </div>
 
-      <div className="mx-auto mt-12 flex max-w-6xl flex-col items-center justify-between gap-4 border-neutral-900 border-t pt-8 text-neutral-600 text-xs md:flex-row">
+      <div className="mx-auto mt-12 flex max-w-6xl flex-col items-center justify-between gap-4 border-border border-t pt-8 text-text-muted text-xs md:flex-row">
         <p>© {new Date().getFullYear()} OpenKanban. All rights reserved.</p>
         <p>
           Designed & Built by{" "}
@@ -53,7 +53,7 @@ export function Footer() {
             href="https://github.com/Slogllykop"
             target="_blank"
             rel="noopener noreferrer"
-            className="text-neutral-300 transition-colors hover:text-accent"
+            className="text-text-secondary transition-colors hover:text-accent"
           >
             Slogllykop
           </a>

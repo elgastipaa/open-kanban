@@ -382,7 +382,7 @@ export function BoardInvitationsDialog({
                         type="button"
                         onClick={() => void revoke(invitation)}
                         disabled={isSaving}
-                        className="rounded-md border border-border px-3 py-2 text-red-300 text-xs hover:bg-red-400/10 disabled:opacity-50"
+                        className="rounded-md border border-border px-3 py-2 text-priority-urgent text-xs hover:bg-priority-urgent/10 disabled:opacity-50"
                       >
                         Revocar
                       </button>
@@ -400,7 +400,7 @@ export function BoardInvitationsDialog({
 
         {error ? (
           <p
-            className="rounded-lg border border-red-400/30 bg-red-400/5 p-3 text-red-200 text-sm"
+            className="rounded-lg border border-priority-urgent/30 bg-priority-urgent/10 p-3 text-priority-urgent text-sm"
             role="alert"
           >
             {error}

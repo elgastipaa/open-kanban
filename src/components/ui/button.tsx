@@ -13,7 +13,7 @@ const variantStyles: Record<ButtonVariant, string> = {
   primary: "bg-accent text-text-inverse hover:bg-accent-hover",
   ghost:
     "bg-transparent text-text-secondary hover:bg-surface-overlay hover:text-text-primary",
-  danger: "bg-transparent text-red-400 hover:bg-red-500/10",
+  danger: "bg-transparent text-priority-urgent hover:bg-priority-urgent/10",
 };
 
 const sizeStyles: Record<ButtonSize, string> = {

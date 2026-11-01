@@ -94,7 +94,7 @@ export function PendingInvitations({
   return (
     <section className="mt-8" aria-labelledby="pending-invitations-title">
       <div>
-        <p className="text-neutral-400 text-sm">
+        <p className="text-sm text-text-secondary">
           Compartieron un tablero contigo
         </p>
         <h2
@@ -106,7 +106,7 @@ export function PendingInvitations({
       </div>
       {loadError ? (
         <p
-          className="mt-4 rounded-xl border border-red-400/20 bg-red-400/5 p-4 text-red-200 text-sm"
+          className="mt-4 rounded-xl border border-priority-urgent/30 bg-priority-urgent/10 p-4 text-priority-urgent text-sm"
           role="alert"
         >
           No se pudieron cargar las invitaciones. Inténtalo de nuevo más tarde.
@@ -116,13 +116,13 @@ export function PendingInvitations({
           {pending.map((invitation) => (
             <li
               key={invitation.id}
-              className="rounded-2xl border border-white/10 bg-neutral-950 p-5"
+              className="rounded-2xl border border-border bg-surface-raised p-5"
             >
               <p className="font-semibold">{invitation.board_name}</p>
-              <p className="mt-2 text-neutral-400 text-sm">
+              <p className="mt-2 text-sm text-text-secondary">
                 Invitó {invitation.inviter_email} · rol colaborador
               </p>
-              <p className="mt-2 text-neutral-500 text-xs">
+              <p className="mt-2 text-text-muted text-xs">
                 Vence{" "}
                 {new Intl.DateTimeFormat("es-AR", {
                   dateStyle: "medium",
@@ -137,7 +137,7 @@ export function PendingInvitations({
                     busyId !== null ||
                     reconciliationRequiredIds.has(invitation.id)
                   }
-                  className="rounded-lg bg-white px-4 py-2 font-semibold text-neutral-950 text-sm disabled:opacity-50"
+                  className="rounded-lg bg-accent px-4 py-2 font-semibold text-accent-foreground text-sm disabled:opacity-50"
                 >
                   {busyId === invitation.id
                     ? "Aceptando…"
@@ -152,7 +152,7 @@ export function PendingInvitations({
                     busyId !== null ||
                     reconciliationRequiredIds.has(invitation.id)
                   }
-                  className="rounded-lg border border-white/15 px-4 py-2 text-neutral-300 text-sm hover:bg-white/5 disabled:opacity-50"
+                  className="rounded-lg border border-border px-4 py-2 text-sm text-text-secondary hover:bg-surface-hover disabled:opacity-50"
                 >
                   Rechazar
                 </button>
@@ -161,13 +161,13 @@ export function PendingInvitations({
           ))}
         </ul>
       ) : (
-        <p className="mt-4 rounded-xl border border-white/10 bg-neutral-950 p-4 text-neutral-400 text-sm">
+        <p className="mt-4 rounded-xl border border-border bg-surface-raised p-4 text-sm text-text-secondary">
           No tienes invitaciones pendientes.
         </p>
       )}
       {error ? (
         <p
-          className="mt-3 text-red-200 text-sm"
+          className="mt-3 text-priority-urgent text-sm"
           role="alert"
           aria-live="assertive"
         >
@@ -178,13 +178,13 @@ export function PendingInvitations({
         <button
           type="button"
           onClick={() => window.location.reload()}
-          className="mt-3 min-h-11 rounded-xl border border-white/15 px-5 py-3 text-neutral-200 text-sm transition hover:bg-white/5"
+          className="mt-3 min-h-11 rounded-xl border border-border px-5 py-3 text-sm text-text-primary transition hover:bg-surface-hover"
         >
           Actualizar Tableros y verificar acceso
         </button>
       ) : null}
       {message ? (
-        <output className="mt-3 text-neutral-300 text-sm" aria-live="polite">
+        <output className="mt-3 text-sm text-text-secondary" aria-live="polite">
           {message}
         </output>
       ) : null}

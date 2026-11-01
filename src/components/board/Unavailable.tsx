@@ -4,23 +4,23 @@ import { Logo } from "@/components/ui/logo";
 
 export function Unavailable() {
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-black p-4 text-white selection:bg-accent selection:text-black">
+    <div className="flex min-h-screen flex-col items-center justify-center bg-surface-base p-4 text-text-primary selection:bg-accent selection:text-black">
       {/* Top Branding */}
       <div className="absolute top-8 left-8">
         <Logo />
       </div>
 
       <div className="relative w-full max-w-lg">
-        <div className="relative flex flex-col items-center rounded-3xl border border-white/5 bg-zinc-950/50 p-10 text-center backdrop-blur-xl md:p-14">
-          <div className="mb-8 flex h-20 w-20 items-center justify-center rounded-3xl border border-white/10 bg-white/5 text-red-500 ring-1 ring-white/5 backdrop-blur-sm">
+        <div className="relative flex flex-col items-center rounded-3xl border border-border bg-surface-raised/50 p-10 text-center backdrop-blur-xl md:p-14">
+          <div className="mb-8 flex h-20 w-20 items-center justify-center rounded-3xl border border-border bg-surface-hover text-priority-urgent ring-1 ring-border backdrop-blur-sm">
             <IconCloudOff size={40} strokeWidth={1.5} />
           </div>
 
-          <h2 className="mb-4 font-bold font-display text-3xl text-white tracking-tight md:text-4xl">
+          <h2 className="mb-4 font-bold font-display text-3xl text-text-primary tracking-tight md:text-4xl">
             No se pudo cargar el tablero
           </h2>
 
-          <p className="mb-10 max-w-sm font-sans text-lg text-zinc-400 leading-relaxed">
+          <p className="mb-10 max-w-sm font-sans text-lg text-text-secondary leading-relaxed">
             El servicio no respondió. Puedes volver a tus tableros e intentarlo
             de nuevo más tarde.
           </p>
@@ -35,10 +35,10 @@ export function Unavailable() {
             </Link>
           </div>
 
-          <div className="mt-12 flex items-center gap-3 font-medium text-[10px] text-zinc-600 uppercase tracking-[0.2em]">
-            <span className="h-px w-8 bg-zinc-800" />
+          <div className="mt-12 flex items-center gap-3 font-medium text-[10px] text-text-muted uppercase tracking-[0.2em]">
+            <span className="h-px w-8 bg-border-hover" />
             Servicio no disponible
-            <span className="h-px w-8 bg-zinc-800" />
+            <span className="h-px w-8 bg-border-hover" />
           </div>
         </div>
       </div>

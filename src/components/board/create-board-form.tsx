@@ -176,7 +176,7 @@ function CreateBoardFormForPrincipal({ principalId }: { principalId: string }) {
         <button
           type="submit"
           disabled={pending || !timeZone || !operationId}
-          className="min-h-12 rounded-xl bg-white px-5 py-3 font-semibold text-neutral-950 transition hover:bg-neutral-200 disabled:cursor-wait disabled:opacity-60"
+          className="min-h-12 rounded-xl bg-accent px-5 py-3 font-semibold text-accent-foreground transition hover:bg-accent-hover disabled:cursor-wait disabled:opacity-60"
         >
           {pending
             ? "Creando…"
@@ -195,7 +195,7 @@ function CreateBoardFormForPrincipal({ principalId }: { principalId: string }) {
       {state.error ? (
         <p
           id="create-board-error"
-          className="mt-3 text-red-300 text-sm"
+          className="mt-3 text-priority-urgent text-sm"
           role="alert"
         >
           {state.error}

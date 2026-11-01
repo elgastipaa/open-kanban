@@ -7,7 +7,7 @@ import { Logo } from "@/components/ui/logo";
 
 export default function RateLimitPage() {
   return (
-    <div className="relative flex min-h-dvh flex-col items-center justify-center overflow-hidden bg-black text-white selection:bg-accent selection:text-black">
+    <div className="relative flex min-h-dvh flex-col items-center justify-center overflow-hidden bg-surface-base text-text-primary selection:bg-accent selection:text-black">
       {/* Background elements */}
       <div className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-5">
         <span className="select-none font-black font-display text-[30vw] text-accent tracking-tighter mix-blend-screen">
@@ -33,11 +33,11 @@ export default function RateLimitPage() {
           <h1 className="font-bold font-display text-3xl tracking-tight sm:text-4xl">
             Whoa, slow down.
           </h1>
-          <p className="font-medium text-neutral-400">
+          <p className="font-medium text-text-secondary">
             You've hit the rate limit. OpenKanban is free and open, but we have
             to protect the servers from high traffic.
           </p>
-          <p className="text-neutral-500 text-sm">
+          <p className="text-sm text-text-muted">
             Please wait a minute before creating or accessing more boards.
           </p>
         </div>
@@ -49,7 +49,7 @@ export default function RateLimitPage() {
         >
           <Link
             href="/"
-            className="group flex h-12 items-center gap-2 rounded-xl bg-white px-6 font-semibold text-black outline-none transition-all hover:bg-neutral-200 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-black"
+            className="group flex h-12 items-center gap-2 rounded-xl border border-border bg-surface-raised px-6 font-semibold text-text-primary outline-none transition-all hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface-base"
           >
             <IconArrowLeft
               size={18}

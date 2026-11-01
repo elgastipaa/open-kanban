@@ -209,13 +209,13 @@ export function BoardMembersDialog({
       ) : (
         <div className="flex flex-col gap-4">
           {error ? (
-            <p className="text-red-300 text-sm" role="alert">
+            <p className="text-priority-urgent text-sm" role="alert">
               {error}
             </p>
           ) : null}
           {expiredCommand ? (
-            <div className="flex items-center justify-between gap-3 rounded-md border border-amber-700/50 bg-amber-950/20 px-3 py-2">
-              <output className="text-amber-200 text-sm">
+            <div className="flex items-center justify-between gap-3 rounded-md border border-priority-medium/50 bg-priority-medium/10 px-3 py-2">
+              <output className="text-priority-medium text-sm">
                 No generaremos otra operación para esta membresía hasta
                 reconciliar su estado.
               </output>
@@ -229,7 +229,7 @@ export function BoardMembersDialog({
             </div>
           ) : null}
           {message ? (
-            <output className="text-green-300 text-sm">{message}</output>
+            <output className="text-sm text-status-success">{message}</output>
           ) : null}
           {members === null ? (
             <output className="text-sm text-text-secondary">
@@ -275,7 +275,7 @@ export function BoardMembersDialog({
                     </Button>
                   ) : memberRole === "owner" &&
                     member.role === "collaborator" ? (
-                    <span className="text-amber-200 text-xs">
+                    <span className="text-priority-medium text-xs">
                       Retiro pendiente de reconciliar
                     </span>
                   ) : null}

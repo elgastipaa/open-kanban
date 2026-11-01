@@ -1,8 +1,12 @@
 import type { Metadata } from "next";
 import { Bricolage_Grotesque, Inter } from "next/font/google";
-import { Toaster } from "sonner";
+import { ThemePreferenceProvider } from "@/components/theme/theme-preference-provider";
 import { OfflineBanner } from "@/components/ui/offline-banner";
+import { ThemeAwareToaster } from "@/components/ui/theme-aware-toaster";
+import { resolveApplicationAccess } from "@/lib/auth";
+import { getMyThemePreference } from "@/lib/db/theme-preferences";
 import { siteUrl } from "@/lib/site";
+import { createClient } from "@/lib/supabase/server";
 import "./globals.css";
 
 const inter = Inter({
@@ -65,15 +69,47 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({
+const systemTheme = { theme: "system" as const, version: 0 };
+
+async function loadThemeBootstrap() {
+  try {
+    const supabase = await createClient();
+    const { data: authData, error: authError } = await supabase.auth.getUser();
+    if (authError || !authData.user) {
+      return { accountId: null, preference: systemTheme, loadFailed: false };
+    }
+
+    const access = await resolveApplicationAccess(supabase);
+    if (access.status !== "active") {
+      return { accountId: null, preference: systemTheme, loadFailed: false };
+    }
+
+    try {
+      const preference = await getMyThemePreference(supabase);
+      return { accountId: authData.user.id, preference, loadFailed: false };
+    } catch {
+      return {
+        accountId: authData.user.id,
+        preference: systemTheme,
+        loadFailed: true,
+      };
+    }
+  } catch {
+    return { accountId: null, preference: systemTheme, loadFailed: false };
+  }
+}
+
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const themeBootstrap = await loadThemeBootstrap();
+
   return (
-    <html lang="es" className="dark">
+    <html lang="es" data-theme={themeBootstrap.preference.theme}>
       <body
-        className={`${inter.variable} ${bricolage.variable} bg-black font-sans text-white antialiased`}
+        className={`${inter.variable} ${bricolage.variable} bg-surface-base font-sans text-text-primary antialiased`}
       >
         <script
           type="application/ld+json"
@@ -94,21 +130,15 @@ export default function RootLayout({
             }),
           }}
         />
-        <OfflineBanner />
-        {children}
-        <Toaster
-          theme="dark"
-          position="bottom-right"
-          toastOptions={{
-            style: {
-              background: "#111",
-              border: "1px solid #1a1a1a",
-              color: "#fff",
-            },
-          }}
-          visibleToasts={5}
-          richColors
-        />
+        <ThemePreferenceProvider
+          accountId={themeBootstrap.accountId}
+          initialPreference={themeBootstrap.preference}
+          loadFailed={themeBootstrap.loadFailed}
+        >
+          <OfflineBanner />
+          {children}
+          <ThemeAwareToaster />
+        </ThemePreferenceProvider>
       </body>
     </html>
   );

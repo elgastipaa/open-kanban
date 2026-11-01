@@ -753,7 +753,7 @@ export function TaskRecoveryDialog({
 
         {error ? (
           <p
-            className="rounded-lg border border-red-400/30 bg-red-400/5 p-3 text-red-200 text-sm"
+            className="rounded-lg border border-priority-urgent/30 bg-priority-urgent/10 p-3 text-priority-urgent text-sm"
             role="alert"
           >
             {error}

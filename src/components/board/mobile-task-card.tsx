@@ -240,7 +240,7 @@ export function MobileTaskCard({
             e.stopPropagation();
             onDelete(task.id);
           }}
-          className="flex items-center gap-1 rounded-md px-1.5 py-1 text-text-muted text-xs transition-colors hover:bg-red-500/10 hover:text-red-400"
+          className="flex items-center gap-1 rounded-md px-1.5 py-1 text-text-muted text-xs transition-colors hover:bg-priority-urgent/10 hover:text-priority-urgent"
           aria-label={`Eliminar tarea: ${task.title}`}
         >
           <IconTrash size={13} />

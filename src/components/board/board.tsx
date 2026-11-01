@@ -21,6 +21,7 @@ import { KeyboardShortcuts } from "@/components/board/keyboard-shortcuts";
 import { MobileBoard } from "@/components/board/mobile-board";
 import { TaskModal } from "@/components/board/task-modal";
 import { TaskRecoveryDialog } from "@/components/board/task-recovery-dialog";
+import { useThemePreference } from "@/components/theme/theme-preference-provider";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useBoard } from "@/hooks/use-board";
 import type { BoardRefreshOutcome } from "@/hooks/use-board/use-board-sync";
@@ -30,9 +31,7 @@ import { useOnlineStatus } from "@/hooks/use-online-status";
 import { usePresence } from "@/hooks/use-presence";
 import { useRealtime } from "@/hooks/use-realtime";
 import { resolveApplicationAccess } from "@/lib/auth";
-import {
-  hasBoardAuthorizationEpochChanged,
-} from "@/lib/board-auth-epoch";
+import { hasBoardAuthorizationEpochChanged } from "@/lib/board-auth-epoch";
 import { columnDeletionSuccessMessage } from "@/lib/column-deletion-flow";
 import {
   BoardRecoveryError,
@@ -131,6 +130,7 @@ export function Board({
   myTasksReturnHref,
 }: BoardProps) {
   const router = useRouter();
+  const { resetTheme } = useThemePreference();
   const [sessionStatus, setSessionStatus] = useState<SessionStatus>("checking");
   const [realtimeContext, setRealtimeContext] =
     useState<BoardRealtimeContext | null>(null);
@@ -138,9 +138,10 @@ export function Board({
   const verifySessionRef = useRef<() => Promise<void>>(() => Promise.resolve());
   const onAccessLost = useCallback(() => {
     abortPendingSessionRequests();
+    resetTheme();
     setSessionStatus("denied");
     router.replace("/");
-  }, [router]);
+  }, [resetTheme, router]);
 
   useEffect(() => {
     let disposed = false;
@@ -220,7 +221,8 @@ export function Board({
             currentRealtimeContext &&
             (String(currentRealtimeContext.auth_epoch) !==
               String(nextRealtimeContext.auth_epoch) ||
-              currentRealtimeContext.sync_topic !== nextRealtimeContext.sync_topic)
+              currentRealtimeContext.sync_topic !==
+                nextRealtimeContext.sync_topic)
           ) {
             abortPendingSessionRequests();
           }
@@ -280,10 +282,7 @@ export function Board({
     };
   }, [ownerAuthUserId, router, slug]);
 
-  const onRealtimeReconnect = useCallback(
-    () => verifySessionRef.current(),
-    [],
-  );
+  const onRealtimeReconnect = useCallback(() => verifySessionRef.current(), []);
 
   if (
     sessionStatus === "checking" ||

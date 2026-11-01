@@ -22,16 +22,16 @@ export const metadata: Metadata = {
 
 function UnavailableInvitation({ message }: { message: string }) {
   return (
-    <main className="flex min-h-dvh items-center justify-center bg-black px-5 py-12 text-white">
-      <section className="w-full max-w-lg rounded-3xl border border-white/10 bg-neutral-950 p-8 shadow-2xl sm:p-10">
+    <main className="flex min-h-dvh items-center justify-center bg-surface-base px-5 py-12 text-text-primary">
+      <section className="w-full max-w-lg rounded-3xl border border-border bg-surface-raised p-8 shadow-2xl sm:p-10">
         <Logo />
         <h1 className="mt-10 font-bold font-display text-3xl tracking-tight">
           Invitación no disponible
         </h1>
-        <p className="mt-3 text-neutral-400 text-sm leading-6">{message}</p>
+        <p className="mt-3 text-sm text-text-secondary leading-6">{message}</p>
         <Link
           href="/"
-          className="mt-8 inline-flex min-h-11 items-center justify-center rounded-xl border border-white/15 px-5 py-3 text-neutral-300 text-sm hover:bg-white/5"
+          className="mt-8 inline-flex min-h-11 items-center justify-center rounded-xl border border-border px-5 py-3 text-sm text-text-secondary hover:bg-surface-hover"
         >
           Volver a Tableros
         </Link>

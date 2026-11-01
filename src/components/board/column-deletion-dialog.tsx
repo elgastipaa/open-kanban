@@ -252,7 +252,7 @@ export function ColumnDeletionDialog({
                 ) : null}
 
                 {submitError ? (
-                  <p className="text-red-300 text-sm" role="alert">
+                  <p className="text-priority-urgent text-sm" role="alert">
                     {columnDeletionErrorMessage(submitError)}
                   </p>
                 ) : null}

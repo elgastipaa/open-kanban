@@ -77,7 +77,7 @@ export function AddColumnForm({
       {error ? (
         <p
           id="new-column-error"
-          className="mt-2 text-red-300 text-sm"
+          className="mt-2 text-priority-urgent text-sm"
           role="alert"
         >
           {error}
@@ -95,7 +95,7 @@ export function AddColumnForm({
         ) : null}
         <button
           type="submit"
-          className="min-h-10 rounded-lg bg-accent px-4 py-2 font-semibold text-sm text-white hover:brightness-110"
+          className="min-h-10 rounded-lg bg-accent px-4 py-2 font-semibold text-sm text-text-primary hover:brightness-110"
         >
           Crear columna
         </button>
@@ -138,7 +138,7 @@ export function AddColumn({
       <button
         type="button"
         onClick={() => setIsOpen(true)}
-        className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-white px-5 py-3 font-semibold text-neutral-950 transition hover:bg-neutral-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
+        className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-accent px-5 py-3 font-semibold text-accent-foreground transition hover:bg-accent-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
       >
         <IconPlus size={18} aria-hidden="true" />
         Crear una columna

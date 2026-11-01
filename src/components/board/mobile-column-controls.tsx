@@ -140,7 +140,7 @@ export function MobileColumnControls({
               {editError ? (
                 <p
                   id={editErrorId}
-                  className="mt-1 text-red-300 text-sm"
+                  className="mt-1 text-priority-urgent text-sm"
                   role="alert"
                 >
                   {editError}
@@ -284,12 +284,12 @@ export function MobileColumnControls({
                       onDelete();
                       setShowMenu(false);
                     }}
-                    className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-left font-medium text-red-500 text-sm transition-colors hover:bg-red-500/10"
+                    className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-left font-medium text-priority-urgent text-sm transition-colors hover:bg-priority-urgent/10"
                   >
                     <IconTrash
                       size={16}
                       stroke={2}
-                      className="text-red-500/80"
+                      className="text-priority-urgent/80"
                     />
                     Eliminar columna
                   </button>

@@ -9,14 +9,14 @@ export const metadata: Metadata = {
 
 export default function TermsPage() {
   return (
-    <div className="min-h-screen bg-black pb-32 font-sans text-white selection:bg-accent selection:text-black">
+    <div className="min-h-screen bg-surface-base pb-32 font-sans text-text-primary selection:bg-accent selection:text-black">
       {/* Header */}
-      <header className="border-neutral-900 border-b px-6 py-6">
+      <header className="border-border border-b px-6 py-6">
         <div className="mx-auto flex max-w-4xl items-center justify-between">
           <Logo size={24} className="transition-opacity hover:opacity-80" />
           <Link
             href="/"
-            className="text-neutral-400 text-sm transition-colors hover:text-white"
+            className="text-sm text-text-secondary transition-colors hover:text-text-primary"
           >
             Back to Home
           </Link>
@@ -32,9 +32,9 @@ export default function TermsPage() {
           Last updated: {new Date().toLocaleDateString()}
         </p>
 
-        <div className="space-y-12 text-neutral-300 leading-relaxed">
+        <div className="space-y-12 text-text-secondary leading-relaxed">
           <section>
-            <h2 className="mb-4 font-bold font-display text-2xl text-white">
+            <h2 className="mb-4 font-bold font-display text-2xl text-text-primary">
               1. Acceptance of Terms
             </h2>
             <p className="mb-4">
@@ -45,7 +45,7 @@ export default function TermsPage() {
           </section>
 
           <section>
-            <h2 className="mb-4 font-bold font-display text-2xl text-white">
+            <h2 className="mb-4 font-bold font-display text-2xl text-text-primary">
               2. Account and Board Access
             </h2>
             <p className="mb-4">
@@ -71,7 +71,7 @@ export default function TermsPage() {
           </section>
 
           <section>
-            <h2 className="mb-4 font-bold font-display text-2xl text-white">
+            <h2 className="mb-4 font-bold font-display text-2xl text-text-primary">
               3. Ephemeral Nature of Data
             </h2>
             <p className="mb-4">
@@ -84,7 +84,7 @@ export default function TermsPage() {
           </section>
 
           <section>
-            <h2 className="mb-4 font-bold font-display text-2xl text-white">
+            <h2 className="mb-4 font-bold font-display text-2xl text-text-primary">
               4. Acceptable Use
             </h2>
             <p className="mb-4">You agree not to use the Service:</p>
@@ -105,7 +105,7 @@ export default function TermsPage() {
           </section>
 
           <section>
-            <h2 className="mb-4 font-bold font-display text-2xl text-white">
+            <h2 className="mb-4 font-bold font-display text-2xl text-text-primary">
               5. Disclaimer of Warranties
             </h2>
             <p className="mb-4">

@@ -176,7 +176,7 @@ export function MyTasksList({ entries, order, loadError }: MyTasksListProps) {
     return (
       <li
         key={`${entry.board.id}:${entry.task.id}`}
-        className="flex items-start gap-3 rounded-2xl border border-white/10 bg-neutral-950 p-4 sm:items-center"
+        className="flex items-start gap-3 rounded-2xl border border-border bg-surface-raised p-4 sm:items-center"
       >
         {completionControl.kind === "action" ? (
           <button
@@ -185,7 +185,7 @@ export function MyTasksList({ entries, order, loadError }: MyTasksListProps) {
             aria-label={completionControl.accessibleLabel}
             title={completionControl.label}
             disabled={!isOnline || Boolean(pendingTaskId)}
-            className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-white/30 text-transparent transition hover:border-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+            className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-border-hover text-transparent transition hover:border-accent disabled:cursor-not-allowed disabled:opacity-50"
           >
             <IconCheck size={14} aria-hidden="true" />
           </button>
@@ -194,7 +194,7 @@ export function MyTasksList({ entries, order, loadError }: MyTasksListProps) {
             role="img"
             aria-label={completionControl.accessibleLabel}
             title={completionControl.label}
-            className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-emerald-400 bg-emerald-500/20 text-emerald-300"
+            className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-accent bg-accent-muted text-accent-foreground"
           >
             <IconCheck size={14} aria-hidden="true" />
           </span>
@@ -202,14 +202,14 @@ export function MyTasksList({ entries, order, loadError }: MyTasksListProps) {
         <div className="min-w-0 flex-1">
           <Link
             href={titleHref}
-            className={`block truncate font-medium text-sm hover:text-emerald-200 ${entry.task.is_completed ? "text-neutral-400 line-through" : "text-white"}`}
+            className={`block truncate font-medium text-sm hover:text-text-primary ${entry.task.is_completed ? "text-text-secondary line-through" : "text-text-primary"}`}
           >
             {entry.task.title}
           </Link>
-          <p className="mt-1 truncate text-neutral-400 text-xs">
+          <p className="mt-1 truncate text-text-secondary text-xs">
             {entry.board.name} · {entry.column.title}
           </p>
-          <p className="mt-1 text-neutral-500 text-xs">
+          <p className="mt-1 text-text-muted text-xs">
             {entry.board.time_zone} · {dueLabel(entry)} · Prioridad:{" "}
             {priorityLabel(entry.task.priority)}
             {checklistProgress.totalCount > 0
@@ -219,7 +219,7 @@ export function MyTasksList({ entries, order, loadError }: MyTasksListProps) {
         </div>
         {isPending ? (
           <output
-            className="shrink-0 text-neutral-400 text-xs"
+            className="shrink-0 text-text-secondary text-xs"
             aria-live="polite"
           >
             Guardando…
@@ -231,12 +231,12 @@ export function MyTasksList({ entries, order, loadError }: MyTasksListProps) {
 
   return (
     <>
-      <main className="mx-auto min-h-dvh max-w-5xl bg-black px-5 py-8 text-white sm:px-8">
-        <header className="flex items-center justify-between gap-4 border-white/10 border-b pb-6">
+      <main className="mx-auto min-h-dvh max-w-5xl bg-surface-base px-5 py-8 text-text-primary sm:px-8">
+        <header className="flex items-center justify-between gap-4 border-border border-b pb-6">
           <div>
             <Link
               href="/"
-              className="text-neutral-400 text-sm hover:text-white"
+              className="text-sm text-text-secondary hover:text-text-primary"
             >
               Tableros
             </Link>
@@ -246,16 +246,22 @@ export function MyTasksList({ entries, order, loadError }: MyTasksListProps) {
           </div>
           <div className="flex items-center gap-2">
             <Link
+              href="/account"
+              className="rounded-lg border border-border px-3 py-2 text-sm text-text-secondary hover:bg-surface-hover hover:text-text-primary"
+            >
+              Cuenta
+            </Link>
+            <Link
               href={myTasksHref("due")}
               aria-current={order === "due" ? "page" : undefined}
-              className={`rounded-lg border px-3 py-2 text-sm ${order === "due" ? "border-emerald-400/50 bg-emerald-400/10 text-emerald-200" : "border-white/15 text-neutral-300 hover:bg-white/5"}`}
+              className={`rounded-lg border px-3 py-2 text-sm ${order === "due" ? "border-border-accent bg-accent-muted text-text-primary" : "border-border text-text-secondary hover:bg-surface-hover"}`}
             >
               Por vencimiento
             </Link>
             <Link
               href={myTasksHref("created")}
               aria-current={order === "created" ? "page" : undefined}
-              className={`rounded-lg border px-3 py-2 text-sm ${order === "created" ? "border-emerald-400/50 bg-emerald-400/10 text-emerald-200" : "border-white/15 text-neutral-300 hover:bg-white/5"}`}
+              className={`rounded-lg border px-3 py-2 text-sm ${order === "created" ? "border-border-accent bg-accent-muted text-text-primary" : "border-border text-text-secondary hover:bg-surface-hover"}`}
             >
               Por creación
             </Link>
@@ -264,7 +270,7 @@ export function MyTasksList({ entries, order, loadError }: MyTasksListProps) {
 
         {!isOnline ? (
           <output
-            className="mt-5 block rounded-xl border border-amber-300/20 bg-amber-300/5 p-3 text-amber-100 text-sm"
+            className="mt-5 block rounded-xl border border-priority-medium/30 bg-priority-medium/10 p-3 text-priority-medium text-sm"
             aria-live="polite"
           >
             Estás sin conexión. Puedes revisar estas tareas; las acciones
@@ -273,7 +279,7 @@ export function MyTasksList({ entries, order, loadError }: MyTasksListProps) {
         ) : null}
         {actionNotice ? (
           <output
-            className="mt-5 block rounded-xl border border-amber-300/20 bg-amber-300/5 p-3 text-amber-100 text-sm"
+            className="mt-5 block rounded-xl border border-priority-medium/30 bg-priority-medium/10 p-3 text-priority-medium text-sm"
             aria-live="polite"
           >
             {actionNotice}
@@ -282,14 +288,14 @@ export function MyTasksList({ entries, order, loadError }: MyTasksListProps) {
 
         {loadError ? (
           <p
-            className="mt-8 rounded-xl border border-red-400/20 bg-red-400/5 p-4 text-red-200 text-sm"
+            className="mt-8 rounded-xl border border-priority-urgent/30 bg-priority-urgent/10 p-4 text-priority-urgent text-sm"
             role="alert"
           >
             No se pudieron cargar tus tareas. Actualiza la página para volver a
             intentarlo.
           </p>
         ) : entries.length === 0 ? (
-          <p className="mt-8 rounded-2xl border border-white/15 border-dashed p-10 text-center text-neutral-400 text-sm">
+          <p className="mt-8 rounded-2xl border border-border border-dashed p-10 text-center text-sm text-text-secondary">
             No tenés tareas asignadas.
           </p>
         ) : (
@@ -298,7 +304,7 @@ export function MyTasksList({ entries, order, loadError }: MyTasksListProps) {
               <section aria-labelledby="my-active-tasks-heading">
                 <h2
                   id="my-active-tasks-heading"
-                  className="mb-3 font-semibold text-neutral-200 text-sm"
+                  className="mb-3 font-semibold text-sm text-text-primary"
                 >
                   Pendientes
                 </h2>
@@ -309,7 +315,7 @@ export function MyTasksList({ entries, order, loadError }: MyTasksListProps) {
               <section aria-labelledby="my-completed-tasks-heading">
                 <h2
                   id="my-completed-tasks-heading"
-                  className="mb-3 font-semibold text-neutral-200 text-sm"
+                  className="mb-3 font-semibold text-sm text-text-primary"
                 >
                   Completadas recientemente
                 </h2>

@@ -1311,7 +1311,7 @@ export function TaskModal({
                         )
                       }
                       aria-label={`${step.is_completed ? "Desmarcar" : "Marcar"} paso: ${step.text}`}
-                      className="h-4 w-4 shrink-0 accent-emerald-400 disabled:opacity-50"
+                      className="h-4 w-4 shrink-0 accent-accent disabled:opacity-50"
                     />
                     {editingChecklistStepId === step.id ? (
                       <input

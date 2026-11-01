@@ -10,14 +10,14 @@ export const metadata: Metadata = {
 
 export default function PrivacyPage() {
   return (
-    <div className="min-h-screen bg-black pb-32 font-sans text-white selection:bg-accent selection:text-black">
+    <div className="min-h-screen bg-surface-base pb-32 font-sans text-text-primary selection:bg-accent selection:text-black">
       {/* Header */}
-      <header className="border-neutral-900 border-b px-6 py-6">
+      <header className="border-border border-b px-6 py-6">
         <div className="mx-auto flex max-w-4xl items-center justify-between">
           <Logo size={24} className="transition-opacity hover:opacity-80" />
           <Link
             href="/"
-            className="text-neutral-400 text-sm transition-colors hover:text-white"
+            className="text-sm text-text-secondary transition-colors hover:text-text-primary"
           >
             Back to Home
           </Link>
@@ -33,9 +33,9 @@ export default function PrivacyPage() {
           Last updated: {new Date().toLocaleDateString()}
         </p>
 
-        <div className="space-y-12 text-neutral-300 leading-relaxed">
+        <div className="space-y-12 text-text-secondary leading-relaxed">
           <section>
-            <h2 className="mb-4 font-bold font-display text-2xl text-white">
+            <h2 className="mb-4 font-bold font-display text-2xl text-text-primary">
               1. Data Collection Philosophy
             </h2>
             <p className="mb-4">
@@ -43,7 +43,7 @@ export default function PrivacyPage() {
               enabled for the application. Authentication is provided by
               Supabase and Google.
             </p>
-            <p className="mb-4 font-bold text-white">
+            <p className="mb-4 font-bold text-text-primary">
               OpenKanban stores the account identifier and verified Google email
               needed to admit and identify your account. It does not receive
               your Google password.
@@ -51,7 +51,7 @@ export default function PrivacyPage() {
           </section>
 
           <section>
-            <h2 className="mb-4 font-bold font-display text-2xl text-white">
+            <h2 className="mb-4 font-bold font-display text-2xl text-text-primary">
               2. What We Collect
             </h2>
             <ul className="mt-2 list-disc space-y-2 pl-5">
@@ -70,7 +70,7 @@ export default function PrivacyPage() {
           </section>
 
           <section>
-            <h2 className="mb-4 font-bold font-display text-2xl text-white">
+            <h2 className="mb-4 font-bold font-display text-2xl text-text-primary">
               3. Data Visibility & Security
             </h2>
             <p className="mb-4">
@@ -80,13 +80,13 @@ export default function PrivacyPage() {
               application, but that role does not grant access to another
               account's board content.
             </p>
-            <p className="mb-4 text-neutral-400 italic">
+            <p className="mb-4 text-text-secondary italic">
               Board URLs identify a route and do not grant access by themselves.
             </p>
           </section>
 
           <section>
-            <h2 className="mb-4 font-bold font-display text-2xl text-white">
+            <h2 className="mb-4 font-bold font-display text-2xl text-text-primary">
               4. Third-Party Services
             </h2>
             <p className="mb-4">
@@ -98,7 +98,7 @@ export default function PrivacyPage() {
           </section>
 
           <section>
-            <h2 className="mb-4 font-bold font-display text-2xl text-white">
+            <h2 className="mb-4 font-bold font-display text-2xl text-text-primary">
               5. Deletion & Retention
             </h2>
             <p className="mb-4">

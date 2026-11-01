@@ -114,7 +114,7 @@ export function ColumnHeader({
             {editError ? (
               <span
                 id={editErrorId}
-                className="mt-1 block text-red-300 text-xs"
+                className="mt-1 block text-priority-urgent text-xs"
                 role="alert"
               >
                 {editError}
@@ -214,7 +214,7 @@ export function ColumnHeader({
                     onDelete();
                     setShowMenu(false);
                   }}
-                  className="w-full cursor-pointer px-3 py-1.5 text-left text-red-400 text-xs hover:bg-red-500/10"
+                  className="w-full cursor-pointer px-3 py-1.5 text-left text-priority-urgent text-xs hover:bg-priority-urgent/10"
                 >
                   <span className="flex items-center gap-1.5">
                     <IconTrash size={12} />

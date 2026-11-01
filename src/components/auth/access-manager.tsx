@@ -270,7 +270,7 @@ export function AccessManager({ entries }: { entries: AccessEntry[] }) {
     <section className="mt-8">
       <form
         onSubmit={addAccess}
-        className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-neutral-950 p-5 sm:flex-row"
+        className="flex flex-col gap-3 rounded-2xl border border-border bg-surface-raised p-5 sm:flex-row"
       >
         <label className="flex-1">
           <span className="mb-2 block font-medium text-sm">
@@ -283,9 +283,9 @@ export function AccessManager({ entries }: { entries: AccessEntry[] }) {
             required
             value={email}
             onChange={(event) => setEmail(event.target.value)}
-            className="min-h-11 w-full rounded-lg border border-white/15 bg-black px-3 text-white outline-none focus:border-white/40"
+            className="min-h-11 w-full rounded-lg border border-border bg-surface-base px-3 text-text-primary outline-none focus:border-accent"
           />
-          <span className="mt-2 block text-neutral-500 text-xs">
+          <span className="mt-2 block text-text-muted text-xs">
             La primera sesión vincula esta autorización solo con un correo
             verificado por Google.
           </span>
@@ -293,7 +293,7 @@ export function AccessManager({ entries }: { entries: AccessEntry[] }) {
         <button
           type="submit"
           disabled={busyEmail !== null}
-          className="self-end rounded-lg bg-white px-5 py-3 font-semibold text-neutral-950 transition hover:bg-neutral-200 disabled:opacity-60"
+          className="self-end rounded-lg bg-accent px-5 py-3 font-semibold text-accent-foreground transition hover:bg-accent-hover disabled:opacity-60"
         >
           Habilitar acceso
         </button>
@@ -301,7 +301,7 @@ export function AccessManager({ entries }: { entries: AccessEntry[] }) {
 
       {message ? (
         <p
-          className={`mt-3 text-sm ${messageKind === "error" ? "text-red-200" : "text-neutral-300"}`}
+          className={`mt-3 text-sm ${messageKind === "error" ? "text-priority-urgent" : "text-text-secondary"}`}
           role={messageKind === "error" ? "alert" : "status"}
           aria-live={messageKind === "error" ? "assertive" : "polite"}
         >
@@ -309,9 +309,9 @@ export function AccessManager({ entries }: { entries: AccessEntry[] }) {
         </p>
       ) : null}
 
-      <div className="mt-6 overflow-x-auto rounded-2xl border border-white/10">
+      <div className="mt-6 overflow-x-auto rounded-2xl border border-border">
         <table className="w-full min-w-[34rem] border-collapse text-left text-sm">
-          <thead className="bg-neutral-950 text-neutral-400">
+          <thead className="bg-surface-raised text-text-secondary">
             <tr>
               <th className="px-4 py-3 font-medium" scope="col">
                 Correo autorizado
@@ -353,9 +353,9 @@ export function AccessManager({ entries }: { entries: AccessEntry[] }) {
 
               return (
                 <Fragment key={entry.email}>
-                  <tr className="border-white/10 border-t">
+                  <tr className="border-border border-t">
                     <td className="px-4 py-4">{entry.email}</td>
-                    <td className="px-4 py-4 text-neutral-300">
+                    <td className="px-4 py-4 text-text-secondary">
                       {stateLabel}
                       {entry.is_admin ? " · Administrador" : ""}
                     </td>
@@ -371,7 +371,7 @@ export function AccessManager({ entries }: { entries: AccessEntry[] }) {
                             )
                           }
                           aria-label={`Retirar autorización de ${entry.email}`}
-                          className="text-neutral-300 underline underline-offset-4 hover:text-white disabled:opacity-60"
+                          className="text-text-secondary underline underline-offset-4 hover:text-text-primary disabled:opacity-60"
                         >
                           Retirar
                         </button>
@@ -385,7 +385,7 @@ export function AccessManager({ entries }: { entries: AccessEntry[] }) {
                               : previewSuspension(entry.email)
                           }
                           aria-label={`${isPreviewOpen ? "Cancelar" : "Revisar suspensión de"} ${entry.email}`}
-                          className="text-neutral-300 underline underline-offset-4 hover:text-white disabled:opacity-60"
+                          className="text-text-secondary underline underline-offset-4 hover:text-text-primary disabled:opacity-60"
                         >
                           {busyEmail?.toLowerCase() ===
                           entry.email.toLowerCase()
@@ -402,16 +402,16 @@ export function AccessManager({ entries }: { entries: AccessEntry[] }) {
                             mutateAccess("admin_enable_access", entry.email)
                           }
                           aria-label={`Rehabilitar acceso de ${entry.email}`}
-                          className="text-neutral-300 underline underline-offset-4 hover:text-white disabled:opacity-60"
+                          className="text-text-secondary underline underline-offset-4 hover:text-text-primary disabled:opacity-60"
                         >
                           Rehabilitar
                         </button>
                       ) : entry.is_admin && entry.state === "active" ? (
-                        <span className="text-neutral-500">
+                        <span className="text-text-muted">
                           Único administrador protegido
                         </span>
                       ) : (
-                        <span className="text-neutral-500">—</span>
+                        <span className="text-text-muted">—</span>
                       )}
                     </td>
                   </tr>
@@ -419,19 +419,19 @@ export function AccessManager({ entries }: { entries: AccessEntry[] }) {
                     <tr>
                       <td
                         colSpan={3}
-                        className="border-white/10 border-t px-4 py-5"
+                        className="border-border border-t px-4 py-5"
                       >
-                        <div className="rounded-xl border border-white/10 bg-neutral-950 p-4">
+                        <div className="rounded-xl border border-border bg-surface-raised p-4">
                           <h2 className="font-semibold">
                             Sucesión para {entry.email}
                           </h2>
-                          <p className="mt-1 text-neutral-400 text-sm">
+                          <p className="mt-1 text-sm text-text-secondary">
                             Revisá cada tablero y elegí una identidad habilitada
                             cuando corresponda. La suspensión, la revocación de
                             accesos y las sucesiones se confirman juntas.
                           </p>
                           {preview.boards.length === 0 ? (
-                            <p className="mt-4 text-neutral-300 text-sm">
+                            <p className="mt-4 text-sm text-text-secondary">
                               No hay tableros activos ni recuperables que
                               requieran una sucesión.
                             </p>
@@ -443,7 +443,7 @@ export function AccessManager({ entries }: { entries: AccessEntry[] }) {
                                   className="py-4 first:pt-0 last:pb-0"
                                 >
                                   <p className="font-medium">{board.name}</p>
-                                  <p className="mt-1 text-neutral-500 text-xs">
+                                  <p className="mt-1 text-text-muted text-xs">
                                     /{board.slug} ·{" "}
                                     {board.state === "active"
                                       ? "Activo"
@@ -458,14 +458,14 @@ export function AccessManager({ entries }: { entries: AccessEntry[] }) {
                                       : ""}
                                   </p>
                                   {board.relationship === "collaborator" ? (
-                                    <p className="mt-2 text-neutral-300 text-sm">
+                                    <p className="mt-2 text-sm text-text-secondary">
                                       Se retirará su membresía. El titular y el
                                       plazo de recuperación se conservan.
                                     </p>
                                   ) : board.state === "active" ? (
                                     board.candidates.length > 0 ? (
                                       <label className="mt-3 block max-w-xl">
-                                        <span className="mb-2 block text-neutral-300 text-sm">
+                                        <span className="mb-2 block text-sm text-text-secondary">
                                           Sucesor habilitado para este tablero
                                         </span>
                                         <select
@@ -484,7 +484,7 @@ export function AccessManager({ entries }: { entries: AccessEntry[] }) {
                                               }),
                                             )
                                           }
-                                          className="min-h-11 w-full rounded-lg border border-white/15 bg-black px-3 text-white outline-none focus:border-white/40 disabled:opacity-60"
+                                          className="min-h-11 w-full rounded-lg border border-border bg-surface-base px-3 text-text-primary outline-none focus:border-accent disabled:opacity-60"
                                         >
                                           <option value="">
                                             Elegí una identidad
@@ -503,7 +503,7 @@ export function AccessManager({ entries }: { entries: AccessEntry[] }) {
                                         </select>
                                       </label>
                                     ) : (
-                                      <p className="mt-2 text-amber-100 text-sm">
+                                      <p className="mt-2 text-priority-medium text-sm">
                                         No hay colaboradoras habilitadas para
                                         recibirlo. Quedará recuperable durante
                                         siete días.
@@ -511,13 +511,13 @@ export function AccessManager({ entries }: { entries: AccessEntry[] }) {
                                     )
                                   ) : board.relationship === "owner" &&
                                     board.recovery_owner_is_active ? (
-                                    <p className="mt-2 text-neutral-300 text-sm">
+                                    <p className="mt-2 text-sm text-text-secondary">
                                       Se conserva la autoridad habilitada actual
                                       de recuperación y el vencimiento original.
                                     </p>
                                   ) : board.candidates.length > 0 ? (
                                     <label className="mt-3 block max-w-xl">
-                                      <span className="mb-2 block text-neutral-300 text-sm">
+                                      <span className="mb-2 block text-sm text-text-secondary">
                                         Identidad habilitada para la
                                         recuperación
                                       </span>
@@ -537,7 +537,7 @@ export function AccessManager({ entries }: { entries: AccessEntry[] }) {
                                             }),
                                           )
                                         }
-                                        className="min-h-11 w-full rounded-lg border border-white/15 bg-black px-3 text-white outline-none focus:border-white/40 disabled:opacity-60"
+                                        className="min-h-11 w-full rounded-lg border border-border bg-surface-base px-3 text-text-primary outline-none focus:border-accent disabled:opacity-60"
                                       >
                                         <option value="">
                                           Elegí una identidad
@@ -556,7 +556,7 @@ export function AccessManager({ entries }: { entries: AccessEntry[] }) {
                                       </select>
                                     </label>
                                   ) : (
-                                    <p className="mt-2 text-amber-100 text-sm">
+                                    <p className="mt-2 text-priority-medium text-sm">
                                       No hay otra identidad habilitada elegible.
                                       El tablero seguirá recuperable sin titular
                                       asignado hasta su vencimiento original.
@@ -574,7 +574,7 @@ export function AccessManager({ entries }: { entries: AccessEntry[] }) {
                                 suspensionDecision?.kind !== "ready"
                               }
                               onClick={() => submitSuspension(entry.email)}
-                              className="rounded-lg bg-white px-4 py-2.5 font-semibold text-neutral-950 transition hover:bg-neutral-200 disabled:opacity-60"
+                              className="rounded-lg bg-accent px-4 py-2.5 font-semibold text-accent-foreground transition hover:bg-accent-hover disabled:opacity-60"
                             >
                               {busyEmail?.toLowerCase() ===
                               entry.email.toLowerCase()
@@ -585,7 +585,7 @@ export function AccessManager({ entries }: { entries: AccessEntry[] }) {
                               type="button"
                               disabled={busyEmail !== null}
                               onClick={cancelSuspensionPreview}
-                              className="rounded-lg border border-white/15 px-4 py-2.5 text-neutral-200 hover:bg-white/5 disabled:opacity-60"
+                              className="rounded-lg border border-border px-4 py-2.5 text-text-primary hover:bg-surface-hover disabled:opacity-60"
                             >
                               Cancelar
                             </button>
@@ -601,7 +601,7 @@ export function AccessManager({ entries }: { entries: AccessEntry[] }) {
               <tr>
                 <td
                   colSpan={3}
-                  className="px-4 py-8 text-center text-neutral-500"
+                  className="px-4 py-8 text-center text-text-muted"
                 >
                   Todavía no hay accesos.
                 </td>
@@ -610,7 +610,7 @@ export function AccessManager({ entries }: { entries: AccessEntry[] }) {
           </tbody>
         </table>
       </div>
-      <p className="mt-4 flex items-center gap-2 text-neutral-500 text-xs">
+      <p className="mt-4 flex items-center gap-2 text-text-muted text-xs">
         <IconRefresh size={14} aria-hidden="true" />
         La gestión de acceso no concede lectura del contenido privado de los
         tableros.

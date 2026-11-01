@@ -58,17 +58,17 @@ export function InvitationAcceptance({
   }
 
   return (
-    <main className="flex min-h-dvh items-center justify-center bg-black px-5 py-12 text-white">
-      <section className="w-full max-w-lg rounded-3xl border border-white/10 bg-neutral-950 p-8 shadow-2xl sm:p-10">
-        <p className="text-neutral-400 text-sm">Invitación a colaborar</p>
+    <main className="flex min-h-dvh items-center justify-center bg-surface-base px-5 py-12 text-text-primary">
+      <section className="w-full max-w-lg rounded-3xl border border-border bg-surface-raised p-8 shadow-2xl sm:p-10">
+        <p className="text-sm text-text-secondary">Invitación a colaborar</p>
         <h1 className="mt-2 font-bold font-display text-3xl tracking-tight">
           {preview.board_name}
         </h1>
-        <p className="mt-4 text-neutral-300 text-sm leading-6">
+        <p className="mt-4 text-sm text-text-secondary leading-6">
           {preview.inviter} te invitó como colaborador. Al aceptar, las personas
           con acceso a este tablero podrán ver su contenido.
         </p>
-        <p className="mt-2 text-neutral-500 text-sm">
+        <p className="mt-2 text-sm text-text-muted">
           La invitación se usa una vez y vence en 72 horas.
         </p>
         <div className="mt-8 flex flex-col gap-3 sm:flex-row">
@@ -76,7 +76,7 @@ export function InvitationAcceptance({
             type="button"
             onClick={() => void accept()}
             disabled={isAccepting || requiresReconciliation}
-            className="min-h-11 flex-1 rounded-xl bg-white px-5 py-3 font-semibold text-neutral-950 transition hover:bg-neutral-200 disabled:opacity-60"
+            className="min-h-11 flex-1 rounded-xl bg-accent px-5 py-3 font-semibold text-accent-foreground transition hover:bg-accent-hover disabled:opacity-60"
           >
             {isAccepting
               ? "Aceptando…"
@@ -86,14 +86,14 @@ export function InvitationAcceptance({
           </button>
           <Link
             href="/"
-            className="inline-flex min-h-11 items-center justify-center rounded-xl border border-white/15 px-5 py-3 text-neutral-300 text-sm transition hover:bg-white/5"
+            className="inline-flex min-h-11 items-center justify-center rounded-xl border border-border px-5 py-3 text-sm text-text-secondary transition hover:bg-surface-hover"
           >
             Cancelar
           </Link>
         </div>
         {error ? (
           <p
-            className="mt-4 rounded-lg border border-red-400/20 bg-red-400/5 p-3 text-red-200 text-sm"
+            className="mt-4 rounded-lg border border-priority-urgent/30 bg-priority-urgent/10 p-3 text-priority-urgent text-sm"
             role="alert"
           >
             {error}
@@ -102,7 +102,7 @@ export function InvitationAcceptance({
         {requiresReconciliation ? (
           <Link
             href="/"
-            className="mt-3 inline-flex min-h-11 items-center justify-center rounded-xl border border-white/15 px-5 py-3 text-neutral-200 text-sm transition hover:bg-white/5"
+            className="mt-3 inline-flex min-h-11 items-center justify-center rounded-xl border border-border px-5 py-3 text-sm text-text-primary transition hover:bg-surface-hover"
           >
             Ir a Tableros y verificar acceso
           </Link>

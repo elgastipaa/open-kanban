@@ -78,18 +78,18 @@ export function MyBoardRecovery({
   if (boards.length === 0 && !loadError) return null;
 
   return (
-    <section className="mt-8 rounded-2xl border border-amber-200/20 bg-amber-100/[0.04] p-5">
+    <section className="mt-8 rounded-2xl border border-priority-medium/20 bg-priority-medium/10 p-5">
       <div className="flex items-start gap-3">
         <IconRefresh
           aria-hidden="true"
-          className="mt-0.5 text-amber-100"
+          className="mt-0.5 text-priority-medium"
           size={20}
         />
         <div className="min-w-0 flex-1">
-          <h2 className="font-semibold text-amber-50">
+          <h2 className="font-semibold text-priority-medium">
             Tableros en recuperación
           </h2>
-          <p className="mt-1 text-neutral-400 text-sm">
+          <p className="mt-1 text-sm text-text-secondary">
             El tablero y su contenido permanecen ocultos hasta restaurarlo. Las
             invitaciones revocadas no se reactivan.
           </p>
@@ -97,7 +97,7 @@ export function MyBoardRecovery({
       </div>
 
       {loadError ? (
-        <p className="mt-4 text-red-200 text-sm" role="alert">
+        <p className="mt-4 text-priority-urgent text-sm" role="alert">
           No se pudo cargar la lista de recuperación.
         </p>
       ) : null}
@@ -110,7 +110,7 @@ export function MyBoardRecovery({
             >
               <div className="min-w-0">
                 <p className="truncate font-medium">{board.name}</p>
-                <p className="mt-1 text-neutral-500 text-xs">
+                <p className="mt-1 text-text-muted text-xs">
                   /{board.slug} ·{" "}
                   {formatBoardRecoveryDates(
                     board.deleted_at,
@@ -132,10 +132,10 @@ export function MyBoardRecovery({
         </ul>
       ) : null}
       {message ? (
-        <output className="mt-3 text-green-200 text-sm">{message}</output>
+        <output className="mt-3 text-sm text-status-success">{message}</output>
       ) : null}
       {errorMessage ? (
-        <p className="mt-3 text-red-200 text-sm" role="alert">
+        <p className="mt-3 text-priority-urgent text-sm" role="alert">
           {errorMessage}
         </p>
       ) : null}

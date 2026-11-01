@@ -1,9 +1,30 @@
 "use client";
 
+import { useSyncExternalStore } from "react";
 import { ChromaFlow, Shader, Swirl } from "shaders/react";
+import { useThemePreference } from "@/components/theme/theme-preference-provider";
 import GrainOverlay from "./gradient-overlay";
 
+function subscribeToColorScheme(onChange: () => void) {
+  const preference = window.matchMedia("(prefers-color-scheme: light)");
+  preference.addEventListener("change", onChange);
+  return () => preference.removeEventListener("change", onChange);
+}
+
+function getPrefersLightScheme() {
+  return window.matchMedia("(prefers-color-scheme: light)").matches;
+}
+
 export const BackgroundLayer = () => {
+  const { state } = useThemePreference();
+  const prefersLight = useSyncExternalStore(
+    subscribeToColorScheme,
+    getPrefersLightScheme,
+    () => false,
+  );
+  const lightTheme =
+    state.theme === "light" || (state.theme === "system" && prefersLight);
+
   return (
     <>
       <GrainOverlay />
@@ -17,7 +38,7 @@ export const BackgroundLayer = () => {
         }}
       >
         <Swirl
-          colorA="#000"
+          colorA={lightTheme ? "#f8f8f6" : "#000"}
           colorB="#e1ff0015"
           speed={1}
           detail={0.8}

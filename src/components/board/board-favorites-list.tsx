@@ -119,12 +119,12 @@ export function BoardFavoritesList({
     return (
       <section
         aria-label="Tus tableros"
-        className="mt-8 rounded-xl border border-red-400/20 bg-red-400/5 p-4 text-red-200 text-sm"
+        className="mt-8 rounded-xl border border-priority-urgent/30 bg-priority-urgent/10 p-4 text-priority-urgent text-sm"
         role="alert"
       >
         <p>No se pudieron cargar tus tableros.</p>
         <button
-          className="mt-3 rounded-lg border border-red-200/30 px-3 py-2 text-red-100 transition hover:bg-red-200/10"
+          className="mt-3 rounded-lg border border-priority-urgent/30 px-3 py-2 text-priority-urgent transition hover:bg-priority-urgent/10"
           onClick={() => router.refresh()}
           type="button"
         >
@@ -136,7 +136,7 @@ export function BoardFavoritesList({
 
   if (boards.length === 0) {
     return (
-      <p className="mt-8 rounded-2xl border border-white/15 border-dashed p-10 text-center text-neutral-400 text-sm">
+      <p className="mt-8 rounded-2xl border border-border border-dashed p-10 text-center text-sm text-text-secondary">
         Todavía no tienes tableros. Acepta una invitación o crea uno para
         empezar.
       </p>
@@ -153,10 +153,10 @@ export function BoardFavoritesList({
     const isPending = pendingBoardIds.has(board.id);
     return (
       <li key={board.id}>
-        <div className="flex min-h-24 items-center gap-3 rounded-2xl border border-white/10 bg-neutral-950 p-5 transition hover:border-white/25 hover:bg-neutral-900">
+        <div className="flex min-h-24 items-center gap-3 rounded-2xl border border-border bg-surface-raised p-5 transition hover:border-border-hover hover:bg-surface-overlay">
           <Link className="min-w-0 flex-1" href={`/${board.slug}`}>
             <span className="block truncate font-semibold">{board.name}</span>
-            <span className="mt-2 block text-neutral-500 text-xs">
+            <span className="mt-2 block text-text-muted text-xs">
               {board.role === "owner" ? "Propietario" : "Compartido contigo"}
             </span>
           </Link>
@@ -170,7 +170,7 @@ export function BoardFavoritesList({
                   : `Marcar ${board.name} como favorito`
               }
               aria-pressed={isFavorite}
-              className="grid size-11 shrink-0 place-items-center rounded-full text-2xl text-amber-300 transition hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-amber-300 focus-visible:outline-offset-2 aria-disabled:cursor-wait aria-disabled:opacity-60"
+              className="grid size-11 shrink-0 place-items-center rounded-full text-2xl text-priority-medium transition hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-focus-ring focus-visible:outline-offset-2 aria-disabled:cursor-wait aria-disabled:opacity-60"
               onClick={() => void toggleFavorite(board.id)}
               ref={(button) => {
                 if (button) favoriteButtonRefs.current.set(board.id, button);
@@ -197,12 +197,12 @@ export function BoardFavoritesList({
         </h2>
         {favoritesLoadError ? (
           <div
-            className="mt-3 rounded-xl border border-red-400/20 bg-red-400/5 p-4 text-red-200 text-sm"
+            className="mt-3 rounded-xl border border-priority-urgent/30 bg-priority-urgent/10 p-4 text-priority-urgent text-sm"
             role="alert"
           >
             <p>No se pudieron consultar tus favoritos.</p>
             <button
-              className="mt-3 rounded-lg border border-red-200/30 px-3 py-2 text-red-100 transition hover:bg-red-200/10"
+              className="mt-3 rounded-lg border border-priority-urgent/30 px-3 py-2 text-priority-urgent transition hover:bg-priority-urgent/10"
               onClick={() => router.refresh()}
               type="button"
             >
@@ -210,7 +210,7 @@ export function BoardFavoritesList({
             </button>
           </div>
         ) : favorites.length === 0 ? (
-          <p className="mt-3 text-neutral-500 text-sm">
+          <p className="mt-3 text-sm text-text-muted">
             Marca un tablero con la estrella para encontrarlo aquí.
           </p>
         ) : (
@@ -222,7 +222,7 @@ export function BoardFavoritesList({
 
       {mutationError ? (
         <p
-          className="rounded-xl border border-red-400/20 bg-red-400/5 p-4 text-red-200 text-sm"
+          className="rounded-xl border border-priority-urgent/30 bg-priority-urgent/10 p-4 text-priority-urgent text-sm"
           role="alert"
         >
           {mutationError}
@@ -237,7 +237,7 @@ export function BoardFavoritesList({
           {favoritesLoadError ? "Tus tableros" : "Otros tableros"}
         </h2>
         {otherBoards.length === 0 ? (
-          <p className="mt-3 text-neutral-500 text-sm">
+          <p className="mt-3 text-sm text-text-muted">
             Todos tus tableros están en Favoritos.
           </p>
         ) : (

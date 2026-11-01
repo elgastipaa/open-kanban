@@ -163,16 +163,16 @@ export function AdminBoardRecovery({
   if (boards.length === 0 && !loadError) return null;
 
   return (
-    <section className="mt-8 rounded-2xl border border-white/10 bg-neutral-950 p-5">
+    <section className="mt-8 rounded-2xl border border-border bg-surface-raised p-5">
       <div className="flex items-start gap-3">
         <IconRefresh
           aria-hidden="true"
-          className="mt-0.5 text-neutral-300"
+          className="mt-0.5 text-text-secondary"
           size={20}
         />
         <div className="min-w-0 flex-1">
           <h2 className="font-semibold">Recuperación de tableros</h2>
-          <p className="mt-1 text-neutral-400 text-sm">
+          <p className="mt-1 text-sm text-text-secondary">
             Solo se muestran nombre, dueño y plazo. La administración no recibe
             acceso al contenido del tablero.
           </p>
@@ -180,7 +180,7 @@ export function AdminBoardRecovery({
       </div>
 
       {loadError ? (
-        <p className="mt-4 text-red-200 text-sm" role="alert">
+        <p className="mt-4 text-priority-urgent text-sm" role="alert">
           No se pudo cargar la lista de recuperación.
         </p>
       ) : null}
@@ -197,7 +197,7 @@ export function AdminBoardRecovery({
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div className="min-w-0">
                     <p className="truncate font-medium">{board.name}</p>
-                    <p className="mt-1 text-neutral-500 text-xs">
+                    <p className="mt-1 text-text-muted text-xs">
                       /{board.slug} ·{" "}
                       {formatBoardRecoveryDates(
                         board.deleted_at,
@@ -205,7 +205,7 @@ export function AdminBoardRecovery({
                         formatDeadline,
                       )}
                     </p>
-                    <p className="mt-2 text-neutral-400 text-sm">
+                    <p className="mt-2 text-sm text-text-secondary">
                       {board.owner_is_valid
                         ? "El dueño habilitado actual conserva la autoridad de recuperación."
                         : board.recovery_owner_id
@@ -233,7 +233,7 @@ export function AdminBoardRecovery({
                 {adminCanResolve && owners ? (
                   <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-end">
                     <label className="flex-1">
-                      <span className="mb-2 block text-neutral-300 text-sm">
+                      <span className="mb-2 block text-sm text-text-secondary">
                         Nuevo dueño habilitado
                       </span>
                       <select
@@ -245,7 +245,7 @@ export function AdminBoardRecovery({
                             [board.id]: event.target.value,
                           }))
                         }
-                        className="min-h-11 w-full rounded-lg border border-white/15 bg-black px-3 text-white outline-none focus:border-white/40 disabled:opacity-60"
+                        className="min-h-11 w-full rounded-lg border border-border bg-surface-base px-3 text-text-primary outline-none focus:border-accent disabled:opacity-60"
                       >
                         <option value="">Selecciona una identidad</option>
                         {owners.map((owner) => (
@@ -269,7 +269,7 @@ export function AdminBoardRecovery({
                   </div>
                 ) : null}
                 {adminCanResolve && owners?.length === 0 ? (
-                  <output className="mt-3 text-amber-100 text-sm">
+                  <output className="mt-3 text-priority-medium text-sm">
                     No hay una identidad habilitada elegible para este tablero.
                   </output>
                 ) : null}
@@ -279,10 +279,10 @@ export function AdminBoardRecovery({
         </ul>
       ) : null}
       {message ? (
-        <output className="mt-3 text-green-200 text-sm">{message}</output>
+        <output className="mt-3 text-sm text-status-success">{message}</output>
       ) : null}
       {errorMessage ? (
-        <p className="mt-3 text-red-200 text-sm" role="alert">
+        <p className="mt-3 text-priority-urgent text-sm" role="alert">
           {errorMessage}
         </p>
       ) : null}

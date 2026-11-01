@@ -176,3 +176,15 @@ La implementación de «Completar, agrupar y reabrir tareas» parte de la base f
 - Se preservan docs/VALIDATION.md con SHA-256 B8669EAAFEA1A6D41C1342470E49324D2FAA50BED03DCCCFE7E94AF17D51FD9C y .scratch/ local sin seguimiento, sin stage/commit.
 
 Siguiente trabajo alcanzable: consultar la secuencia y dependencia vigente antes de seleccionar otro issue. #10 requiere recorrido humano local autorizado y resolución del bloqueador #8 antes de aceptación/cierre.
+
+## Entrega local de #11 — 2026-10-31
+
+«Programar una fecha puntual y cambiar zona» parte de la base fija `be738b7a90d193d4805ef1df761cf6bf92e61eef`. HEAD de código revisado `a1268d08a916ba56bbfc6f15b5617e8636cab031` en `codex/issue-11`; commits `30b54c2` (fecha DATE y zona), `b72a209` (rutas correctas de evidencia) y `a1268d0` (acción de zona dentro de `⋯`). Evidencia por criterio: [docs/validation/issue-11.md](../validation/issue-11.md).
+
+- TDD rojo-verde con PostgreSQL 16.15 descartable y actores sintéticos. La migración 022 agrega vencimiento opcional `DATE`; se comprueban persistencia/limpieza, fecha inválida e `infinity`, zona IANA, día de tablero, preview/cambio exclusivo owner y conservación de `due_on`. El reloj `2026-11-01T01:00:00Z` da `2026-10-31` en `America/Los_Angeles` y `2026-11-01` en `Europe/Paris`.
+- `pnpm test:db` pasó con migraciones 001–022; `pnpm test:unit` pasó 34/34. También pasaron `pnpm typecheck`, `pnpm build` (Next.js 16.4.2), Biome dirigido (21 archivos) y `git diff --check`. Después del ajuste del menú se repitieron typecheck, build, Biome dirigido y diff check.
+- Reviews Spec y Standards finales, en paralelo sobre HEAD `a1268d0` contra la base fija: Spec sin incumplimientos; Standards sin infracciones obligatorias. Queda un posible *Repeated Switches* de baja certeza en ramas SQL de versión/conflicto, considerado razonable por sus validaciones específicas.
+- La ubicación en `⋯` cumple UI-04/UI-13. Inspección visual del selector/calendario y del espacio cuando está vacío, ausencia de acción para colaborador, Auth/UI autenticada y apertura/cierre/reapertura real del detalle tras cambiar el día en dos zonas siguen pendientes de recorrido manual. No se declara aprobada esa parte.
+- El código y evidencia avanzaron por fast-forward desde la base hasta `a1268d0` en `codex/openkanban-1-0`; push ordinario a `origin` completado. PR acumulada #54 está OPEN/draft, título #3–#11, cuerpo actualizado con esta evidencia. No se hizo merge a `main`.
+- GitHub #11 permanece OPEN/`ready-for-human`, asignado a `elgastipaa`; comentario de evidencia https://github.com/elgastipaa/open-kanban/issues/11#issuecomment-6552262971. `Blocked by #8` sigue intacto; #8 permanece OPEN/`ready-for-human`. No se infiere aceptación ni se cierra el issue.
+- Se preserva `docs/VALIDATION.md` ajeno con SHA-256 `B8669EAAFEA1A6D41C1342470E49324D2FAA50BED03DCCCFE7E94AF17D51FD9C` y `.scratch/` local sin seguimiento; ninguno se stageó ni se incluyó en commits.

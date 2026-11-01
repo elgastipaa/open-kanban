@@ -4,11 +4,35 @@ import {
   formatTaskRecoveryTimestamp,
   getTaskRecoveryListViewState,
   getTaskRecoveryRestoreAction,
+  isTaskRecoveryRestorableAtElapsedTime,
   shouldClearTaskRecoveryItems,
   taskRecoveryCauseLabel,
+  taskRecoveryDestinationFieldIds,
   taskRecoveryLoadErrorMessage,
   taskRecoveryRestoreErrorMessage,
 } from "../../src/lib/task-recovery-state.ts";
+
+test("restore stops being offered at the exact database deadline using monotonic elapsed time", () => {
+  const deadline = {
+    can_restore: true,
+    expires_at: "2026-11-01T00:00:00.000Z",
+    eligibility_checked_at: "2026-10-31T23:59:00.000Z",
+  };
+
+  assert.equal(isTaskRecoveryRestorableAtElapsedTime(deadline, 59_999), true);
+  assert.equal(
+    isTaskRecoveryRestorableAtElapsedTime(deadline, 60_000),
+    false,
+    "the UI must not offer restore when monotonic elapsed time reaches the DB deadline",
+  );
+});
+
+test("recovery destination label and select use unique, associated IDs", () => {
+  const ids = taskRecoveryDestinationFieldIds("task-123");
+
+  assert.notEqual(ids.labelId, ids.selectId);
+  assert.equal(ids.htmlFor, ids.selectId);
+});
 
 test("recovery list maps loading, failure, empty, and ready states distinctly", () => {
   assert.equal(

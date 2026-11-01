@@ -104,6 +104,7 @@ export interface TaskRecoveryItem {
   expires_at: string;
   can_restore: boolean;
   original_column_available: boolean;
+  eligibility_checked_at: string;
 }
 
 export type TaskRecoveryResultStatus =
@@ -712,7 +713,9 @@ function isTaskRecoveryItem(value: unknown): value is TaskRecoveryItem {
     "can_restore" in value &&
     typeof value.can_restore === "boolean" &&
     "original_column_available" in value &&
-    typeof value.original_column_available === "boolean"
+    typeof value.original_column_available === "boolean" &&
+    "eligibility_checked_at" in value &&
+    typeof value.eligibility_checked_at === "string"
   );
 }
 

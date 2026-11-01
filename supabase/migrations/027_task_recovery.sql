@@ -219,28 +219,34 @@ RETURNS TABLE (
   deleted_at timestamptz,
   expires_at timestamptz,
   can_restore boolean,
-  original_column_available boolean
+  original_column_available boolean,
+  eligibility_checked_at timestamptz
 )
 LANGUAGE sql
 VOLATILE
 SECURITY DEFINER
 SET search_path = pg_catalog, public, auth, pg_temp
 AS $$
+  WITH eligibility_clock AS MATERIALIZED (
+    SELECT clock_timestamp() AS checked_at
+  )
   SELECT deletion.task_id,
     deletion.task_snapshot->>'title',
     deletion.original_column_id,
     deletion.cause,
     deletion.deleted_at,
     deletion.expires_at,
-    clock_timestamp() < deletion.expires_at,
+    eligibility_clock.checked_at < deletion.expires_at,
     EXISTS (
       SELECT 1 FROM public.columns AS column_row
       WHERE column_row.id = deletion.original_column_id
         AND column_row.board_id = board.id
         AND column_row.generation_id = board.active_generation_id
-    )
+    ),
+    eligibility_clock.checked_at
   FROM public.task_deletions AS deletion
   JOIN public.boards AS board ON board.id = deletion.board_id
+  CROSS JOIN eligibility_clock
   WHERE board.slug = p_slug
     AND deletion.state = 'deleted'
     AND deletion.task_snapshot IS NOT NULL

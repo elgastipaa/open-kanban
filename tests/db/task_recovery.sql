@@ -67,6 +67,9 @@ BEGIN
     OR v_trash.cause IS DISTINCT FROM 'user_requested'
     OR v_trash.deleted_at < v_started_at
     OR v_trash.deleted_at > clock_timestamp()
+    OR v_trash.eligibility_checked_at < v_trash.deleted_at
+    OR v_trash.can_restore IS DISTINCT FROM
+      (v_trash.eligibility_checked_at < v_trash.expires_at)
     OR v_trash.expires_at IS DISTINCT FROM v_trash.deleted_at + interval '168 hours' THEN
     RAISE EXCEPTION 'Deletion metadata did not use the server clock and exact 7x24h window: %',
       row_to_json(v_trash);
@@ -403,6 +406,7 @@ DECLARE
   v_reference record;
   v_expires_at timestamptz;
   v_can_restore boolean;
+  v_eligibility_checked_at timestamptz;
   v_original_column_available boolean;
   v_result jsonb;
   v_snapshot jsonb;
@@ -411,13 +415,16 @@ DECLARE
 BEGIN
   SELECT * INTO STRICT v_reference FROM pg_temp.issue14_task_refs
   WHERE purpose = 'boundary';
-  SELECT item.expires_at, item.can_restore, item.original_column_available
-  INTO STRICT v_expires_at, v_can_restore, v_original_column_available
+  SELECT item.expires_at, item.can_restore, item.original_column_available,
+    item.eligibility_checked_at
+  INTO STRICT v_expires_at, v_can_restore, v_original_column_available,
+    v_eligibility_checked_at
   FROM public.list_deleted_tasks_p(v_reference.board_slug) AS item
   WHERE item.task_id = v_reference.task_id;
-  IF v_can_restore OR NOT v_original_column_available THEN
-    RAISE EXCEPTION 'The server did not close restore at the exact deadline: %, %',
-      v_can_restore, v_original_column_available;
+  IF v_can_restore OR v_eligibility_checked_at < v_expires_at
+    OR NOT v_original_column_available THEN
+    RAISE EXCEPTION 'The server did not close restore at the exact deadline: %, %, %',
+      v_can_restore, v_eligibility_checked_at, v_original_column_available;
   END IF;
   v_result := public.restore_task_internal_p(
     '14000000-0000-4000-8000-000000000011',

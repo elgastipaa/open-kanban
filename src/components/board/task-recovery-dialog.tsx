@@ -1,7 +1,7 @@
 "use client";
 
 import { IconRefresh } from "@tabler/icons-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import {
@@ -15,8 +15,10 @@ import {
   formatTaskRecoveryTimestamp,
   getTaskRecoveryListViewState,
   getTaskRecoveryRestoreAction,
+  isTaskRecoveryRestorableAtElapsedTime,
   shouldClearTaskRecoveryItems,
   taskRecoveryCauseLabel,
+  taskRecoveryDestinationFieldIds,
   taskRecoveryLoadErrorMessage,
   taskRecoveryRestoreErrorMessage,
 } from "@/lib/task-recovery-state";
@@ -36,6 +38,10 @@ interface TaskRecoveryDialogProps {
   columns: RecoveryColumn[];
 }
 
+type TimedTaskRecoveryItem = TaskRecoveryItem & {
+  requestStartedAtMonotonic: number;
+};
+
 export function TaskRecoveryDialog({
   open,
   onClose,
@@ -44,7 +50,7 @@ export function TaskRecoveryDialog({
   timeZone,
   columns,
 }: TaskRecoveryDialogProps) {
-  const [items, setItems] = useState<TaskRecoveryItem[]>([]);
+  const [items, setItems] = useState<TimedTaskRecoveryItem[]>([]);
   const [selectedDestinations, setSelectedDestinations] = useState<
     Record<string, string>
   >({});
@@ -52,6 +58,8 @@ export function TaskRecoveryDialog({
   const [restoringTaskId, setRestoringTaskId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [monotonicNow, setMonotonicNow] = useState(0);
+  const latestRefreshId = useRef(0);
   const listViewState = getTaskRecoveryListViewState({
     isLoading,
     hasError: Boolean(error),
@@ -59,17 +67,28 @@ export function TaskRecoveryDialog({
   });
 
   const refresh = useCallback(async () => {
+    const refreshId = ++latestRefreshId.current;
+    const requestStartedAtMonotonic = performance.now();
     setIsLoading(true);
     setError("");
     try {
-      setItems(await listDeletedTasks(createClient(), slug));
+      const listedItems = await listDeletedTasks(createClient(), slug);
+      if (refreshId !== latestRefreshId.current) return;
+      setItems(
+        listedItems.map((item) => ({
+          ...item,
+          requestStartedAtMonotonic,
+        })),
+      );
+      setMonotonicNow(performance.now());
     } catch (loadError) {
+      if (refreshId !== latestRefreshId.current) return;
       const reason =
         loadError instanceof TaskRecoveryError ? loadError.reason : null;
       if (shouldClearTaskRecoveryItems(reason)) setItems([]);
       setError(taskRecoveryLoadErrorMessage(reason));
     } finally {
-      setIsLoading(false);
+      if (refreshId === latestRefreshId.current) setIsLoading(false);
     }
   }, [slug]);
 
@@ -82,12 +101,61 @@ export function TaskRecoveryDialog({
     void refresh();
   }, [open, refresh]);
 
-  async function restore(item: TaskRecoveryItem) {
+  useEffect(() => {
+    if (!open) return;
+
+    let lastResumeRefreshAt = Number.NEGATIVE_INFINITY;
+    const refreshAfterResume = () => {
+      if (document.visibilityState !== "visible") return;
+      const now = performance.now();
+      if (now - lastResumeRefreshAt < 500) return;
+      lastResumeRefreshAt = now;
+      void refresh();
+    };
+
+    window.addEventListener("focus", refreshAfterResume);
+    document.addEventListener("visibilitychange", refreshAfterResume);
+    return () => {
+      window.removeEventListener("focus", refreshAfterResume);
+      document.removeEventListener("visibilitychange", refreshAfterResume);
+    };
+  }, [open, refresh]);
+
+  useEffect(() => {
+    if (!open || items.length === 0) return;
+
+    const currentMonotonicTime = Math.max(performance.now(), monotonicNow);
+    const nextDeadline = items
+      .filter((item) => item.can_restore)
+      .map((item) => {
+        const remainingMilliseconds =
+          Date.parse(item.expires_at) - Date.parse(item.eligibility_checked_at);
+        return item.requestStartedAtMonotonic + remainingMilliseconds;
+      })
+      .filter((deadline) => deadline > currentMonotonicTime)
+      .sort((left, right) => left - right)[0];
+
+    if (nextDeadline === undefined) return;
+
+    const timer = window.setTimeout(
+      () => {
+        setMonotonicNow(performance.now());
+      },
+      Math.max(0, nextDeadline - currentMonotonicTime),
+    );
+    return () => window.clearTimeout(timer);
+  }, [items, monotonicNow, open]);
+
+  async function restore(item: TimedTaskRecoveryItem) {
+    const canRestore = isTaskRecoveryRestorableAtElapsedTime(
+      item,
+      performance.now() - item.requestStartedAtMonotonic,
+    );
     const selectableColumns = item.original_column_available
       ? columns
       : columns.filter((column) => column.id !== item.original_column_id);
     const action = getTaskRecoveryRestoreAction(
-      item,
+      { ...item, can_restore: canRestore },
       selectableColumns.map((column) => column.id),
       selectedDestinations[item.task_id] ?? null,
     );
@@ -196,15 +264,21 @@ export function TaskRecoveryDialog({
                   );
               const selectedDestination =
                 selectedDestinations[item.task_id] ?? null;
-              const action = getTaskRecoveryRestoreAction(
+              const canRestore = isTaskRecoveryRestorableAtElapsedTime(
                 item,
+                monotonicNow - item.requestStartedAtMonotonic,
+              );
+              const action = getTaskRecoveryRestoreAction(
+                { ...item, can_restore: canRestore },
                 selectableColumns.map((column) => column.id),
                 selectedDestination,
               );
               const requiresDestination =
-                item.can_restore && !item.original_column_available;
+                canRestore && !item.original_column_available;
               const isRestoring = restoringTaskId === item.task_id;
-              const destinationLabelId = `task-recovery-destination-${item.task_id}`;
+              const destinationFieldIds = taskRecoveryDestinationFieldIds(
+                item.task_id,
+              );
 
               return (
                 <li
@@ -225,7 +299,7 @@ export function TaskRecoveryDialog({
                       Vence:{" "}
                       {formatTaskRecoveryTimestamp(item.expires_at, timeZone)}
                     </p>
-                    {!item.can_restore ? (
+                    {!canRestore ? (
                       <p className="text-priority-urgent text-xs">
                         El plazo venció; no se puede recuperar.
                       </p>
@@ -233,14 +307,14 @@ export function TaskRecoveryDialog({
                       selectableColumns.length > 0 ? (
                         <div className="space-y-1 pt-2">
                           <label
-                            id={destinationLabelId}
-                            htmlFor={destinationLabelId}
+                            id={destinationFieldIds.labelId}
+                            htmlFor={destinationFieldIds.htmlFor}
                             className="block text-text-secondary text-xs"
                           >
                             Columna de destino
                           </label>
                           <select
-                            id={destinationLabelId}
+                            id={destinationFieldIds.selectId}
                             value={selectedDestination ?? ""}
                             onChange={(event) =>
                               setSelectedDestinations((current) => ({
@@ -268,7 +342,7 @@ export function TaskRecoveryDialog({
                     ) : null}
                   </div>
 
-                  {item.can_restore ? (
+                  {canRestore ? (
                     <Button
                       type="button"
                       variant="primary"

@@ -94,6 +94,36 @@ export function getTaskRecoveryRestoreAction(
   };
 }
 
+export function isTaskRecoveryRestorableAtElapsedTime(
+  item: {
+    can_restore: boolean;
+    expires_at: string;
+    eligibility_checked_at: string;
+  },
+  elapsedMilliseconds: number,
+): boolean {
+  if (!item.can_restore || !Number.isFinite(elapsedMilliseconds)) return false;
+
+  const expiresAt = Date.parse(item.expires_at);
+  const checkedAt = Date.parse(item.eligibility_checked_at);
+  if (!Number.isFinite(expiresAt) || !Number.isFinite(checkedAt)) return false;
+
+  return expiresAt - checkedAt > Math.max(0, elapsedMilliseconds);
+}
+
+export function taskRecoveryDestinationFieldIds(taskId: string): {
+  labelId: string;
+  selectId: string;
+  htmlFor: string;
+} {
+  const selectId = `task-recovery-destination-${taskId}`;
+  return {
+    labelId: `task-recovery-destination-label-${taskId}`,
+    selectId,
+    htmlFor: selectId,
+  };
+}
+
 export function formatTaskRecoveryTimestamp(
   value: string,
   timeZone: string,

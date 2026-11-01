@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { getInvitationAcceptanceResolution } from "@/lib/invitation-acceptance-state";
 import { acceptInvitationLink } from "@/lib/invitation-actions";
 import type { InvitationPreview } from "@/lib/invitation-contract";
 import {
@@ -20,6 +21,7 @@ export function InvitationAcceptance({
   const router = useRouter();
   const [isAccepting, setIsAccepting] = useState(false);
   const [error, setError] = useState("");
+  const [requiresReconciliation, setRequiresReconciliation] = useState(false);
 
   async function accept() {
     const scope = `accept-link:${token}`;
@@ -37,9 +39,11 @@ export function InvitationAcceptance({
         result.data.status === "expired_unknown"
       ) {
         completeInvitationOperation(scope);
-        setError(
-          "Esta invitación ya no está disponible. No se realizó ningún cambio.",
+        const resolution = getInvitationAcceptanceResolution(
+          result.data.status,
         );
+        setError(resolution.message);
+        setRequiresReconciliation(resolution.requiresReconciliation);
         return;
       }
       completeInvitationOperation(scope);
@@ -71,10 +75,14 @@ export function InvitationAcceptance({
           <button
             type="button"
             onClick={() => void accept()}
-            disabled={isAccepting}
+            disabled={isAccepting || requiresReconciliation}
             className="min-h-11 flex-1 rounded-xl bg-white px-5 py-3 font-semibold text-neutral-950 transition hover:bg-neutral-200 disabled:opacity-60"
           >
-            {isAccepting ? "Aceptando…" : "Aceptar y abrir tablero"}
+            {isAccepting
+              ? "Aceptando…"
+              : requiresReconciliation
+                ? "Aceptación pendiente de verificar"
+                : "Aceptar y abrir tablero"}
           </button>
           <Link
             href="/"
@@ -90,6 +98,14 @@ export function InvitationAcceptance({
           >
             {error}
           </p>
+        ) : null}
+        {requiresReconciliation ? (
+          <Link
+            href="/"
+            className="mt-3 inline-flex min-h-11 items-center justify-center rounded-xl border border-white/15 px-5 py-3 text-neutral-200 text-sm transition hover:bg-white/5"
+          >
+            Ir a Tableros y verificar acceso
+          </Link>
         ) : null}
       </section>
     </main>

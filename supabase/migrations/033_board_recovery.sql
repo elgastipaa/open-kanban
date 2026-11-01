@@ -738,6 +738,219 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION public.board_invitation_issuer_is_current_owner(
+  p_board_id uuid,
+  p_inviter_id uuid
+)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, public, auth, pg_temp
+AS $$
+  SELECT NOT EXISTS (
+      SELECT 1
+      FROM public.board_recoverable_deletions AS recovery
+      WHERE recovery.board_id = p_board_id
+    )
+    AND EXISTS (
+      SELECT 1
+      FROM public.boards AS board
+      JOIN public.board_memberships AS membership
+        ON membership.board_id = board.id
+      JOIN public.application_access AS access
+        ON access.auth_user_id = membership.user_id
+      WHERE board.id = p_board_id
+        AND board.owner_id = p_inviter_id
+        AND membership.user_id = p_inviter_id
+        AND membership.role = 'owner'
+        AND membership.revoked_at IS NULL
+        AND access.state = 'active'
+    );
+$$;
+
+CREATE OR REPLACE FUNCTION public.get_board_creation_result_p(p_operation_id uuid)
+RETURNS text
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, public, auth, pg_temp
+AS $$
+  SELECT board.slug
+  FROM public.board_creation_requests AS request
+  JOIN public.boards AS board ON board.id = request.board_id
+  JOIN public.board_memberships AS membership
+    ON membership.board_id = board.id
+  WHERE request.user_id = auth.uid()
+    AND request.operation_id = p_operation_id
+    AND board.owner_id = auth.uid()
+    AND membership.user_id = auth.uid()
+    AND membership.role = 'owner'
+    AND membership.revoked_at IS NULL
+    AND public.is_application_user()
+    AND public.is_board_member(board.id)
+  LIMIT 1;
+$$;
+
+-- These invitation RPCs predate board recovery and authorize from raw owner rows.
+-- Keep those implementations private behind wrappers that enforce the active-board gate.
+ALTER FUNCTION public.create_direct_board_invitation_p(text, text)
+  RENAME TO create_direct_board_invitation_internal_p;
+REVOKE ALL ON FUNCTION public.create_direct_board_invitation_internal_p(text, text)
+  FROM PUBLIC, anon, authenticated, service_role;
+CREATE FUNCTION public.create_direct_board_invitation_p(p_slug text, p_email text)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public, auth, pg_temp
+AS $$
+DECLARE
+  v_board_id uuid;
+BEGIN
+  SELECT board.id INTO v_board_id
+  FROM public.boards AS board
+  WHERE board.slug = p_slug;
+  IF NOT FOUND OR NOT public.is_board_owner(v_board_id) THEN
+    RAISE EXCEPTION 'Board owner access is required' USING ERRCODE = '42501';
+  END IF;
+  RETURN public.create_direct_board_invitation_internal_p(p_slug, p_email);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.create_direct_board_invitation_p(text, text)
+  FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.create_direct_board_invitation_p(text, text)
+  TO authenticated;
+
+ALTER FUNCTION public.create_board_invitation_link_p(text, uuid, text)
+  RENAME TO create_board_invitation_link_internal_p;
+REVOKE ALL ON FUNCTION public.create_board_invitation_link_internal_p(text, uuid, text)
+  FROM PUBLIC, anon, authenticated, service_role;
+CREATE FUNCTION public.create_board_invitation_link_p(
+  p_slug text,
+  p_operation_id uuid,
+  p_token text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public, auth, pg_temp
+AS $$
+DECLARE
+  v_board_id uuid;
+BEGIN
+  SELECT board.id INTO v_board_id
+  FROM public.boards AS board
+  WHERE board.slug = p_slug;
+  IF NOT FOUND OR NOT public.is_board_owner(v_board_id) THEN
+    RAISE EXCEPTION 'Board owner access is required' USING ERRCODE = '42501';
+  END IF;
+  RETURN public.create_board_invitation_link_internal_p(
+    p_slug, p_operation_id, p_token
+  );
+END;
+$$;
+REVOKE ALL ON FUNCTION public.create_board_invitation_link_p(text, uuid, text)
+  FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.create_board_invitation_link_p(text, uuid, text)
+  TO authenticated;
+
+ALTER FUNCTION public.list_board_invitations_p(text)
+  RENAME TO list_board_invitations_internal_p;
+REVOKE ALL ON FUNCTION public.list_board_invitations_internal_p(text)
+  FROM PUBLIC, anon, authenticated, service_role;
+CREATE FUNCTION public.list_board_invitations_p(p_slug text)
+RETURNS TABLE (
+  id uuid,
+  invitation_type text,
+  recipient_email text,
+  expires_at timestamptz,
+  invitation_status text
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public, auth, pg_temp
+AS $$
+DECLARE
+  v_board_id uuid;
+BEGIN
+  SELECT board.id INTO v_board_id
+  FROM public.boards AS board
+  WHERE board.slug = p_slug;
+  IF NOT FOUND OR NOT public.is_board_owner(v_board_id) THEN
+    RAISE EXCEPTION 'Board owner access is required' USING ERRCODE = '42501';
+  END IF;
+  RETURN QUERY SELECT * FROM public.list_board_invitations_internal_p(p_slug);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.list_board_invitations_p(text)
+  FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.list_board_invitations_p(text)
+  TO authenticated;
+
+ALTER FUNCTION public.revoke_board_invitation_p(uuid)
+  RENAME TO revoke_board_invitation_internal_p;
+REVOKE ALL ON FUNCTION public.revoke_board_invitation_internal_p(uuid)
+  FROM PUBLIC, anon, authenticated, service_role;
+CREATE FUNCTION public.revoke_board_invitation_p(p_invitation_id uuid)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public, auth, pg_temp
+AS $$
+DECLARE
+  v_board_id uuid;
+BEGIN
+  SELECT invitation.board_id INTO v_board_id
+  FROM public.board_invitations AS invitation
+  WHERE invitation.id = p_invitation_id;
+  IF NOT FOUND THEN RETURN false; END IF;
+  IF NOT public.is_board_owner(v_board_id) THEN
+    RAISE EXCEPTION 'Board owner access is required' USING ERRCODE = '42501';
+  END IF;
+  RETURN public.revoke_board_invitation_internal_p(p_invitation_id);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.revoke_board_invitation_p(uuid)
+  FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.revoke_board_invitation_p(uuid)
+  TO authenticated;
+
+ALTER FUNCTION public.renew_board_invitation_p(uuid, uuid, text)
+  RENAME TO renew_board_invitation_internal_p;
+REVOKE ALL ON FUNCTION public.renew_board_invitation_internal_p(uuid, uuid, text)
+  FROM PUBLIC, anon, authenticated, service_role;
+CREATE FUNCTION public.renew_board_invitation_p(
+  p_invitation_id uuid,
+  p_operation_id uuid,
+  p_token text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public, auth, pg_temp
+AS $$
+DECLARE
+  v_board_id uuid;
+BEGIN
+  SELECT invitation.board_id INTO v_board_id
+  FROM public.board_invitations AS invitation
+  WHERE invitation.id = p_invitation_id;
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('status', 'unavailable');
+  END IF;
+  IF NOT public.is_board_owner(v_board_id) THEN
+    RAISE EXCEPTION 'Board owner access is required' USING ERRCODE = '42501';
+  END IF;
+  RETURN public.renew_board_invitation_internal_p(
+    p_invitation_id, p_operation_id, p_token
+  );
+END;
+$$;
+REVOKE ALL ON FUNCTION public.renew_board_invitation_p(uuid, uuid, text)
+  FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.renew_board_invitation_p(uuid, uuid, text)
+  TO authenticated;
+
 REVOKE ALL ON FUNCTION public.delete_board_p(uuid, text, uuid)
   FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.delete_board_p(uuid, text, uuid)

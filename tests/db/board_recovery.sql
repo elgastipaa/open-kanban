@@ -7,6 +7,7 @@ CREATE TEMP TABLE issue18_board_recovery_fixture (
   owner_id uuid NOT NULL,
   collaborator_id uuid NOT NULL,
   revoked_collaborator_id uuid NOT NULL,
+  creation_operation_id uuid NOT NULL,
   operation_id uuid NOT NULL,
   restore_operation_id uuid NOT NULL,
   task_id uuid NOT NULL,
@@ -63,7 +64,7 @@ BEGIN
   );
   INSERT INTO pg_temp.issue18_board_recovery_fixture (
     board_id, board_slug, owner_id, collaborator_id, revoked_collaborator_id,
-    operation_id, restore_operation_id, task_id, deleted_task_id,
+    creation_operation_id, operation_id, restore_operation_id, task_id, deleted_task_id,
     deleted_task_expires_at, invitation_id
   ) VALUES (
     v_board.id,
@@ -71,6 +72,7 @@ BEGIN
     auth.uid(),
     '41600000-0000-4000-8000-000000000002',
     '40000000-0000-4000-8000-000000000005',
+    'a8180000-0000-4000-8000-000000000001',
     'a8180000-0000-4000-8000-000000000003',
     'a8180000-0000-4000-8000-000000000004',
     (v_task->>'task_id')::uuid,
@@ -136,6 +138,9 @@ DECLARE
   v_fixture record;
   v_listed boolean;
   v_denied boolean := false;
+  v_board_count integer;
+  v_column_count integer;
+  v_task_count integer;
 BEGIN
   SELECT * INTO STRICT v_fixture FROM pg_temp.issue18_board_recovery_fixture;
   SELECT EXISTS (
@@ -148,6 +153,18 @@ BEGIN
     OR public.get_full_board_p(v_fixture.board_slug) IS NOT NULL
     OR public.is_board_member(v_fixture.board_id) THEN
     RAISE EXCEPTION 'Admin recovery metadata must include the board without granting content access';
+  END IF;
+  SELECT count(*) INTO v_board_count
+  FROM public.boards AS board
+  WHERE board.id = v_fixture.board_id;
+  SELECT count(*) INTO v_column_count
+  FROM public.columns AS column_row
+  WHERE column_row.board_id = v_fixture.board_id;
+  SELECT count(*) INTO v_task_count
+  FROM public.tasks AS task
+  WHERE task.id = v_fixture.task_id;
+  IF v_board_count <> 0 OR v_column_count <> 0 OR v_task_count <> 0 THEN
+    RAISE EXCEPTION 'An administrator without membership read tombstoned board content through RLS';
   END IF;
   BEGIN
     PERFORM public.restore_board_p(
@@ -165,6 +182,139 @@ END;
 $$;
 COMMIT;
 
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '41600000-0000-4000-8000-000000000001', true);
+DO $$
+DECLARE
+  v_fixture record;
+  v_board_count integer;
+  v_column_count integer;
+  v_task_count integer;
+  v_listed_count integer;
+  v_member_count integer;
+  v_result jsonb;
+  v_denied boolean := false;
+BEGIN
+  SELECT * INTO STRICT v_fixture FROM pg_temp.issue18_board_recovery_fixture;
+  SELECT count(*) INTO v_board_count
+  FROM public.boards AS board
+  WHERE board.id = v_fixture.board_id;
+  SELECT count(*) INTO v_column_count
+  FROM public.columns AS column_row
+  WHERE column_row.board_id = v_fixture.board_id;
+  SELECT count(*) INTO v_task_count
+  FROM public.tasks AS task
+  WHERE task.id = v_fixture.task_id;
+  SELECT count(*) INTO v_listed_count
+  FROM public.list_my_boards() AS listed
+  WHERE listed.id = v_fixture.board_id;
+  SELECT count(*) INTO v_member_count
+  FROM public.list_board_members_p(v_fixture.board_slug);
+  IF v_board_count <> 0 OR v_column_count <> 0 OR v_task_count <> 0
+    OR v_listed_count <> 0 OR v_member_count <> 0
+    OR public.get_full_board_p(v_fixture.board_slug) IS NOT NULL THEN
+    RAISE EXCEPTION 'A member read tombstoned board metadata/content through RLS or list_my_boards';
+  END IF;
+
+  IF public.get_board_creation_result_p(v_fixture.creation_operation_id) IS NOT NULL THEN
+    RAISE EXCEPTION 'A creation receipt exposed the slug of a tombstoned board';
+  END IF;
+
+  BEGIN
+    PERFORM 1 FROM public.list_board_invitations_p(v_fixture.board_slug);
+  EXCEPTION WHEN SQLSTATE '42501' THEN
+    v_denied := true;
+  END;
+  IF NOT v_denied THEN
+    RAISE EXCEPTION 'The owner read invitation emails/statuses while the board is tombstoned';
+  END IF;
+
+  v_denied := false;
+  BEGIN
+    v_result := public.create_direct_board_invitation_p(
+      v_fixture.board_slug,
+      'second-admin@example.test'
+    );
+  EXCEPTION WHEN SQLSTATE '42501' THEN
+    v_denied := true;
+  END;
+  IF NOT v_denied THEN
+    RAISE EXCEPTION 'The owner created a direct invitation while the board is tombstoned: %', v_result;
+  END IF;
+
+  v_denied := false;
+  BEGIN
+    v_result := public.create_board_invitation_link_p(
+      v_fixture.board_slug,
+      'a8180000-0000-4000-8000-000000000208',
+      'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+    );
+  EXCEPTION WHEN SQLSTATE '42501' THEN
+    v_denied := true;
+  END;
+  IF NOT v_denied THEN
+    RAISE EXCEPTION 'The owner created a generic invitation while the board is tombstoned: %', v_result;
+  END IF;
+
+  v_denied := false;
+  BEGIN
+    PERFORM public.revoke_board_invitation_p(v_fixture.invitation_id);
+  EXCEPTION WHEN SQLSTATE '42501' THEN
+    v_denied := true;
+  END;
+  IF NOT v_denied THEN
+    RAISE EXCEPTION 'The owner invoked invitation revocation while the board is tombstoned';
+  END IF;
+
+  v_denied := false;
+  BEGIN
+    v_result := public.renew_board_invitation_p(
+      v_fixture.invitation_id,
+      'a8180000-0000-4000-8000-000000000209',
+      NULL
+    );
+  EXCEPTION WHEN SQLSTATE '42501' THEN
+    v_denied := true;
+  END;
+  IF NOT v_denied THEN
+    RAISE EXCEPTION 'The owner invoked invitation renewal while the board is tombstoned: %', v_result;
+  END IF;
+
+  v_denied := false;
+  BEGIN
+    v_result := public.edit_task_fields_p(
+      'a8180000-0000-4000-8000-000000000207',
+      v_fixture.board_slug,
+      v_fixture.task_id,
+      '{"title":"No debe escribirse durante la papelera"}'::jsonb,
+      '{"title":1}'::jsonb
+    );
+  EXCEPTION WHEN SQLSTATE '42501' THEN
+    v_denied := true;
+  END;
+  IF NOT v_denied AND v_result->>'status' IS DISTINCT FROM 'unavailable' THEN
+    RAISE EXCEPTION 'An existing task-edit RPC was not denied while the board is tombstoned: %', v_result;
+  END IF;
+END;
+$$;
+COMMIT;
+
+DO $$
+DECLARE
+  v_fixture record;
+  v_task_title text;
+BEGIN
+  SELECT * INTO STRICT v_fixture FROM pg_temp.issue18_board_recovery_fixture;
+  SELECT task.title INTO STRICT v_task_title
+  FROM public.tasks AS task
+  WHERE task.id = v_fixture.task_id;
+  IF v_task_title IS DISTINCT FROM 'Tarea privada que se conserva' THEN
+    RAISE EXCEPTION 'A legacy task-edit RPC changed content after board deletion';
+  END IF;
+END;
+$$;
+
 DO $$
 DECLARE
   v_fixture record;
@@ -173,6 +323,8 @@ DECLARE
   v_task_title text;
   v_child_expires_at timestamptz;
   v_invitation_status text;
+  v_pending_invitation_count integer;
+  v_link_receipt_count integer;
 BEGIN
   SELECT * INTO STRICT v_fixture FROM pg_temp.issue18_board_recovery_fixture;
   SELECT * INTO STRICT v_recovery
@@ -192,13 +344,23 @@ BEGIN
   SELECT invitation.status INTO STRICT v_invitation_status
   FROM public.board_invitations AS invitation
   WHERE invitation.id = v_fixture.invitation_id;
+  SELECT count(*) INTO v_pending_invitation_count
+  FROM public.board_invitations AS invitation
+  WHERE invitation.board_id = v_fixture.board_id
+    AND invitation.status = 'pending';
+  SELECT count(*) INTO v_link_receipt_count
+  FROM public.board_invitation_operation_receipts AS receipt
+  WHERE receipt.actor_id = v_fixture.owner_id
+    AND receipt.operation_id = 'a8180000-0000-4000-8000-000000000208';
   IF v_recovery.cause IS DISTINCT FROM 'owner_requested'
     OR v_recovery.actor_id IS DISTINCT FROM v_fixture.owner_id
     OR v_recovery.expires_at IS DISTINCT FROM v_fixture.expected_expires_at
     OR v_active_members <> 3
     OR v_task_title IS DISTINCT FROM 'Tarea privada que se conserva'
     OR v_child_expires_at IS DISTINCT FROM v_fixture.deleted_task_expires_at
-    OR v_invitation_status IS DISTINCT FROM 'revoked' THEN
+    OR v_invitation_status IS DISTINCT FROM 'revoked'
+    OR v_pending_invitation_count <> 0
+    OR v_link_receipt_count <> 0 THEN
     RAISE EXCEPTION 'The recovery ledger must preserve content and current memberships with an exact deadline';
   END IF;
 END;

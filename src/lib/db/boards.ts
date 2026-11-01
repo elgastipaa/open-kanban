@@ -1,5 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { isTaskEditReadAccessDeniedCode } from "@/lib/task-edit-read";
+import {
+  classifyBoardSnapshotReadFailure,
+  isTaskEditReadAccessDeniedCode,
+} from "@/lib/task-edit-read";
 import type { Board, BoardTimeZonePreview, ColumnWithTasks } from "@/lib/types";
 import { createBoardSchema } from "@/lib/validations";
 import { handleSupabaseError } from "./errors";
@@ -12,7 +15,7 @@ export type BoardTimeZoneErrorReason =
   | "uncertain";
 
 export class BoardSnapshotReadError extends Error {
-  constructor(readonly reason: "denied" | "unavailable") {
+  constructor(readonly reason: "denied" | "retryable" | "unavailable") {
     super("No se pudo consultar el tablero.");
     this.name = "BoardSnapshotReadError";
   }
@@ -355,9 +358,7 @@ export async function getFullBoard(
     .maybeSingle();
 
   if (response.error) {
-    const reason = isTaskEditReadAccessDeniedCode(response.error.code)
-      ? "denied"
-      : "unavailable";
+    const reason = classifyBoardSnapshotReadFailure(response);
     try {
       handleSupabaseError(response.error);
     } catch {

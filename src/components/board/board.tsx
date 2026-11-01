@@ -45,6 +45,8 @@ import { importBoard } from "@/lib/import";
 import {
   abortPendingSessionRequests,
   createClient,
+  getSessionAbortSignal,
+  getSessionEpoch,
 } from "@/lib/supabase/client";
 import { resolveTaskChecklistCompletionReview } from "@/lib/task-checklist-completion";
 import {
@@ -65,6 +67,7 @@ import {
 } from "@/lib/task-delete-flow";
 import {
   captureTaskDraftForAuthorizationRefresh,
+  isTaskDraftAuthorizationRefreshCurrent,
   type PreservedTaskDraft,
   resolveTaskDraftAfterAuthorizationRefresh,
   shouldRetryTaskDraftAuthorizationRefresh,
@@ -371,7 +374,12 @@ function BoardWorkspace({
     useState<PreservedTaskDraft | null>(null);
   const isAuthorizationRefreshPending = pendingTaskDraft !== null;
   const dirtyTaskDraftRef = useRef<PreservedTaskDraft | null>(null);
+  const pendingTaskDraftRef = useRef<PreservedTaskDraft | null>(null);
   const authorizationRefreshGenerationRef = useRef(0);
+  const activeAuthorizationRefreshEpochRef = useRef<string | null>(null);
+  const completedAuthorizationRefreshEpochRef = useRef<string | null>(null);
+  const workspaceMountedRef = useRef(false);
+  const retryDelayCancelRef = useRef<(() => void) | null>(null);
   const actorIdRef = useRef(actorId);
   actorIdRef.current = actorId;
   const previousActorIdRef = useRef(actorId);
@@ -405,8 +413,23 @@ function BoardWorkspace({
   }, []);
 
   const onEditDraftRestored = useCallback(() => {
+    pendingTaskDraftRef.current = null;
     setPendingTaskDraft(null);
     setRestoredTaskDraft(null);
+  }, []);
+
+  useLayoutEffect(() => {
+    workspaceMountedRef.current = true;
+    return () => {
+      workspaceMountedRef.current = false;
+      authorizationRefreshGenerationRef.current += 1;
+      dirtyTaskDraftRef.current = null;
+      pendingTaskDraftRef.current = null;
+      activeAuthorizationRefreshEpochRef.current = null;
+      completedAuthorizationRefreshEpochRef.current = null;
+      retryDelayCancelRef.current?.();
+      retryDelayCancelRef.current = null;
+    };
   }, []);
 
   useLayoutEffect(() => {
@@ -414,6 +437,10 @@ function BoardWorkspace({
       previousActorIdRef.current = actorId;
       authorizationRefreshGenerationRef.current += 1;
       dirtyTaskDraftRef.current = null;
+      pendingTaskDraftRef.current = null;
+      activeAuthorizationRefreshEpochRef.current = null;
+      retryDelayCancelRef.current?.();
+      retryDelayCancelRef.current = null;
       setPendingTaskDraft(null);
       setRestoredTaskDraft(null);
       setEditingTaskId(null);
@@ -481,27 +508,44 @@ function BoardWorkspace({
       const generation = ++authorizationRefreshGenerationRef.current;
       const requestActorId = actorIdRef.current;
       const requestAuthEpoch = authEpochRef.current;
+      const requestSessionEpoch = getSessionEpoch();
+      const requestSignal = getSessionAbortSignal();
+      retryDelayCancelRef.current?.();
+      retryDelayCancelRef.current = null;
+      pendingTaskDraftRef.current = preservedDraft;
+      activeAuthorizationRefreshEpochRef.current = String(requestAuthEpoch);
+      completedAuthorizationRefreshEpochRef.current = null;
       setPendingTaskDraft(preservedDraft);
       setRestoredTaskDraft(null);
       replaceState(null, []);
 
       const isCurrentRefresh = () =>
-        generation === authorizationRefreshGenerationRef.current &&
-        actorIdRef.current === requestActorId &&
-        String(authEpochRef.current) === String(requestAuthEpoch);
+        isTaskDraftAuthorizationRefreshCurrent({
+          requestActorId,
+          currentActorId: actorIdRef.current,
+          requestAuthEpoch,
+          currentAuthEpoch: authEpochRef.current,
+          requestSessionEpoch,
+          currentSessionEpoch: getSessionEpoch(),
+          requestSignal,
+          isMounted: workspaceMountedRef.current,
+          isCurrentGeneration:
+            generation === authorizationRefreshGenerationRef.current,
+        });
 
-      const finishRefresh = (
-        outcome:
-          | BoardRefreshOutcome
-          | { status: "retryable" },
-      ) => {
+      const finishRefresh = (outcome: BoardRefreshOutcome) => {
         if (!isCurrentRefresh()) return;
+        const currentPreservedDraft = pendingTaskDraftRef.current;
         const resolution = resolveTaskDraftAfterAuthorizationRefresh({
-          preserved: preservedDraft,
+          preserved: currentPreservedDraft,
           currentActorId: actorIdRef.current,
           currentAuthEpoch: authEpochRef.current,
           outcome,
         });
+        pendingTaskDraftRef.current = null;
+        activeAuthorizationRefreshEpochRef.current = null;
+        completedAuthorizationRefreshEpochRef.current =
+          String(requestAuthEpoch);
         setPendingTaskDraft(null);
         if (resolution.status === "restore") {
           setRestoredTaskDraft(resolution.preserved);
@@ -515,7 +559,7 @@ function BoardWorkspace({
         let discardedCount = 0;
         let transientFailureCount = 0;
         while (isCurrentRefresh()) {
-          let outcome: BoardRefreshOutcome | { status: "retryable" };
+          let outcome: BoardRefreshOutcome;
           try {
             outcome = await refreshFromDB();
           } catch {
@@ -523,10 +567,17 @@ function BoardWorkspace({
           }
           if (
             shouldRetryTaskDraftAuthorizationRefresh({
-              preserved: preservedDraft,
+              preserved: pendingTaskDraftRef.current,
+              requestActorId,
               currentActorId: actorIdRef.current,
+              requestAuthEpoch,
               currentAuthEpoch: authEpochRef.current,
-              isCurrentRefresh: isCurrentRefresh(),
+              requestSessionEpoch,
+              currentSessionEpoch: getSessionEpoch(),
+              requestSignal,
+              isMounted: workspaceMountedRef.current,
+              isCurrentGeneration:
+                generation === authorizationRefreshGenerationRef.current,
               outcome,
             })
           ) {
@@ -539,9 +590,22 @@ function BoardWorkspace({
                 : Math.min(1_000, 100 * 2 ** Math.min(discardedCount, 3));
             if (outcome.status === "retryable") transientFailureCount += 1;
             else discardedCount += 1;
-            await new Promise((resolve) =>
-              window.setTimeout(resolve, retryDelay),
-            );
+            await new Promise<void>((resolve) => {
+              const timer = window.setTimeout(() => {
+                if (retryDelayCancelRef.current === cancelRetryDelay) {
+                  retryDelayCancelRef.current = null;
+                }
+                resolve();
+              }, retryDelay);
+              const cancelRetryDelay = () => {
+                window.clearTimeout(timer);
+                if (retryDelayCancelRef.current === cancelRetryDelay) {
+                  retryDelayCancelRef.current = null;
+                }
+                resolve();
+              };
+              retryDelayCancelRef.current = cancelRetryDelay;
+            });
             continue;
           }
           finishRefresh(outcome);
@@ -557,14 +621,20 @@ function BoardWorkspace({
   const previousAuthorizationEpochRef = useRef<string | null>(null);
   useLayoutEffect(() => {
     const currentAuthorizationEpoch = String(realtimeContext.auth_epoch);
+    const initialAuthorizationEpochIsStale =
+      initialBoard.auth_epoch !== undefined &&
+      hasBoardAuthorizationEpochChanged(
+        initialBoard.auth_epoch,
+        realtimeContext.auth_epoch,
+      );
     if (previousAuthorizationEpochRef.current === null) {
       previousAuthorizationEpochRef.current = currentAuthorizationEpoch;
       if (
-        initialBoard.auth_epoch !== undefined &&
-        hasBoardAuthorizationEpochChanged(
-          initialBoard.auth_epoch,
-          realtimeContext.auth_epoch,
-        )
+        initialAuthorizationEpochIsStale &&
+        activeAuthorizationRefreshEpochRef.current !==
+          currentAuthorizationEpoch &&
+        completedAuthorizationRefreshEpochRef.current !==
+          currentAuthorizationEpoch
       ) {
         refreshAfterAuthorizationEpochChange(null);
       }
@@ -576,9 +646,19 @@ function BoardWorkspace({
         currentAuthorizationEpoch,
       )
     ) {
+      if (
+        initialAuthorizationEpochIsStale &&
+        activeAuthorizationRefreshEpochRef.current !==
+          currentAuthorizationEpoch &&
+        completedAuthorizationRefreshEpochRef.current !==
+          currentAuthorizationEpoch
+      ) {
+        refreshAfterAuthorizationEpochChange(null);
+      }
       return;
     }
     previousAuthorizationEpochRef.current = currentAuthorizationEpoch;
+    completedAuthorizationRefreshEpochRef.current = null;
     const latestDraft = dirtyTaskDraftRef.current;
     const preservedDraft =
       latestDraft &&
@@ -587,6 +667,8 @@ function BoardWorkspace({
         ? { ...latestDraft, authEpoch: currentAuthorizationEpoch }
         : null;
     refreshAfterAuthorizationEpochChange(preservedDraft);
+
+    return;
   }, [
     initialBoard.auth_epoch,
     realtimeContext.auth_epoch,

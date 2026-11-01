@@ -8,6 +8,10 @@ export function getSessionEpoch(): number {
   return sessionEpoch;
 }
 
+export function getSessionAbortSignal(): AbortSignal {
+  return sessionRequestController.signal;
+}
+
 export function abortPendingSessionRequests(): void {
   sessionEpoch += 1;
   sessionRequestController.abort();

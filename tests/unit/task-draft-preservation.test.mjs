@@ -149,17 +149,26 @@ test("denial, unavailable, stale response, account change and missing task disca
   );
 });
 
-test("discarded refreshes retry only while the saved actor and epoch remain current", () => {
+test("discarded refreshes retry only while actor, board epoch, session and generation remain current", () => {
   const preserved = capture();
   const discarded = { status: "discarded" };
+  const currentContext = {
+    requestActorId: "actor-a",
+    currentActorId: "actor-a",
+    requestAuthEpoch: 9,
+    currentAuthEpoch: 9,
+    requestSessionEpoch: 4,
+    currentSessionEpoch: 4,
+    requestSignal: new AbortController().signal,
+    isMounted: true,
+    isCurrentGeneration: true,
+  };
   let retries = 0;
   for (const outcome of [discarded, discarded, { status: "retryable" }]) {
     assert.equal(
       shouldRetryTaskDraftAuthorizationRefresh({
         preserved,
-        currentActorId: "actor-a",
-        currentAuthEpoch: 9,
-        isCurrentRefresh: true,
+        ...currentContext,
         outcome,
       }),
       true,
@@ -170,9 +179,8 @@ test("discarded refreshes retry only while the saved actor and epoch remain curr
   assert.equal(
     shouldRetryTaskDraftAuthorizationRefresh({
       preserved,
+      ...currentContext,
       currentActorId: "actor-b",
-      currentAuthEpoch: 9,
-      isCurrentRefresh: true,
       outcome: discarded,
     }),
     false,
@@ -180,9 +188,8 @@ test("discarded refreshes retry only while the saved actor and epoch remain curr
   assert.equal(
     shouldRetryTaskDraftAuthorizationRefresh({
       preserved,
-      currentActorId: "actor-a",
+      ...currentContext,
       currentAuthEpoch: 10,
-      isCurrentRefresh: true,
       outcome: discarded,
     }),
     false,
@@ -190,9 +197,8 @@ test("discarded refreshes retry only while the saved actor and epoch remain curr
   assert.equal(
     shouldRetryTaskDraftAuthorizationRefresh({
       preserved,
-      currentActorId: "actor-a",
-      currentAuthEpoch: 9,
-      isCurrentRefresh: false,
+      ...currentContext,
+      currentSessionEpoch: 5,
       outcome: discarded,
     }),
     false,
@@ -200,11 +206,113 @@ test("discarded refreshes retry only while the saved actor and epoch remain curr
   assert.equal(
     shouldRetryTaskDraftAuthorizationRefresh({
       preserved,
-      currentActorId: "actor-a",
-      currentAuthEpoch: 9,
-      isCurrentRefresh: true,
+      ...currentContext,
+      isMounted: false,
+      outcome: discarded,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldRetryTaskDraftAuthorizationRefresh({
+      preserved,
+      ...currentContext,
+      isCurrentGeneration: false,
+      outcome: discarded,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldRetryTaskDraftAuthorizationRefresh({
+      preserved,
+      ...currentContext,
       outcome: { status: "unavailable" },
     }),
     false,
+  );
+});
+
+test("a session abort after a discarded response stops retries and does not restore the draft", () => {
+  const preserved = capture();
+  const controller = new AbortController();
+  const context = {
+    requestActorId: "actor-a",
+    currentActorId: "actor-a",
+    requestAuthEpoch: 9,
+    currentAuthEpoch: 9,
+    requestSessionEpoch: 4,
+    currentSessionEpoch: 4,
+    requestSignal: controller.signal,
+    isMounted: true,
+    isCurrentGeneration: true,
+  };
+
+  assert.equal(
+    shouldRetryTaskDraftAuthorizationRefresh({
+      preserved,
+      ...context,
+      outcome: { status: "discarded" },
+    }),
+    true,
+  );
+
+  controller.abort();
+  assert.equal(
+    shouldRetryTaskDraftAuthorizationRefresh({
+      preserved,
+      ...context,
+      outcome: { status: "discarded" },
+    }),
+    false,
+  );
+  assert.equal(
+    shouldRetryTaskDraftAuthorizationRefresh({
+      preserved,
+      ...context,
+      currentSessionEpoch: 5,
+      outcome: { status: "discarded" },
+    }),
+    false,
+  );
+  assert.deepEqual(
+    resolveTaskDraftAfterAuthorizationRefresh({
+      preserved,
+      currentActorId: "actor-a",
+      currentAuthEpoch: 9,
+      outcome: { status: "discarded" },
+    }),
+    { status: "discard" },
+  );
+});
+
+test("unmount during a discarded response stops retries and leaves no restorable draft", () => {
+  const preserved = capture();
+  const context = {
+    requestActorId: "actor-a",
+    currentActorId: "actor-a",
+    requestAuthEpoch: 9,
+    currentAuthEpoch: 9,
+    requestSessionEpoch: 4,
+    currentSessionEpoch: 4,
+    requestSignal: new AbortController().signal,
+    isMounted: false,
+    isCurrentGeneration: false,
+  };
+
+  assert.equal(
+    shouldRetryTaskDraftAuthorizationRefresh({
+      preserved,
+      ...context,
+      outcome: { status: "discarded" },
+    }),
+    false,
+  );
+  assert.deepEqual(
+    resolveTaskDraftAfterAuthorizationRefresh({
+      preserved,
+      currentActorId: "actor-a",
+      currentAuthEpoch: 9,
+      outcome: { status: "discarded" },
+    }),
+    { status: "discard" },
   );
 });

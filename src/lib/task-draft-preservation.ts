@@ -204,24 +204,52 @@ export function rebasePreservedTaskDraft(
   return { draft, conflicts };
 }
 
+export interface TaskDraftAuthorizationRefreshContext {
+  requestActorId: string;
+  currentActorId: string;
+  requestAuthEpoch: string | number;
+  currentAuthEpoch: string | number;
+  requestSessionEpoch: number;
+  currentSessionEpoch: number;
+  requestSignal: AbortSignal;
+  isMounted: boolean;
+  isCurrentGeneration: boolean;
+}
+
+export function isTaskDraftAuthorizationRefreshCurrent({
+  requestActorId,
+  currentActorId,
+  requestAuthEpoch,
+  currentAuthEpoch,
+  requestSessionEpoch,
+  currentSessionEpoch,
+  requestSignal,
+  isMounted,
+  isCurrentGeneration,
+}: TaskDraftAuthorizationRefreshContext): boolean {
+  return (
+    isMounted &&
+    isCurrentGeneration &&
+    requestActorId === currentActorId &&
+    String(requestAuthEpoch) === String(currentAuthEpoch) &&
+    requestSessionEpoch === currentSessionEpoch &&
+    !requestSignal.aborted
+  );
+}
+
 export function shouldRetryTaskDraftAuthorizationRefresh({
   preserved,
-  currentActorId,
-  currentAuthEpoch,
-  isCurrentRefresh,
   outcome,
-}: {
+  ...context
+}: TaskDraftAuthorizationRefreshContext & {
   preserved: PreservedTaskDraft | null;
-  currentActorId: string;
-  currentAuthEpoch: string | number;
-  isCurrentRefresh: boolean;
   outcome: TaskDraftRefreshOutcome;
 }): boolean {
   return (
-    isCurrentRefresh &&
+    isTaskDraftAuthorizationRefreshCurrent(context) &&
     preserved !== null &&
     (outcome.status === "discarded" || outcome.status === "retryable") &&
-    preserved.actorId === currentActorId &&
-    String(preserved.authEpoch) === String(currentAuthEpoch)
+    preserved.actorId === context.currentActorId &&
+    String(preserved.authEpoch) === String(context.currentAuthEpoch)
   );
 }

@@ -25,7 +25,7 @@ interface UseBoardSyncProps {
 
 export type BoardRefreshOutcome =
   | { status: "authorized"; authEpoch: string | number; taskIds: string[] }
-  | { status: "denied" | "unavailable" | "discarded" };
+  | { status: "denied" | "retryable" | "unavailable" | "discarded" };
 
 export function useBoardSync({
   slug,
@@ -62,6 +62,7 @@ export function useBoardSync({
       }
       if (error instanceof BoardSnapshotReadError) {
         if (error.reason === "unavailable") return { status: "unavailable" };
+        if (error.reason === "retryable") return { status: "retryable" };
         boardRef.current = null;
         isPersistedRef.current = false;
         setBoard(null);

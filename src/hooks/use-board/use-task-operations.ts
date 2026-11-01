@@ -281,6 +281,8 @@ export function useTaskOperations({
           description: null,
           priority,
           due_on: null,
+          assignee_id: null,
+          assignee_version: 1,
           position,
           created_by: null,
           created_at: new Date().toISOString(),

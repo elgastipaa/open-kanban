@@ -38,9 +38,12 @@ import {
   taskMoveFollowUp,
 } from "@/lib/task-edit-workflow";
 import type {
+  AssignableBoardMember,
   ColumnWithTasks,
   Priority,
   Task,
+  TaskAssigneeCommand,
+  TaskAssigneeResult,
   TaskCompletionCommand,
   TaskCompletionResult,
   TaskEditableField,
@@ -63,6 +66,10 @@ interface TaskModalProps {
   onAfterClose: () => void;
   onReconcileTask: (taskId: string) => Promise<Task | null>;
   onSave: (command: TaskEditCommand) => Promise<TaskEditResult>;
+  assignableMembers: AssignableBoardMember[] | null;
+  onSetTaskAssignee: (
+    command: TaskAssigneeCommand,
+  ) => Promise<TaskAssigneeResult>;
   onSetTaskCompletion: (
     command: TaskCompletionCommand,
   ) => Promise<TaskCompletionResult>;
@@ -158,6 +165,8 @@ export function TaskModal({
   onAfterClose,
   onReconcileTask,
   onSave,
+  assignableMembers,
+  onSetTaskAssignee,
   onSetTaskCompletion,
   onMoveTask,
   onDelete,
@@ -190,6 +199,11 @@ export function TaskModal({
   >(null);
   const [isCompleting, setIsCompleting] = useState(false);
   const [completionNotice, setCompletionNotice] = useState("");
+  const [selectedAssigneeId, setSelectedAssigneeId] = useState(
+    task?.assignee_id ?? "",
+  );
+  const [isAssigning, setIsAssigning] = useState(false);
+  const [assigneeNotice, setAssigneeNotice] = useState("");
   const [dueOnError, setDueOnError] = useState("");
   const [expiredOperation, setExpiredOperation] =
     useState<TaskEditCommand | null>(null);
@@ -218,6 +232,9 @@ export function TaskModal({
     setPendingCompletionTarget(null);
     setIsCompleting(false);
     setCompletionNotice("");
+    setSelectedAssigneeId(task.assignee_id ?? "");
+    setIsAssigning(false);
+    setAssigneeNotice("");
     setDueOnError("");
     setExpiredOperation(null);
     setReconciliationRequired(false);
@@ -235,7 +252,8 @@ export function TaskModal({
       (draft.due_on || null) !== baseTask.due_on);
   const hasConflict = Object.keys(conflicts).length > 0;
   const isSaving = workflow.status === "saving";
-  const isWorking = isSaving || isReconciling || isMoving || isCompleting;
+  const isWorking =
+    isSaving || isReconciling || isMoving || isCompleting || isAssigning;
 
   useEffect(() => {
     if (!open || !dirty) return;
@@ -253,6 +271,66 @@ export function TaskModal({
     setCloseNotice("");
     setMoveNotice("");
     setCompletionNotice("");
+  }
+
+  async function saveAssignee() {
+    if (!task || !baseTask || isWorking) return;
+    if (!assignableMembers) {
+      setAssigneeNotice(
+        "No se pudieron cargar los miembros del tablero. Actualiza para volver a intentarlo.",
+      );
+      return;
+    }
+    const assigneeId = selectedAssigneeId || null;
+    if (assigneeId === baseTask.assignee_id) return;
+
+    setIsAssigning(true);
+    setAssigneeNotice("");
+    try {
+      const result = await onSetTaskAssignee({
+        id: task.id,
+        operation_id: generateUUID(),
+        assignee_id: assigneeId,
+        expected_version: baseTask.assignee_version,
+      });
+      if (result.status === "confirmed" || result.status === "conflict") {
+        setBaseTask((current) =>
+          current
+            ? {
+                ...current,
+                assignee_id: result.task.assignee_id,
+                assignee_version: result.task.assignee_version,
+              }
+            : current,
+        );
+        setSelectedAssigneeId(result.task.assignee_id ?? "");
+      }
+      if (result.status === "confirmed") {
+        setAssigneeNotice("Responsable actualizado.");
+      } else if (result.status === "conflict") {
+        setAssigneeNotice(
+          "El responsable cambió en otro momento. Actualizamos el valor actual; vuelve a elegir si quieres cambiarlo.",
+        );
+      } else {
+        setAssigneeNotice(
+          "No se pudo confirmar el cambio. Actualiza los datos antes de volver a intentarlo.",
+        );
+      }
+    } catch (error) {
+      setAssigneeNotice(
+        error instanceof Error &&
+          "reason" in error &&
+          error.reason === "rejected"
+          ? "Solo puedes asignar a un miembro habilitado de este tablero."
+          : error instanceof Error &&
+              "reason" in error &&
+              error.reason === "access_denied"
+            ? "Tu acceso al tablero cambió. Actualiza la página antes de continuar."
+            : "No se pudo confirmar el responsable. Actualiza los datos antes de volver a intentarlo.",
+      );
+    } finally {
+      setIsAssigning(false);
+    }
   }
 
   function requestClose() {
@@ -793,6 +871,76 @@ export function TaskModal({
               className="w-full resize-y rounded-md border border-border bg-transparent px-3 py-2.5 text-sm text-text-primary outline-none transition-colors placeholder:text-text-muted/60 focus:border-accent focus:ring-1 focus:ring-accent disabled:opacity-60"
             />
           )}
+        </section>
+
+        <section
+          className="border-border border-t pt-3"
+          aria-labelledby="task-assignee-heading"
+        >
+          <label
+            id="task-assignee-heading"
+            htmlFor="task-assignee"
+            className="mb-2 block font-semibold text-text-muted text-xs"
+          >
+            Responsable actual (opcional)
+          </label>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <select
+              id="task-assignee"
+              value={selectedAssigneeId}
+              disabled={isWorking || !isOnline || !assignableMembers}
+              onChange={(event) => {
+                setSelectedAssigneeId(event.target.value);
+                setAssigneeNotice("");
+              }}
+              className="h-11 min-w-0 flex-1 rounded-md border border-border bg-surface-base px-3 text-sm text-text-primary outline-none focus:border-accent disabled:opacity-60"
+            >
+              <option value="">Sin responsable</option>
+              {baseTask.assignee_id &&
+              !assignableMembers?.some(
+                (member) => member.user_id === baseTask.assignee_id,
+              ) ? (
+                <option value={baseTask.assignee_id} disabled>
+                  Responsable actual no disponible
+                </option>
+              ) : null}
+              {assignableMembers?.map((member) => (
+                <option key={member.user_id} value={member.user_id}>
+                  {member.email}
+                  {member.role === "owner" ? " · propietario" : ""}
+                </option>
+              ))}
+            </select>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => void saveAssignee()}
+              disabled={
+                isWorking ||
+                !isOnline ||
+                !assignableMembers ||
+                selectedAssigneeId === (baseTask.assignee_id ?? "")
+              }
+            >
+              {isAssigning ? "Guardando…" : "Guardar responsable"}
+            </Button>
+          </div>
+          {assigneeNotice ? (
+            <output
+              className="mt-2 block text-text-secondary text-xs"
+              aria-live="polite"
+            >
+              {assigneeNotice}
+            </output>
+          ) : null}
+          {assignableMembers === null ? (
+            <output
+              className="mt-2 block text-priority-medium text-xs"
+              aria-live="polite"
+            >
+              No se pudieron cargar los miembros del tablero.
+            </output>
+          ) : null}
         </section>
 
         <section className="border-border border-t pt-3">

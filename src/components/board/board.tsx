@@ -21,6 +21,7 @@ import { usePresence } from "@/hooks/use-presence";
 import { useRealtime } from "@/hooks/use-realtime";
 import { resolveApplicationAccess } from "@/lib/auth";
 import { previewBoardTimeZone, updateBoardTimeZone } from "@/lib/db/boards";
+import { setTaskAssignee, TaskAssigneeError } from "@/lib/db/my-tasks";
 import { exportBoard } from "@/lib/export";
 import { importBoard } from "@/lib/import";
 import {
@@ -44,9 +45,12 @@ import {
   type TaskFocusOrigin,
 } from "@/lib/task-edit-focus";
 import type {
+  AssignableBoardMember,
   Board as BoardType,
   ColumnWithTasks,
   Task,
+  TaskAssigneeCommand,
+  TaskAssigneeResult,
   TaskOrderResult,
 } from "@/lib/types";
 import { generateUUID } from "@/lib/utils";
@@ -56,6 +60,9 @@ interface BoardProps {
   initialBoard: BoardType;
   initialColumns: ColumnWithTasks[];
   ownerAuthUserId: string;
+  assignableMembers: AssignableBoardMember[] | null;
+  initialTaskId: string | null;
+  myTasksReturnHref: string | null;
 }
 
 type BoardWorkspaceProps = Omit<BoardProps, "ownerAuthUserId"> & {
@@ -70,6 +77,9 @@ export function Board({
   initialBoard,
   initialColumns,
   ownerAuthUserId,
+  assignableMembers,
+  initialTaskId,
+  myTasksReturnHref,
 }: BoardProps) {
   const router = useRouter();
   const [sessionStatus, setSessionStatus] = useState<SessionStatus>("checking");
@@ -196,6 +206,9 @@ export function Board({
       slug={slug}
       initialBoard={initialBoard}
       initialColumns={initialColumns}
+      assignableMembers={assignableMembers}
+      initialTaskId={initialTaskId}
+      myTasksReturnHref={myTasksReturnHref}
       isSessionStale={sessionStatus === "stale"}
       onAccessLost={onAccessLost}
     />
@@ -206,6 +219,9 @@ function BoardWorkspace({
   slug,
   initialBoard,
   initialColumns,
+  assignableMembers,
+  initialTaskId,
+  myTasksReturnHref,
   isSessionStale,
   onAccessLost,
 }: BoardWorkspaceProps) {
@@ -336,6 +352,47 @@ function BoardWorkspace({
       })),
     );
     setEditingTaskId(task.id);
+  }
+
+  const initialTaskOpenedRef = useRef(false);
+  useEffect(() => {
+    if (initialTaskOpenedRef.current || !initialTaskId) return;
+    const task = columns
+      .flatMap((column) => column.tasks)
+      .find((candidate) => candidate.id === initialTaskId);
+    if (!task) return;
+    initialTaskOpenedRef.current = true;
+    taskOriginRef.current = captureTaskFocusOrigin(
+      task.id,
+      task.column_id,
+      columns.map((column) => ({
+        id: column.id,
+        title: column.title,
+        taskIds: column.tasks.map((candidate) => candidate.id),
+      })),
+    );
+    setEditingTaskId(task.id);
+  }, [columns, initialTaskId]);
+
+  async function assignTask(
+    command: TaskAssigneeCommand,
+  ): Promise<TaskAssigneeResult> {
+    try {
+      const result = await setTaskAssignee(createClient(), slug, command);
+      if (result.status === "confirmed" || result.status === "conflict") {
+        await refreshBoardFromDB().catch(() => undefined);
+        broadcastSync();
+      }
+      return result;
+    } catch (error) {
+      if (
+        error instanceof TaskAssigneeError &&
+        error.reason === "access_denied"
+      ) {
+        onAccessLost();
+      }
+      throw error;
+    }
   }
 
   const moveTaskFromEditor = useCallback(
@@ -564,7 +621,9 @@ function BoardWorkspace({
   function handleTaskEditorAfterClose() {
     const previousFlow = taskDeleteFlowRef.current;
     storeTaskDeleteFlow(finishTaskEditorClose(previousFlow));
-    if (!previousFlow.waitingForEditorCloseTaskId) restoreTaskFocus();
+    if (!myTasksReturnHref && !previousFlow.waitingForEditorCloseTaskId) {
+      restoreTaskFocus();
+    }
   }
 
   function handleCancelTaskDelete() {
@@ -640,6 +699,7 @@ function BoardWorkspace({
       )}
       <BoardToolbar
         slug={slug}
+        myTasksReturnHref={myTasksReturnHref}
         name={board?.name ?? initialBoard.name}
         timeZone={board?.time_zone ?? initialBoard.time_zone}
         canRename={board?.role === "owner"}
@@ -728,14 +788,19 @@ function BoardWorkspace({
         boardTimeZone={board?.time_zone ?? initialBoard.time_zone}
         boardToday={board?.today ?? initialBoard.today}
         columns={columns}
-        contextLabel={`${board?.name ?? initialBoard.name} · ${taskOriginRef.current?.columnTitle ?? "Columna"}`}
+        contextLabel={`${board?.name ?? initialBoard.name} · ${taskOriginRef.current?.columnTitle ?? "Columna"} · ${board?.time_zone ?? initialBoard.time_zone}`}
         open={editingTaskId !== null && editingTask !== null}
         isOnline={isOnline}
-        onClose={() => setEditingTaskId(null)}
+        onClose={() => {
+          setEditingTaskId(null);
+          if (myTasksReturnHref) router.push(myTasksReturnHref);
+        }}
         onAfterClose={handleTaskEditorAfterClose}
         onReconcileTask={refreshTaskForEdit}
         onSave={editTask}
         onSetTaskCompletion={completeTask}
+        assignableMembers={assignableMembers}
+        onSetTaskAssignee={assignTask}
         onMoveTask={moveTaskFromEditor}
         onDelete={handleRequestEditorTaskDelete}
       />

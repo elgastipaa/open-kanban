@@ -91,6 +91,12 @@ export default async function HomePage() {
       <header className="flex items-center justify-between gap-4 border-white/10 border-b pb-6">
         <Logo />
         <div className="flex items-center gap-3">
+          <Link
+            href="/my-tasks?order=due"
+            className="rounded-lg border border-white/15 px-4 py-2 text-neutral-300 text-sm transition hover:bg-white/5 hover:text-white"
+          >
+            Mis tareas
+          </Link>
           {access.isAdmin ? (
             <Link
               href="/admin/access"

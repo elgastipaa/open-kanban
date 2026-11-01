@@ -27,6 +27,7 @@ import type { BoardTimeZonePreview } from "@/lib/types";
 
 interface BoardToolbarProps {
   slug: string;
+  myTasksReturnHref: string | null;
   name: string;
   timeZone: string;
   canRename: boolean;
@@ -41,6 +42,7 @@ interface BoardToolbarProps {
 
 export function BoardToolbar({
   slug,
+  myTasksReturnHref,
   name,
   timeZone,
   canRename,
@@ -113,10 +115,16 @@ export function BoardToolbar({
         <Logo size={24} showText={false} />
         <div className="mx-1 hidden h-4 w-px bg-border sm:block" />
         <Link
-          href="/"
+          href={myTasksReturnHref ?? "/"}
           className="shrink-0 rounded-md px-2 py-1 text-sm text-text-secondary hover:bg-surface-overlay hover:text-text-primary"
         >
-          Tableros
+          {myTasksReturnHref ? "Volver a Mis tareas" : "Tableros"}
+        </Link>
+        <Link
+          href={myTasksReturnHref ? "/" : "/my-tasks?order=due"}
+          className="shrink-0 rounded-md px-2 py-1 text-sm text-text-secondary hover:bg-surface-overlay hover:text-text-primary"
+        >
+          {myTasksReturnHref ? "Tableros" : "Mis tareas"}
         </Link>
         <div className="min-w-0">
           {isEditing ? (

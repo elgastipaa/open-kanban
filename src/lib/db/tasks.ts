@@ -568,7 +568,7 @@ function isTaskEditResult(value: unknown): value is TaskEditResult {
   );
 }
 
-function isTaskRecord(value: unknown): value is Task {
+export function isTaskRecord(value: unknown): value is Task {
   if (typeof value !== "object" || value === null || !("id" in value)) {
     return false;
   }
@@ -581,6 +581,11 @@ function isTaskRecord(value: unknown): value is Task {
   }
   const versions = value.field_versions as Record<string, unknown>;
   return (
+    "assignee_id" in value &&
+    (typeof value.assignee_id === "string" || value.assignee_id === null) &&
+    "assignee_version" in value &&
+    typeof value.assignee_version === "number" &&
+    value.assignee_version > 0 &&
     ["title", "description", "priority", "due_on"].every(
       (field) => typeof versions[field] === "number",
     ) &&

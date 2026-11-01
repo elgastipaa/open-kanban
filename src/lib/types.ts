@@ -6,6 +6,7 @@ export type TShortcut = {
 };
 
 export type Priority = "low" | "medium" | "high" | "urgent";
+export type MyTasksOrder = "due" | "created";
 export type TaskEditableField = "title" | "description" | "priority" | "due_on";
 export type TaskFieldVersions = Record<TaskEditableField, number>;
 
@@ -46,6 +47,8 @@ export interface Task {
   id: string;
   column_id: string;
   created_by?: string | null;
+  assignee_id: string | null;
+  assignee_version: number;
   title: string;
   description: string | null;
   priority: Priority;
@@ -58,6 +61,32 @@ export interface Task {
   completed_at: string | null;
   completion_version: number;
 }
+
+export interface MyTaskEntry {
+  task: Task;
+  board: Pick<Board, "id" | "slug" | "name" | "time_zone" | "today">;
+  column: Pick<Column, "id" | "title" | "position">;
+}
+
+export interface AssignableBoardMember {
+  user_id: string;
+  email: string;
+  role: "owner" | "collaborator";
+}
+
+export interface TaskAssigneeCommand {
+  id: string;
+  operation_id: string;
+  assignee_id: string | null;
+  expected_version: number;
+}
+
+export type TaskAssigneeResult =
+  | { status: "confirmed" | "conflict"; operation_id: string; task: Task }
+  | {
+      status: "unavailable" | "retryable" | "expired_unknown";
+      operation_id: string;
+    };
 
 export type TaskEditableFields = Pick<Task, TaskEditableField>;
 export type TaskFieldUpdates = Partial<TaskEditableFields>;

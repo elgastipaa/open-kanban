@@ -1,0 +1,37 @@
+# Validación de Issue #13: asignar y trabajar desde Mis tareas
+
+Estado de evidencia: backend/DB y pruebas unitarias completados; recorrido visual de lista, detalle y retorno pendiente de validación manual. #13 sigue abierto. Los bloqueos #10, #11 y #12 permanecen abiertos/ready-for-human y no se modificaron.
+
+Checkout de implementación: rama `codex/issue-13`, base y merge-base verificados `654ffa132af106fb72cc29cc71948759b863cbbf`.
+
+## Matriz de criterios
+
+| Criterio | Evidencia | Estado |
+| --- | --- | --- |
+| Una tarea tiene cero o un responsable; solo se puede asignar a una identidad habilitada que sea miembro actual del mismo tablero. Asignar no concede membresía ni restringe la edición de otras personas. | `tasks.assignee_id` permite cero/uno y `assignee_version` permite cambios versionados. `set_task_assignee_p` vuelve a comprobar acceso del actor, versión, membresía actual y habilitación de la identidad dentro de una transacción; el recibo queda ligado a actor + operation ID + hash del payload. `tests/db/my_tasks.sql` prueba asignar, quitar, replay, colisión de clave, rechazo de miembro deshabilitado y persona externa, conflicto de versión, y que otro miembro aún puede editar campos. | Automático DB: pasa. Selector/errores visibles: pendiente manual. |
+| La asignación no altera permisos para abrir o modificar el tablero. | La elegibilidad para Mis tareas consulta membresías activas del actor; el asignado no se usa como autorización. SQL comprueba edición por un miembro distinto del asignado y consulta vacía para una persona administradora sin membresía. La selección de responsables solo lista miembros habilitados del tablero abierto. | Automático DB: pasa. Recorrido visual entre miembros: pendiente manual. |
+| Mis tareas reúne solo tareas asignadas al actor actual en tableros/columnas a los que todavía tiene acceso, preservando la misma tarea y su origen. | `get_my_tasks_p` deriva la identidad de `auth.uid()`, filtra tareas por asignado, membresía actual y generación activa, y devuelve tarea, tablero, columna y zona horaria. `tests/db/my_tasks.sql` crea dos miembros y dos tableros; compara los IDs originales, board slug, column ID/title y las zonas `America/Argentina/Buenos_Aires` y `Europe/Madrid`, y comprueba que cada actor recibe solo lo suyo. | Automático DB: pasa. Revisión en pantalla: pendiente manual. |
+| El orden predeterminado es vencimiento ascendente, las fechas vacías van al final, los empates usan creación ascendente e ID estable; completadas permanecen abajo y se ordenan por completado más reciente. Se puede elegir creación ascendente. | La RPC ordena en base de datos por vencimiento/creación/ID, separa tareas completadas y usa `completed_at DESC`. Las regresiones SQL prueban vencimientos empatados, empate de fecha de creación resuelto por ID, tareas sin fecha, orden alternativo de creación y completadas recientes primero. | Automático DB: pasa. Controles de orden: pendiente manual. |
+| Abrir o completar desde Mis tareas conserva la identidad, acción y tablero de origen; el detalle indica tablero, columna y zona; volver preserva el orden de la lista. | Cada título navega al tablero de origen con el mismo task ID y `from=my-tasks`; `BoardPage` consulta solo el tablero autorizado, comprueba que la tarea exista en su generación actual y abre el TaskModal existente. Completar/reabrir desde la lista reutiliza `set_task_completion_p` del tablero. El cierre vuelve a `/my-tasks?order=...`; también se conserva el contexto en el destino de login. `tests/unit/my-tasks-navigation.test.mjs` prueba task ID, slug y orden en ambos enlaces; SQL verifica el contexto fuente de los registros. | Unitario/DB: pasa. Click, modal, completar, regreso y login en navegador: pendiente manual. |
+| La pantalla distingue carga, error de consulta y lista vacía; presenta mensajes en español. | `src/app/my-tasks/loading.tsx` muestra carga; la página distingue excepción de consulta del resultado vacío; la lista presenta `No tenés tareas asignadas.` y la acción de completar muestra estados de guardado/error en español. | Build/typecheck: pasa. Estado visual, teclado y móvil: pendiente manual. |
+| No se enumeran personas o tareas de tableros ajenos y la asignación concurrente conserva un único ganador. | `list_assignable_board_members_p` devuelve solo miembros actuales habilitados del tablero visible; un miembro deshabilitado no se devuelve y un ID externo se rechaza genéricamente. La consulta personal no acepta actor cliente. `scripts/test-db.sh` fuerza dos sesiones autenticadas concurrentes: un cambio de asignación se confirma y el segundo devuelve conflicto de versión; el estado final tiene un único responsable. | Automático DB, incluyendo dos sesiones concurrentes: pasa. |
+
+## Ejecución reproducible
+
+Entorno: Node `v24.14.1`, pnpm `11.25.0`, Next.js `16.4.2`, Biome `2.2.0` y PostgreSQL `16.15` en el clúster local desechable creado por `scripts/test-db.sh`. Actores sintéticos de las fixtures: dueño `40000000-0000-4000-8000-000000000002`, colaborador habilitado `...0001`, identidad no habilitada `...0003`, no miembro `...0005` y administrador sin membresía `...0006`. Las filas de prueba usan nombres `Issue 13 board A/B`; no se usaron OAuth ni cuentas/datos reales, `.env`, Auth/DB remotos, bypass, navegador, CUA/IAB o producción.
+
+Resultados de la revisión local:
+
+- `pnpm test:unit`: exit 0, 47/47 pasan; incluye la ruta de detalle con la misma tarea y retorno con el orden seleccionado.
+- `pnpm test:db`: exit 0, PostgreSQL desechable; aplica migraciones 001–025 y termina con `Database regression tests passed (disposable PostgreSQL).` Incluye autorización/privacidad para dos tableros, elegibilidad, orden y empates, sin fecha, completadas, receipt replay, colisión de operation ID, edición no exclusiva y carrera de asignación.
+- `pnpm build`: exit 0 con Next.js 16.4.2; el manifiesto incluye `/my-tasks` dinámica y el tablero dinámico existente.
+- `pnpm typecheck`: exit 0 (`tsc --noEmit`), ejecutado después de `pnpm build`.
+- `pnpm exec biome check` con los 16 archivos TS/TSX/MJS/JSON modificados: exit 0, `Checked 16 files ... No fixes applied.`
+- `bash -n scripts/test-db.sh` y `git diff --check`: ambos exit 0.
+- Primer ciclo RED de DB: antes de crear la RPC, `pnpm test:db` falló en la regresión nueva con `function public.get_my_tasks_p(unknown) does not exist`; tras implementar migración/consulta y completar el fixture, el DB test pasó.
+
+## Recorrido manual pendiente
+
+Con dos cuentas de prueba ya habilitadas y miembro de dos tableros, revisar en escritorio y móvil: selector de responsable (incluidos quitar, conflicto y error); lista por vencimiento y creación; tareas sin fecha y completadas; carga, error y lista vacía; apertura de una tarea al tablero/columna correctos; completar/reabrir desde lista y detalle; vuelta a la lista conservando el orden; y redirección de login con el mismo task ID/contexto. También revisar navegación por teclado y lector de pantalla. Este entorno no valida el DOM ni sesiones Auth reales.
+
+No se instaló runner de navegador ni se usó CUA/IAB. No se modificó GitHub, el checkpoint ni el estado de #10/#11/#12. No se cerró #13, no se integró la rama y no se hizo push.

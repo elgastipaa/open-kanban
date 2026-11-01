@@ -111,3 +111,12 @@ export const updateTaskSchema = z
       });
     }
   });
+
+export const taskAssigneeSchema = z
+  .object({
+    id: z.uuid(),
+    operation_id: z.uuid(),
+    assignee_id: z.uuid().nullable(),
+    expected_version: z.number().int().positive(),
+  })
+  .strict();

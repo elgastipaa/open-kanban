@@ -245,6 +245,91 @@ done
 "${psql[@]}" -f "$repo_dir/tests/db/private_boards.sql"
 "${psql[@]}" -q -f "$repo_dir/tests/db/board_invitations.sql"
 "${psql[@]}" -q -f "$repo_dir/tests/db/board_invitation_operation_receipts.sql"
+"${psql[@]}" -q -f "$repo_dir/tests/db/my_tasks.sql"
+
+# Two current board members race to assign one task from the same version.
+# The board lock serializes the operation and the later command receives a
+# version conflict instead of overwriting the winner.
+task_assignment_race_dir="$test_dir/task-assignment-race"
+mkdir -- "$task_assignment_race_dir"
+task_assignment_first_log="$task_assignment_race_dir/member-a.log"
+task_assignment_second_log="$task_assignment_race_dir/member-b.log"
+task_assignment_slug=$("${psql[@]}" -At -c "SELECT board_slug FROM public.issue13_task_assignment_race_fixture")
+task_assignment_task_id=$("${psql[@]}" -At -c "SELECT task_id FROM public.issue13_task_assignment_race_fixture")
+
+PGAPPNAME=openkanban_issue13_assign_a "${psql[@]}" -qAt \
+  -v board_slug="$task_assignment_slug" -v task_id="$task_assignment_task_id" \
+  > "$task_assignment_first_log" 2>&1 <<'SQL' &
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);
+SELECT public.set_task_assignee_p(
+  '13000000-0000-4000-8000-000000000111', :'board_slug', :'task_id'::uuid,
+  '40000000-0000-4000-8000-000000000001', 1
+)->>'status';
+SELECT pg_sleep(4);
+COMMIT;
+SQL
+task_assignment_first_pid=$!
+
+task_assignment_first_holds_lock=false
+for _ in $(seq 1 100); do
+  task_assignment_state=$("${psql[@]}" -At -c "SELECT state FROM pg_stat_activity WHERE application_name = 'openkanban_issue13_assign_a' AND state = 'active' AND query LIKE '%pg_sleep(4)%'")
+  if [[ "$task_assignment_state" == active ]]; then
+    task_assignment_first_holds_lock=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$task_assignment_first_holds_lock" != true ]]; then
+  cat -- "$task_assignment_first_log" >&2
+  echo 'The first assignment did not retain its transaction lock.' >&2
+  exit 1
+fi
+
+PGAPPNAME=openkanban_issue13_assign_b "${psql[@]}" -qAt \
+  -v board_slug="$task_assignment_slug" -v task_id="$task_assignment_task_id" \
+  > "$task_assignment_second_log" 2>&1 <<'SQL' &
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000001', true);
+SELECT public.set_task_assignee_p(
+  '13000000-0000-4000-8000-000000000112', :'board_slug', :'task_id'::uuid,
+  '40000000-0000-4000-8000-000000000002', 1
+)->>'status';
+COMMIT;
+SQL
+task_assignment_second_pid=$!
+
+task_assignment_second_waiting=false
+for _ in $(seq 1 100); do
+  waiting_count=$("${psql[@]}" -At -c "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'openkanban_issue13_assign_b' AND wait_event_type = 'Lock'")
+  if [[ "$waiting_count" == 1 ]]; then
+    task_assignment_second_waiting=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$task_assignment_second_waiting" != true ]]; then
+  cat -- "$task_assignment_second_log" >&2
+  echo 'The second assignment did not wait on the first transaction.' >&2
+  exit 1
+fi
+wait "$task_assignment_first_pid" || { cat -- "$task_assignment_first_log" >&2; exit 1; }
+wait "$task_assignment_second_pid" || { cat -- "$task_assignment_second_log" >&2; exit 1; }
+if ! grep -q '^confirmed$' "$task_assignment_first_log" \
+  || ! grep -q '^conflict$' "$task_assignment_second_log"; then
+  echo 'Concurrent assignment did not produce one confirmation and one conflict.' >&2
+  cat -- "$task_assignment_first_log" "$task_assignment_second_log" >&2
+  exit 1
+fi
+task_assignment_final=$("${psql[@]}" -At -c "SELECT CASE WHEN task.assignee_id = '40000000-0000-4000-8000-000000000001' AND task.assignee_version = 2 THEN 'valid' ELSE 'invalid' END FROM public.tasks AS task WHERE task.id = '$task_assignment_task_id'::uuid")
+if [[ "$task_assignment_final" != valid ]]; then
+  echo 'The concurrent assignment left an unexpected final task state.' >&2
+  exit 1
+fi
+"${psql[@]}" -q -c 'DROP TABLE public.issue13_task_assignment_race_fixture'
+echo 'PASS: two current members racing to assign one task produce one winner and one version conflict'
 
 # Two enabled synthetic users race to consume the same transferable link.
 # The first transaction holds the board/invitation locks after acceptance;

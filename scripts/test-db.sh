@@ -241,6 +241,7 @@ done
 "${psql[@]}" -f "$repo_dir/tests/fixtures/google-access.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/closed_access.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/authentication.sql"
+"${psql[@]}" -f "$repo_dir/tests/db/realtime_epoch.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/admin_authorization.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/private_boards.sql"
 "${psql[@]}" -q -f "$repo_dir/tests/db/board_invitations.sql"
@@ -771,6 +772,11 @@ PGAPPNAME=openkanban_issue14_purge_wins_purger "${psql[@]}" -qAt \
   -v task_id="$purge_wins_task_id" -v expires_at="$recovery_boundary" \
   > "$purge_wins_first_log" 2>&1 <<'SQL' &
 BEGIN;
+SELECT deletion.board_id AS board_id
+FROM public.task_deletions AS deletion
+WHERE deletion.task_id = :'task_id'::uuid \gset
+SELECT board.id FROM public.boards AS board
+WHERE board.id = :'board_id'::uuid FOR UPDATE;
 SELECT task_id FROM public.task_deletions WHERE task_id = :'task_id'::uuid FOR UPDATE;
 SELECT pg_sleep(4);
 SELECT public.purge_expired_task_internal_p(:'task_id'::uuid, :'expires_at'::timestamptz);
@@ -871,6 +877,11 @@ PGAPPNAME=openkanban_issue18_column_purge_wins_purger "${psql[@]}" -qAt \
   -v column_id="$column_purge_wins_id" -v expires_at="$column_recovery_boundary" \
   > "$column_purge_wins_purger_log" 2>&1 <<'SQL' &
 BEGIN;
+SELECT deletion.board_id AS board_id
+FROM public.column_deletions AS deletion
+WHERE deletion.column_id = :'column_id'::uuid \gset
+SELECT board.id FROM public.boards AS board
+WHERE board.id = :'board_id'::uuid FOR UPDATE;
 SELECT column_id FROM public.column_deletions WHERE column_id = :'column_id'::uuid FOR UPDATE;
 SELECT pg_sleep(2);
 SELECT public.purge_expired_column_internal_p(:'column_id'::uuid, :'expires_at'::timestamptz);
@@ -979,6 +990,11 @@ PGAPPNAME=openkanban_issue18_column_restore_wins_purger "${psql[@]}" -qAt \
   -v column_id="$column_restore_wins_id" -v expires_at="$column_recovery_boundary" \
   > "$column_restore_wins_purger_log" 2>&1 <<'SQL' &
 BEGIN;
+SELECT deletion.board_id AS board_id
+FROM public.column_deletions AS deletion
+WHERE deletion.column_id = :'column_id'::uuid \gset
+SELECT board.id FROM public.boards AS board
+WHERE board.id = :'board_id'::uuid FOR UPDATE;
 SELECT column_id FROM public.column_deletions WHERE column_id = :'column_id'::uuid FOR UPDATE;
 SELECT public.purge_expired_column_internal_p(:'column_id'::uuid, :'expires_at'::timestamptz);
 COMMIT;

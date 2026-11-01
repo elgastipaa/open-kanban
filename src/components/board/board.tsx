@@ -4,7 +4,14 @@ import { DragDropContext, type DropResult } from "@hello-pangea/dnd";
 import type { AuthChangeEvent, Session } from "@supabase/supabase-js";
 import { LayoutGroup } from "motion/react";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { toast } from "sonner";
 import { AddColumn } from "@/components/board/add-column";
 import { BoardToolbar } from "@/components/board/board-toolbar";
@@ -22,6 +29,9 @@ import { useOnlineStatus } from "@/hooks/use-online-status";
 import { usePresence } from "@/hooks/use-presence";
 import { useRealtime } from "@/hooks/use-realtime";
 import { resolveApplicationAccess } from "@/lib/auth";
+import {
+  hasBoardAuthorizationEpochChanged,
+} from "@/lib/board-auth-epoch";
 import { columnDeletionSuccessMessage } from "@/lib/column-deletion-flow";
 import {
   BoardRecoveryError,
@@ -59,6 +69,7 @@ import {
 } from "@/lib/task-edit-focus";
 import type {
   AssignableBoardMember,
+  BoardRealtimeContext,
   Board as BoardType,
   ColumnWithTasks,
   CurrentBoardMember,
@@ -86,8 +97,10 @@ interface BoardProps {
 
 type BoardWorkspaceProps = Omit<BoardProps, "ownerAuthUserId"> & {
   actorId: string;
+  realtimeContext: BoardRealtimeContext;
   isSessionStale: boolean;
   onAccessLost: () => void;
+  onRealtimeReconnect: () => void;
 };
 
 type SessionStatus = "checking" | "active" | "stale" | "denied";
@@ -106,6 +119,10 @@ export function Board({
 }: BoardProps) {
   const router = useRouter();
   const [sessionStatus, setSessionStatus] = useState<SessionStatus>("checking");
+  const [realtimeContext, setRealtimeContext] =
+    useState<BoardRealtimeContext | null>(null);
+  const realtimeContextRef = useRef<BoardRealtimeContext | null>(null);
+  const verifySessionRef = useRef<() => Promise<void>>(() => Promise.resolve());
   const onAccessLost = useCallback(() => {
     abortPendingSessionRequests();
     setSessionStatus("denied");
@@ -169,7 +186,44 @@ export function Board({
           return;
         }
 
+        if (
+          (typeof boardAccess.auth_epoch !== "string" &&
+            typeof boardAccess.auth_epoch !== "number") ||
+          typeof boardAccess.sync_topic !== "string" ||
+          typeof boardAccess.presence_topic !== "string"
+        ) {
+          preserveSessionData();
+          return;
+        }
+        const nextRealtimeContext: BoardRealtimeContext = {
+          auth_epoch: boardAccess.auth_epoch,
+          sync_topic: boardAccess.sync_topic,
+          presence_topic: boardAccess.presence_topic,
+        };
+
         if (!disposed && generation === verificationGeneration) {
+          const currentRealtimeContext = realtimeContextRef.current;
+          if (
+            currentRealtimeContext &&
+            (String(currentRealtimeContext.auth_epoch) !==
+              String(nextRealtimeContext.auth_epoch) ||
+              currentRealtimeContext.sync_topic !== nextRealtimeContext.sync_topic)
+          ) {
+            abortPendingSessionRequests();
+          }
+          realtimeContextRef.current = nextRealtimeContext;
+          setRealtimeContext((current) => {
+            if (
+              current &&
+              String(current.auth_epoch) ===
+                String(nextRealtimeContext.auth_epoch) &&
+              current.sync_topic === nextRealtimeContext.sync_topic &&
+              current.presence_topic === nextRealtimeContext.presence_topic
+            ) {
+              return current;
+            }
+            return nextRealtimeContext;
+          });
           setSessionStatus("active");
         }
       } catch {
@@ -178,6 +232,7 @@ export function Board({
         checking = false;
       }
     };
+    verifySessionRef.current = verifySession;
 
     const {
       data: { subscription },
@@ -212,7 +267,16 @@ export function Board({
     };
   }, [ownerAuthUserId, router, slug]);
 
-  if (sessionStatus === "checking" || sessionStatus === "denied") {
+  const onRealtimeReconnect = useCallback(
+    () => verifySessionRef.current(),
+    [],
+  );
+
+  if (
+    sessionStatus === "checking" ||
+    sessionStatus === "denied" ||
+    !realtimeContext
+  ) {
     return (
       <output
         className="flex h-dvh items-center justify-center bg-surface-base"
@@ -228,6 +292,7 @@ export function Board({
     <BoardWorkspace
       slug={slug}
       actorId={ownerAuthUserId}
+      realtimeContext={realtimeContext}
       initialBoard={initialBoard}
       initialColumns={initialColumns}
       assignableMembers={assignableMembers}
@@ -238,6 +303,7 @@ export function Board({
       myTasksReturnHref={myTasksReturnHref}
       isSessionStale={sessionStatus === "stale"}
       onAccessLost={onAccessLost}
+      onRealtimeReconnect={onRealtimeReconnect}
     />
   );
 }
@@ -245,6 +311,7 @@ export function Board({
 function BoardWorkspace({
   slug,
   actorId,
+  realtimeContext,
   initialBoard,
   initialColumns,
   assignableMembers,
@@ -255,6 +322,7 @@ function BoardWorkspace({
   myTasksReturnHref,
   isSessionStale,
   onAccessLost,
+  onRealtimeReconnect,
 }: BoardWorkspaceProps) {
   const router = useRouter();
   const { isMobile, isReady } = useDevice();
@@ -283,19 +351,25 @@ function BoardWorkspace({
   >(undefined);
 
   // Realtime: broadcast sync after every mutation, refetch on incoming sync
-  const { broadcastSync, broadcastBoardDeleted } = useRealtime({
-    boardId: initialBoard.id,
+  useRealtime({
+    authEpoch: realtimeContext.auth_epoch,
+    syncTopic: realtimeContext.sync_topic,
+    onReconnect: onRealtimeReconnect,
     onSync: () => {
       refreshRef.current?.();
     },
     onBoardDeleted: () => {
-      toast.error("Board deleted", {
-        description: "Another user has deleted this board.",
+      toast.error("Se envió el tablero a recuperación", {
+        description: "Otra persona envió este tablero a recuperación.",
       });
-      replaceStateRef.current?.(null, []); // This resets the board to initial To Do state
+      replaceStateRef.current?.(null, []);
       router.push("/");
     },
   });
+
+  const onLocalMutation = useCallback(() => {
+    void refreshRef.current?.().catch(() => undefined);
+  }, []);
 
   const {
     board,
@@ -311,7 +385,6 @@ function BoardWorkspace({
     mutateChecklistStep,
     checklistAddOperations,
     refreshTaskForEdit,
-    refreshBoardFromDB,
     applyBoardSettings,
     removeTask,
     moveTask,
@@ -324,7 +397,8 @@ function BoardWorkspace({
     slug,
     initialBoard,
     initialColumns,
-    onMutation: broadcastSync,
+    authEpoch: realtimeContext.auth_epoch,
+    onMutation: onLocalMutation,
     onAccessLost,
   });
 
@@ -332,10 +406,45 @@ function BoardWorkspace({
   refreshRef.current = refreshFromDB;
   replaceStateRef.current = replaceState;
 
+  const previousAuthorizationEpochRef = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    const currentAuthorizationEpoch = String(realtimeContext.auth_epoch);
+    if (previousAuthorizationEpochRef.current === null) {
+      previousAuthorizationEpochRef.current = currentAuthorizationEpoch;
+      if (
+        initialBoard.auth_epoch !== undefined &&
+        hasBoardAuthorizationEpochChanged(
+          initialBoard.auth_epoch,
+          realtimeContext.auth_epoch,
+        )
+      ) {
+        replaceState(null, []);
+        void refreshFromDB().catch(() => undefined);
+      }
+      return;
+    }
+    if (
+      !hasBoardAuthorizationEpochChanged(
+        previousAuthorizationEpochRef.current,
+        currentAuthorizationEpoch,
+      )
+    ) {
+      return;
+    }
+    previousAuthorizationEpochRef.current = currentAuthorizationEpoch;
+    replaceState(null, []);
+    void refreshFromDB().catch(() => undefined);
+  }, [
+    initialBoard.auth_epoch,
+    realtimeContext.auth_epoch,
+    replaceState,
+    refreshFromDB,
+  ]);
+
   useEffect(() => {
     const refreshBoardDay = () => {
       if (document.visibilityState === "visible") {
-        void refreshBoardFromDB().catch(() => undefined);
+        void refreshFromDB().catch(() => undefined);
       }
     };
     const onVisibilityChange = () => refreshBoardDay();
@@ -347,7 +456,7 @@ function BoardWorkspace({
       window.removeEventListener("focus", refreshBoardDay);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [refreshBoardFromDB]);
+  }, [refreshFromDB]);
 
   // Keyboard shortcuts (desktop only)
   const hotKeyBindings = useMemo(
@@ -373,7 +482,9 @@ function BoardWorkspace({
   useHotKeys(hotKeyBindings);
 
   // Presence
-  const { viewerCount, isConnected } = usePresence(initialBoard.id);
+  const { viewerCount, isConnected } = usePresence(
+    realtimeContext.presence_topic,
+  );
 
   // Task modal state
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
@@ -435,8 +546,7 @@ function BoardWorkspace({
     try {
       const result = await setTaskAssignee(createClient(), slug, command);
       if (result.status === "confirmed" || result.status === "conflict") {
-        await refreshBoardFromDB().catch(() => undefined);
-        broadcastSync();
+        await refreshFromDB().catch(() => undefined);
       }
       return result;
     } catch (error) {
@@ -667,8 +777,6 @@ function BoardWorkspace({
       toast.success("Tablero enviado a recuperación", {
         description: `Podrás restaurarlo hasta el ${expiresAt}. Las invitaciones pendientes se revocaron.`,
       });
-      // Notify other users looking at this board
-      broadcastBoardDeleted();
       router.push("/");
       completed = true;
     } catch (error) {
@@ -705,7 +813,6 @@ function BoardWorkspace({
       timeZone,
     );
     applyBoardSettings(updatedBoard);
-    broadcastSync();
   }
 
   async function handleDeleteColumn(
@@ -792,7 +899,6 @@ function BoardWorkspace({
       try {
         await importBoard(file, slug);
         await refreshFromDB();
-        broadcastSync();
         toast.success("Board imported successfully");
       } catch (err) {
         toast.error("Import failed", {
@@ -959,7 +1065,6 @@ function BoardWorkspace({
         onClose={() => setIsTaskRecoveryDialogOpen(false)}
         onRestored={async () => {
           await refreshFromDB();
-          broadcastSync();
         }}
         slug={slug}
         timeZone={board?.time_zone ?? initialBoard.time_zone}

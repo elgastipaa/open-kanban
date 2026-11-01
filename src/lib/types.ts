@@ -19,6 +19,13 @@ export interface Board {
   created_at: string;
   updated_at: string;
   today: string;
+  auth_epoch?: string | number;
+}
+
+export interface BoardRealtimeContext {
+  auth_epoch: string | number;
+  sync_topic: string;
+  presence_topic: string;
 }
 
 export interface BoardTimeZonePreview {

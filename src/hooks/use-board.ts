@@ -14,6 +14,7 @@ export function useBoard({
   slug,
   initialBoard,
   initialColumns,
+  authEpoch,
   onMutation,
   onAccessLost,
 }: UseBoardOptions) {
@@ -51,7 +52,6 @@ export function useBoard({
 
   const {
     refreshFromDB,
-    refreshBoardFromDB,
     persistBoard,
     applyBoardSettings,
     removeBoard,
@@ -59,6 +59,8 @@ export function useBoard({
   } = useBoardSync({
     slug,
     supabase,
+    authEpoch,
+    onAccessLost,
     boardRef,
     isPersistedRef,
     setBoard,
@@ -129,7 +131,6 @@ export function useBoard({
     removeBoard,
     replaceState,
     refreshFromDB,
-    refreshBoardFromDB,
     applyBoardSettings,
   };
 }

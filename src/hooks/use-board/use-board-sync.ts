@@ -1,9 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { useCallback, useRef } from "react";
+import { isBoardSnapshotForCurrentSession } from "@/lib/board-auth-epoch";
 import {
   type BoardRecoveryResult,
   deleteBoard as dbDeleteBoard,
-  getBoard,
   getFullBoard,
 } from "@/lib/db";
 import { getSessionEpoch } from "@/lib/supabase/client";
@@ -13,6 +13,8 @@ import type { TaskMutationLedger } from "./task-mutation-ledger";
 interface UseBoardSyncProps {
   slug: string;
   supabase: SupabaseClient;
+  authEpoch: string | number;
+  onAccessLost?: () => void;
   boardRef: React.RefObject<Board | null>;
   isPersistedRef: React.RefObject<boolean>;
   setBoard: React.Dispatch<React.SetStateAction<Board | null>>;
@@ -23,6 +25,8 @@ interface UseBoardSyncProps {
 export function useBoardSync({
   slug,
   supabase,
+  authEpoch,
+  onAccessLost,
   boardRef,
   isPersistedRef,
   setBoard,
@@ -30,13 +34,14 @@ export function useBoardSync({
   taskMutationLedger,
 }: UseBoardSyncProps) {
   const refreshGenerationRef = useRef(0);
-  const boardRefreshGenerationRef = useRef(0);
+  const authorizationEpochRef = useRef(authEpoch);
+  authorizationEpochRef.current = authEpoch;
 
   const refreshFromDB = useCallback(async () => {
-    boardRefreshGenerationRef.current += 1;
     const generation = ++refreshGenerationRef.current;
     const ledgerRevision = taskMutationLedger.revision;
     const sessionEpoch = getSessionEpoch();
+    const authorizationEpoch = authorizationEpochRef.current;
     let data: Awaited<ReturnType<typeof getFullBoard>>;
     try {
       data = await getFullBoard(supabase, slug);
@@ -45,7 +50,13 @@ export function useBoardSync({
       throw error;
     }
     if (
-      sessionEpoch === getSessionEpoch() &&
+      isBoardSnapshotForCurrentSession(
+        sessionEpoch,
+        getSessionEpoch(),
+        authorizationEpoch,
+        authorizationEpochRef.current,
+        data?.board.auth_epoch,
+      ) &&
       generation === refreshGenerationRef.current &&
       ledgerRevision === taskMutationLedger.revision &&
       data
@@ -54,6 +65,17 @@ export function useBoardSync({
       isPersistedRef.current = true;
       setBoard(data.board);
       setColumns(taskMutationLedger.sync(data.columns));
+    } else if (
+      data === null &&
+      sessionEpoch === getSessionEpoch() &&
+      String(authorizationEpoch) === String(authorizationEpochRef.current) &&
+      generation === refreshGenerationRef.current
+    ) {
+      boardRef.current = null;
+      isPersistedRef.current = false;
+      setBoard(null);
+      setColumns(taskMutationLedger.sync([], true));
+      onAccessLost?.();
     }
   }, [
     slug,
@@ -63,22 +85,8 @@ export function useBoardSync({
     setBoard,
     setColumns,
     taskMutationLedger,
+    onAccessLost,
   ]);
-
-  const refreshBoardFromDB = useCallback(async () => {
-    const generation = ++boardRefreshGenerationRef.current;
-    const sessionEpoch = getSessionEpoch();
-    const latestBoard = await getBoard(supabase, slug);
-    if (
-      sessionEpoch === getSessionEpoch() &&
-      generation === boardRefreshGenerationRef.current &&
-      latestBoard
-    ) {
-      boardRef.current = latestBoard;
-      isPersistedRef.current = true;
-      setBoard(latestBoard);
-    }
-  }, [slug, supabase, boardRef, isPersistedRef, setBoard]);
 
   const persistBoard = useCallback(async (): Promise<Board> => {
     if (boardRef.current) return boardRef.current;
@@ -135,7 +143,6 @@ export function useBoardSync({
 
   return {
     refreshFromDB,
-    refreshBoardFromDB,
     persistBoard,
     applyBoardSettings,
     removeBoard,

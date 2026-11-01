@@ -6,7 +6,8 @@ export interface UseBoardOptions {
   slug: string;
   initialBoard: Board;
   initialColumns: ColumnWithTasks[];
-  /** Called after every DB write - used to trigger broadcast sync */
+  authEpoch: string | number;
+  /** Reconciles a confirmed local write through an authorized database read. */
   onMutation?: () => void;
   /** Called when a board command confirms that the current user lost access. */
   onAccessLost?: () => void;

@@ -1,105 +1,94 @@
 "use client";
 
 import type { RealtimeChannel } from "@supabase/supabase-js";
-import { useCallback, useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import type { WebSocketStatus } from "@/lib/types";
 
 interface UseRealtimeOptions {
-  boardId: string;
-  /** Called when another client mutates the board */
+  authEpoch: string | number;
+  syncTopic: string;
   onSync: () => void;
-  /** Called when another client deletes the board */
+  onReconnect: () => void | Promise<void>;
   onBoardDeleted?: () => void;
 }
 
 /**
- * Simple broadcast channel for board sync.
- *
- * After any DB write the local client calls `broadcastSync()`.
- * All OTHER clients on the same board receive the "sync" event
- * and re-fetch the latest state from the database.
- *
- * Supabase Broadcast does NOT echo events back to the sender,
- * so the mutating client never triggers its own refetch.
+ * Subscribes to content-free database broadcasts. The client never publishes
+ * board invalidation signals; each received signal only starts authorized
+ * session validation and board reads.
  */
 export function useRealtime({
-  boardId,
+  authEpoch,
+  syncTopic,
   onSync,
+  onReconnect,
   onBoardDeleted,
 }: UseRealtimeOptions) {
   const channelRef = useRef<RealtimeChannel | null>(null);
+  const currentEpochRef = useRef(authEpoch);
+  currentEpochRef.current = authEpoch;
+  const currentTopicRef = useRef(syncTopic);
+  currentTopicRef.current = syncTopic;
   const onSyncRef = useRef(onSync);
   onSyncRef.current = onSync;
+  const onReconnectRef = useRef(onReconnect);
+  onReconnectRef.current = onReconnect;
   const onBoardDeletedRef = useRef(onBoardDeleted);
   onBoardDeletedRef.current = onBoardDeleted;
-
-  /** Track if we've already shown the error toast to avoid spam */
   const hasShownErrorRef = useRef(false);
 
   useEffect(() => {
+    let active = true;
     const supabase = createClient();
-    const topic = `board-sync:${boardId}`;
-    const ch = supabase.channel(topic, { config: { private: true } });
+    const subscribedEpoch = authEpoch;
+    const subscribedTopic = syncTopic;
+    const isCurrentChannel = () =>
+      active &&
+      String(currentEpochRef.current) === String(subscribedEpoch) &&
+      currentTopicRef.current === subscribedTopic;
+    const ch = supabase.channel(syncTopic, { config: { private: true } });
 
     ch.on("broadcast", { event: "sync" }, () => {
+      if (isCurrentChannel()) onSyncRef.current();
+    });
+
+    ch.on("broadcast", { event: "revalidate" }, () => {
+      if (!isCurrentChannel()) return;
+      void onReconnectRef.current();
       onSyncRef.current();
     });
 
     ch.on("broadcast", { event: "board-deleted" }, () => {
-      onBoardDeletedRef.current?.();
+      if (isCurrentChannel()) onBoardDeletedRef.current?.();
     });
 
     ch.subscribe((status: WebSocketStatus) => {
+      if (!isCurrentChannel()) return;
       if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
         if (!hasShownErrorRef.current) {
           hasShownErrorRef.current = true;
-          toast.error("Realtime sync lost", {
+          toast.error("La sincronización en tiempo real está demorada", {
             description:
-              "Live updates from other users may be delayed. Refresh to reconnect.",
+              "Los cambios confirmados permanecen guardados. Las actualizaciones de otras personas pueden tardar hasta reconectar.",
           });
         }
+        void onReconnectRef.current();
       }
       if (status === "SUBSCRIBED") {
         hasShownErrorRef.current = false;
+        void onReconnectRef.current();
+        onSyncRef.current();
       }
     });
 
     channelRef.current = ch;
 
     return () => {
+      active = false;
+      if (channelRef.current === ch) channelRef.current = null;
       supabase.removeChannel(ch);
-      channelRef.current = null;
     };
-  }, [boardId]);
-
-  /** Tell every other viewer to refetch */
-  const broadcastSync = useCallback(() => {
-    try {
-      channelRef.current?.send({
-        type: "broadcast",
-        event: "sync",
-        payload: {},
-      });
-    } catch {
-      // Broadcast failure is non-critical - the local mutation already succeeded.
-      // Other clients will eventually sync on their next page load.
-    }
-  }, []);
-
-  /** Tell every other viewer that the board was deleted */
-  const broadcastBoardDeleted = useCallback(() => {
-    try {
-      channelRef.current?.send({
-        type: "broadcast",
-        event: "board-deleted",
-        payload: {},
-      });
-    } catch {
-      // Non-critical - local deletion already succeeded
-    }
-  }, []);
-
-  return { broadcastSync, broadcastBoardDeleted };
+  }, [authEpoch, syncTopic]);
 }

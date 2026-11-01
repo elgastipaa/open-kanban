@@ -128,6 +128,8 @@ DECLARE
   v_delete_board_slug text;
   v_column_id uuid;
   v_delete_column_id uuid;
+  v_sync_topic text;
+  v_presence_topic text;
   v_row_count integer;
   v_channel_count integer;
   v_delete_result jsonb;
@@ -181,13 +183,30 @@ BEGIN
     RAISE EXCEPTION 'An enabled user joined another owner’s private channel';
   END IF;
 
-  PERFORM set_config('request.jwt.claim.topic', 'board:' || v_board_id::text, true);
+  SELECT authorized.sync_topic, authorized.presence_topic
+  INTO v_sync_topic, v_presence_topic
+  FROM public.get_board_p(v_board_slug) AS authorized;
+  IF v_sync_topic IS NULL OR v_presence_topic IS NULL
+    OR NOT public.can_access_board_topic(v_sync_topic) THEN
+    RAISE EXCEPTION 'Authorized board context did not provide current private topics';
+  END IF;
+  PERFORM set_config('request.jwt.claim.topic', v_presence_topic, true);
   INSERT INTO realtime.messages(extension, topic, payload)
-  VALUES ('broadcast', 'board:' || v_board_id::text, '{}'::jsonb);
+  VALUES ('presence', v_presence_topic, '{}'::jsonb);
   SELECT count(*) INTO v_channel_count FROM realtime.messages
-  WHERE topic = 'board:' || v_board_id::text;
+  WHERE topic = v_presence_topic AND extension = 'presence';
   IF v_channel_count <> 1 THEN
-    RAISE EXCEPTION 'The allowed private topic did not retain its message';
+    RAISE EXCEPTION 'The current private presence topic did not retain its message';
+  END IF;
+  v_denied := false;
+  BEGIN
+    INSERT INTO realtime.messages(extension, topic, payload)
+    VALUES ('broadcast', v_sync_topic, '{}'::jsonb);
+  EXCEPTION WHEN insufficient_privilege THEN
+    v_denied := true;
+  END;
+  IF NOT v_denied THEN
+    RAISE EXCEPTION 'An authenticated board client published a server-owned broadcast';
   END IF;
 
   SELECT id, slug INTO v_delete_board_id, v_delete_board_slug

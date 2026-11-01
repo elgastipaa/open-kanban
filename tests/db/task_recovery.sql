@@ -67,7 +67,7 @@ BEGIN
     OR v_trash.cause IS DISTINCT FROM 'user_requested'
     OR v_trash.deleted_at < v_started_at
     OR v_trash.deleted_at > clock_timestamp()
-    OR v_trash.expires_at IS DISTINCT FROM v_trash.deleted_at + interval '7 days' THEN
+    OR v_trash.expires_at IS DISTINCT FROM v_trash.deleted_at + interval '168 hours' THEN
     RAISE EXCEPTION 'Deletion metadata did not use the server clock and exact 7x24h window: %',
       row_to_json(v_trash);
   END IF;
@@ -76,6 +76,62 @@ BEGIN
   ) VALUES (
     'restored', v_board.id, v_board.slug, v_column.id, v_task_id
   );
+END;
+$$;
+COMMIT;
+
+-- A controlled deletion crosses the Denver DST transition but retains a
+-- fixed 168-hour deadline, independent of the session's calendar-day rules.
+BEGIN;
+SET LOCAL TIME ZONE 'America/Denver';
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);
+DO $$
+DECLARE
+  v_reference record;
+  v_created jsonb;
+  v_deleted jsonb;
+  v_task_id uuid;
+  v_deleted_at timestamptz := '2005-04-02 12:00:00-07';
+  v_expires_at timestamptz;
+  v_elapsed_seconds numeric;
+BEGIN
+  SELECT * INTO STRICT v_reference FROM pg_temp.issue14_task_refs
+  WHERE purpose = 'restored';
+  v_created := public.create_task_p(
+    gen_random_uuid(),
+    v_reference.board_id,
+    v_reference.column_id,
+    'Tarea de prueba alrededor del cambio de horario'
+  );
+  v_task_id := (v_created->>'task_id')::uuid;
+  v_deleted := public.delete_task_internal_p(
+    gen_random_uuid(),
+    v_reference.board_slug,
+    v_task_id,
+    'user_requested',
+    v_deleted_at
+  );
+  IF v_deleted->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Controlled deletion across DST was not confirmed: %', v_deleted;
+  END IF;
+
+  SELECT deletion.deleted_at, deletion.expires_at
+  INTO STRICT v_deleted_at, v_expires_at
+  FROM public.task_deletions AS deletion
+  WHERE deletion.task_id = v_task_id;
+  v_elapsed_seconds := extract(epoch FROM (v_expires_at - v_deleted_at));
+  IF v_deleted_at IS DISTINCT FROM '2005-04-02 12:00:00-07'::timestamptz
+    OR v_expires_at IS DISTINCT FROM '2005-04-09 13:00:00-06'::timestamptz
+    OR v_elapsed_seconds IS DISTINCT FROM 604800 THEN
+    RAISE EXCEPTION 'Expected 2005-04-09 13:00:00-06 / 604800 seconds; got % / % seconds',
+      v_expires_at, v_elapsed_seconds;
+  END IF;
+  IF public.purge_expired_task_internal_p(v_task_id, v_expires_at)
+    IS DISTINCT FROM 'purged' THEN
+    RAISE EXCEPTION 'Could not remove the controlled expired DST test snapshot';
+  END IF;
+  RAISE NOTICE 'PASS: controlled 168-hour deletion expires at % (% seconds elapsed)',
+    v_expires_at, v_elapsed_seconds;
 END;
 $$;
 COMMIT;
@@ -336,7 +392,7 @@ WITH controlled_clock AS (
   SELECT clock_timestamp() AS now
 )
 UPDATE public.task_deletions AS deletion
-SET deleted_at = controlled_clock.now - interval '7 days',
+SET deleted_at = controlled_clock.now - interval '168 hours',
     expires_at = controlled_clock.now
 FROM controlled_clock
 WHERE deletion.task_id = (
@@ -409,6 +465,21 @@ BEGIN
   IF has_function_privilege(
       'authenticated',
       'public.restore_task_internal_p(uuid,text,uuid,uuid,timestamp with time zone)',
+      'EXECUTE'
+    )
+    OR has_function_privilege(
+      'authenticated',
+      'public.delete_task_internal_p(uuid,text,uuid,text,timestamp with time zone)',
+      'EXECUTE'
+    )
+    OR has_function_privilege(
+      'anon',
+      'public.delete_task_internal_p(uuid,text,uuid,text,timestamp with time zone)',
+      'EXECUTE'
+    )
+    OR has_function_privilege(
+      'service_role',
+      'public.delete_task_internal_p(uuid,text,uuid,text,timestamp with time zone)',
       'EXECUTE'
     )
     OR has_function_privilege(

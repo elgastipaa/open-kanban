@@ -272,7 +272,7 @@ recovery_boundary='2030-01-08 00:00:00+00'
   -v restore_wins_task_id="$restore_wins_task_id" \
   -v recovery_boundary="$recovery_boundary" <<'SQL'
 UPDATE public.task_deletions
-SET deleted_at = :'recovery_boundary'::timestamptz - interval '7 days',
+SET deleted_at = :'recovery_boundary'::timestamptz - interval '168 hours',
     expires_at = :'recovery_boundary'::timestamptz
 WHERE task_id IN (:'purge_wins_task_id'::uuid, :'restore_wins_task_id'::uuid);
 UPDATE public.issue14_task_recovery_race_fixture

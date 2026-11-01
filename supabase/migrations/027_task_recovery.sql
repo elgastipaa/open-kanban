@@ -16,7 +16,7 @@ CREATE TABLE public.task_deletions (
   restored_at timestamptz,
   purged_at timestamptz,
   CONSTRAINT task_deletions_exact_window CHECK (
-    expires_at = deleted_at + interval '7 days'
+    expires_at = deleted_at + interval '168 hours'
   ),
   CONSTRAINT task_deletions_state_shape CHECK (
     (state = 'deleted' AND task_snapshot IS NOT NULL
@@ -46,7 +46,7 @@ CREATE TABLE public.task_recovery_receipts (
   )),
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   result_expires_at timestamptz NOT NULL
-    DEFAULT (clock_timestamp() + interval '7 days'),
+    DEFAULT (clock_timestamp() + interval '168 hours'),
   PRIMARY KEY (actor_id, operation_id)
 );
 ALTER TABLE public.task_recovery_receipts ENABLE ROW LEVEL SECURITY;
@@ -55,11 +55,14 @@ REVOKE ALL ON TABLE public.task_recovery_receipts
 
 DROP FUNCTION public.delete_task_p(text, uuid);
 
-CREATE FUNCTION public.delete_task_p(
+-- The public wrapper supplies NULL; this owner-only internal seam accepts a
+-- controlled timestamp for deterministic DST regression tests.
+CREATE FUNCTION public.delete_task_internal_p(
   p_operation_id uuid,
   p_slug text,
   p_id uuid,
-  p_cause text DEFAULT 'user_requested'
+  p_cause text,
+  p_deleted_at timestamptz
 )
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -163,13 +166,13 @@ BEGIN
     RETURN jsonb_build_object('status', 'unavailable', 'operation_id', p_operation_id);
   END IF;
 
-  v_deleted_at := clock_timestamp();
+  v_deleted_at := coalesce(p_deleted_at, clock_timestamp());
   INSERT INTO public.task_deletions(
     task_id, board_id, original_column_id, deleted_by, cause,
     deleted_at, expires_at, task_snapshot, state
   ) VALUES (
     v_task.id, v_board.id, v_task.column_id, v_actor_id, p_cause,
-    v_deleted_at, v_deleted_at + interval '7 days', to_jsonb(v_task), 'deleted'
+    v_deleted_at, v_deleted_at + interval '168 hours', to_jsonb(v_task), 'deleted'
   )
   ON CONFLICT (task_id) DO UPDATE SET
     board_id = EXCLUDED.board_id,
@@ -189,6 +192,22 @@ BEGIN
   WHERE receipt.actor_id = v_actor_id AND receipt.operation_id = p_operation_id;
   RETURN jsonb_build_object('status', 'confirmed', 'operation_id', p_operation_id);
 END;
+$$;
+
+CREATE FUNCTION public.delete_task_p(
+  p_operation_id uuid,
+  p_slug text,
+  p_id uuid,
+  p_cause text DEFAULT 'user_requested'
+)
+RETURNS jsonb
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = pg_catalog, public, auth, pg_temp
+AS $$
+  SELECT public.delete_task_internal_p(
+    p_operation_id, p_slug, p_id, p_cause, NULL
+  );
 $$;
 
 CREATE FUNCTION public.list_deleted_tasks_p(p_slug text)
@@ -493,6 +512,8 @@ BEGIN
 END;
 $$;
 
+REVOKE ALL ON FUNCTION public.delete_task_internal_p(uuid, text, uuid, text, timestamptz)
+  FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.delete_task_p(uuid, text, uuid, text)
   FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.delete_task_p(uuid, text, uuid, text)

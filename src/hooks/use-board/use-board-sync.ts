@@ -22,6 +22,10 @@ interface UseBoardSyncProps {
   taskMutationLedger: TaskMutationLedger;
 }
 
+export type BoardRefreshOutcome =
+  | { status: "authorized"; authEpoch: string | number; taskIds: string[] }
+  | { status: "denied" | "discarded" };
+
 export function useBoardSync({
   slug,
   supabase,
@@ -37,7 +41,7 @@ export function useBoardSync({
   const authorizationEpochRef = useRef(authEpoch);
   authorizationEpochRef.current = authEpoch;
 
-  const refreshFromDB = useCallback(async () => {
+  const refreshFromDB = useCallback(async (): Promise<BoardRefreshOutcome> => {
     const generation = ++refreshGenerationRef.current;
     const ledgerRevision = taskMutationLedger.revision;
     const sessionEpoch = getSessionEpoch();
@@ -46,7 +50,7 @@ export function useBoardSync({
     try {
       data = await getFullBoard(supabase, slug);
     } catch (error) {
-      if (sessionEpoch !== getSessionEpoch()) return;
+      if (sessionEpoch !== getSessionEpoch()) return { status: "discarded" };
       throw error;
     }
     if (
@@ -65,6 +69,13 @@ export function useBoardSync({
       isPersistedRef.current = true;
       setBoard(data.board);
       setColumns(taskMutationLedger.sync(data.columns));
+      return {
+        status: "authorized",
+        authEpoch: data.board.auth_epoch ?? authorizationEpoch,
+        taskIds: data.columns.flatMap((column) =>
+          column.tasks.map((task) => task.id),
+        ),
+      };
     } else if (
       data === null &&
       sessionEpoch === getSessionEpoch() &&
@@ -76,7 +87,9 @@ export function useBoardSync({
       setBoard(null);
       setColumns(taskMutationLedger.sync([], true));
       onAccessLost?.();
+      return { status: "denied" };
     }
+    return { status: "discarded" };
   }, [
     slug,
     supabase,

@@ -11,6 +11,7 @@ import {
 import type { ColumnRecoveryResult } from "@/lib/db/columns";
 import type { Board, Column, ColumnWithTasks } from "@/lib/types";
 import type { TaskMutationLedger } from "./task-mutation-ledger";
+import type { BoardRefreshOutcome } from "./use-board-sync";
 import { makeLocalColumn, showMutationError } from "./utils";
 
 interface UseColumnOperationsProps {
@@ -21,7 +22,7 @@ interface UseColumnOperationsProps {
   isPersistedRef: React.RefObject<boolean>;
   onMutationRef: React.RefObject<(() => void) | undefined>;
   persistBoard: () => Promise<Board>;
-  refreshFromDB: () => Promise<void>;
+  refreshFromDB: () => Promise<BoardRefreshOutcome>;
   enqueue: (op: () => Promise<void>) => Promise<void>;
   ledger: TaskMutationLedger;
 }

@@ -23,6 +23,7 @@ import { TaskModal } from "@/components/board/task-modal";
 import { TaskRecoveryDialog } from "@/components/board/task-recovery-dialog";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useBoard } from "@/hooks/use-board";
+import type { BoardRefreshOutcome } from "@/hooks/use-board/use-board-sync";
 import { useDevice } from "@/hooks/use-device";
 import { useHotKeys } from "@/hooks/use-hotkeys";
 import { useOnlineStatus } from "@/hooks/use-online-status";
@@ -63,10 +64,16 @@ import {
   type TaskDeleteFlow,
 } from "@/lib/task-delete-flow";
 import {
+  captureTaskDraftForAuthorizationRefresh,
+  type PreservedTaskDraft,
+  resolveTaskDraftAfterAuthorizationRefresh,
+} from "@/lib/task-draft-preservation";
+import {
   captureTaskFocusOrigin,
   selectTaskFocusTarget,
   type TaskFocusOrigin,
 } from "@/lib/task-edit-focus";
+import type { TaskEditDraft } from "@/lib/task-edit-workflow";
 import type {
   AssignableBoardMember,
   BoardRealtimeContext,
@@ -343,12 +350,75 @@ function BoardWorkspace({
   );
 
   // Ref to hold refreshFromDB - avoids circular dependency between hooks
-  const refreshRef = useRef<(() => Promise<void>) | undefined>(undefined);
+  const refreshRef = useRef<(() => Promise<BoardRefreshOutcome>) | undefined>(
+    undefined,
+  );
 
   // Ref to hold replaceState - avoids circular dependency between hooks
   const replaceStateRef = useRef<
     ((newBoard: null, newColumns: []) => void) | undefined
   >(undefined);
+
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const editingTaskIdRef = useRef<string | null>(editingTaskId);
+  editingTaskIdRef.current = editingTaskId;
+  const [pendingTaskDraft, setPendingTaskDraft] =
+    useState<PreservedTaskDraft | null>(null);
+  const [restoredTaskDraft, setRestoredTaskDraft] =
+    useState<PreservedTaskDraft | null>(null);
+  const isAuthorizationRefreshPending = pendingTaskDraft !== null;
+  const dirtyTaskDraftRef = useRef<{
+    actorId: string;
+    taskId: string;
+    draft: TaskEditDraft;
+  } | null>(null);
+  const authorizationRefreshGenerationRef = useRef(0);
+  const actorIdRef = useRef(actorId);
+  actorIdRef.current = actorId;
+  const previousActorIdRef = useRef(actorId);
+  const authEpochRef = useRef(realtimeContext.auth_epoch);
+  authEpochRef.current = realtimeContext.auth_epoch;
+
+  const onEditDraftChange = useCallback(
+    (taskId: string, draft: TaskEditDraft, isDirty: boolean) => {
+      if (actorIdRef.current !== actorId) return;
+      if (isDirty) {
+        dirtyTaskDraftRef.current = {
+          actorId,
+          taskId,
+          draft: { ...draft },
+        };
+      } else if (
+        dirtyTaskDraftRef.current?.actorId === actorId &&
+        dirtyTaskDraftRef.current.taskId === taskId
+      ) {
+        dirtyTaskDraftRef.current = null;
+      }
+    },
+    [actorId],
+  );
+
+  const clearTaskDraft = useCallback((taskId: string) => {
+    if (dirtyTaskDraftRef.current?.taskId === taskId) {
+      dirtyTaskDraftRef.current = null;
+    }
+  }, []);
+
+  const onEditDraftRestored = useCallback(() => {
+    setPendingTaskDraft(null);
+    setRestoredTaskDraft(null);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (previousActorIdRef.current !== actorId) {
+      previousActorIdRef.current = actorId;
+      authorizationRefreshGenerationRef.current += 1;
+      dirtyTaskDraftRef.current = null;
+      setPendingTaskDraft(null);
+      setRestoredTaskDraft(null);
+      setEditingTaskId(null);
+    }
+  }, [actorId]);
 
   // Realtime: broadcast sync after every mutation, refetch on incoming sync
   useRealtime({
@@ -406,6 +476,58 @@ function BoardWorkspace({
   refreshRef.current = refreshFromDB;
   replaceStateRef.current = replaceState;
 
+  const refreshAfterAuthorizationEpochChange = useCallback(
+    (preservedDraft: PreservedTaskDraft | null) => {
+      const generation = ++authorizationRefreshGenerationRef.current;
+      setPendingTaskDraft(preservedDraft);
+      setRestoredTaskDraft(null);
+      replaceState(null, []);
+
+      const finishRefresh = (
+        outcome:
+          | BoardRefreshOutcome
+          | { status: "unavailable" },
+        retry = 0,
+      ) => {
+        if (generation !== authorizationRefreshGenerationRef.current) return;
+        if (
+          outcome.status === "discarded" &&
+          preservedDraft !== null &&
+          retry === 0 &&
+          preservedDraft.actorId === actorIdRef.current &&
+          String(preservedDraft.authEpoch) ===
+            String(authEpochRef.current)
+        ) {
+          void refreshFromDB()
+            .then((nextOutcome) => finishRefresh(nextOutcome, 1))
+            .catch(() => finishRefresh({ status: "unavailable" }, 1));
+          return;
+        }
+        const resolution = resolveTaskDraftAfterAuthorizationRefresh({
+          preserved: preservedDraft,
+          currentActorId: actorIdRef.current,
+          currentAuthEpoch: authEpochRef.current,
+          outcome,
+        });
+        setPendingTaskDraft(null);
+        if (resolution.status === "restore" && preservedDraft) {
+          setRestoredTaskDraft({
+            ...preservedDraft,
+            draft: resolution.draft,
+          });
+          return;
+        }
+        setRestoredTaskDraft(null);
+        setEditingTaskId(null);
+      };
+
+      void refreshFromDB()
+        .then(finishRefresh)
+        .catch(() => finishRefresh({ status: "unavailable" }));
+    },
+    [refreshFromDB, replaceState],
+  );
+
   const previousAuthorizationEpochRef = useRef<string | null>(null);
   useLayoutEffect(() => {
     const currentAuthorizationEpoch = String(realtimeContext.auth_epoch);
@@ -418,8 +540,7 @@ function BoardWorkspace({
           realtimeContext.auth_epoch,
         )
       ) {
-        replaceState(null, []);
-        void refreshFromDB().catch(() => undefined);
+        refreshAfterAuthorizationEpochChange(null);
       }
       return;
     }
@@ -432,13 +553,22 @@ function BoardWorkspace({
       return;
     }
     previousAuthorizationEpochRef.current = currentAuthorizationEpoch;
-    replaceState(null, []);
-    void refreshFromDB().catch(() => undefined);
+    const latestDraft = dirtyTaskDraftRef.current;
+    const preservedDraft =
+      latestDraft &&
+      latestDraft.actorId === actorIdRef.current &&
+      latestDraft.taskId === editingTaskIdRef.current
+        ? captureTaskDraftForAuthorizationRefresh({
+            ...latestDraft,
+            authEpoch: currentAuthorizationEpoch,
+            isDirty: true,
+          })
+        : null;
+    refreshAfterAuthorizationEpochChange(preservedDraft);
   }, [
     initialBoard.auth_epoch,
     realtimeContext.auth_epoch,
-    replaceState,
-    refreshFromDB,
+    refreshAfterAuthorizationEpochChange,
   ]);
 
   useEffect(() => {
@@ -487,7 +617,6 @@ function BoardWorkspace({
   );
 
   // Task modal state
-  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [pendingCardCompletionReview, setPendingCardCompletionReview] =
     useState<{
       command: TaskCompletionCommand;
@@ -502,10 +631,26 @@ function BoardWorkspace({
         .flatMap((column) => column.tasks)
         .find((task) => task.id === editingTaskId) ?? null)
     : null;
+  const modalRestoredDraft =
+    restoredTaskDraft &&
+    restoredTaskDraft.actorId === actorId &&
+    restoredTaskDraft.taskId === editingTask?.id &&
+    String(restoredTaskDraft.authEpoch) ===
+      String(realtimeContext.auth_epoch) &&
+    board?.auth_epoch !== undefined &&
+    String(board.auth_epoch) === String(realtimeContext.auth_epoch)
+      ? restoredTaskDraft.draft
+      : null;
 
   useEffect(() => {
-    if (editingTaskId && !editingTask) setEditingTaskId(null);
-  }, [editingTask, editingTaskId]);
+    if (editingTaskId && !editingTask && !isAuthorizationRefreshPending) {
+      setEditingTaskId(null);
+    }
+  }, [editingTask, editingTaskId, isAuthorizationRefreshPending]);
+
+  useEffect(() => {
+    if (editingTaskId === null) dirtyTaskDraftRef.current = null;
+  }, [editingTaskId]);
 
   function openTaskDetail(task: Task) {
     taskOriginRef.current = captureTaskFocusOrigin(
@@ -1028,6 +1173,9 @@ function BoardWorkspace({
       <TaskModal
         key={editingTask?.id ?? "closed"}
         task={editingTask}
+        restoredDraft={modalRestoredDraft}
+        onEditDraftChange={onEditDraftChange}
+        onEditDraftRestored={onEditDraftRestored}
         slug={slug}
         actorId={actorId}
         role={board?.role ?? initialBoard.role}
@@ -1041,9 +1189,14 @@ function BoardWorkspace({
         boardToday={board?.today ?? initialBoard.today}
         columns={columns}
         contextLabel={`${board?.name ?? initialBoard.name} · ${taskOriginRef.current?.columnTitle ?? "Columna"} · ${board?.time_zone ?? initialBoard.time_zone}`}
-        open={editingTaskId !== null && editingTask !== null}
+        open={
+          editingTaskId !== null &&
+          editingTask !== null &&
+          !isAuthorizationRefreshPending
+        }
         isOnline={isOnline}
         onClose={() => {
+          if (editingTaskId) clearTaskDraft(editingTaskId);
           setEditingTaskId(null);
           if (myTasksReturnHref) router.push(myTasksReturnHref);
           else if (initialCommentId) router.replace(`/${slug}`);

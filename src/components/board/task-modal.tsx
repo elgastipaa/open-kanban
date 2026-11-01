@@ -73,6 +73,13 @@ import { generateUUID } from "@/lib/utils";
 
 interface TaskModalProps {
   task: Task | null;
+  restoredDraft: TaskEditDraft | null;
+  onEditDraftChange: (
+    taskId: string,
+    draft: TaskEditDraft,
+    isDirty: boolean,
+  ) => void;
+  onEditDraftRestored: () => void;
   slug: string;
   actorId: string;
   role: "owner" | "collaborator";
@@ -131,6 +138,15 @@ function draftFor(task: Task): TaskEditDraft {
   };
 }
 
+function isTaskEditDraftDirty(task: Task, draft: TaskEditDraft) {
+  return (
+    draft.title.trim() !== task.title ||
+    (draft.description.trim() || null) !== task.description ||
+    draft.priority !== task.priority ||
+    (draft.due_on || null) !== task.due_on
+  );
+}
+
 function fieldLabel(field: TaskEditableField) {
   switch (field) {
     case "title":
@@ -183,6 +199,9 @@ function saveErrorMessage(error: unknown) {
 
 export function TaskModal({
   task,
+  restoredDraft,
+  onEditDraftChange,
+  onEditDraftRestored,
   slug,
   actorId,
   role,
@@ -211,9 +230,10 @@ export function TaskModal({
   const [baseTask, setBaseTask] = useState<Task | null>(task);
   const [workflow, setWorkflow] = useState<TaskEditWorkflowState>(() =>
     createTaskEditWorkflow(
-      task
-        ? draftFor(task)
-        : { title: "", description: "", priority: "medium", due_on: "" },
+      restoredDraft ??
+        (task
+          ? draftFor(task)
+          : { title: "", description: "", priority: "medium", due_on: "" }),
     ),
   );
   const [conflicts, setConflicts] = useState<TaskEditConflicts>({});
@@ -272,9 +292,15 @@ export function TaskModal({
   // biome-ignore lint/correctness/useExhaustiveDependencies: task identity is the reset boundary; live task refreshes must preserve the draft
   useEffect(() => {
     if (!open || !task) return;
-    const initialDraft = draftFor(task);
+    const initialDraft = restoredDraft ?? draftFor(task);
     setBaseTask(task);
     setWorkflow(createTaskEditWorkflow(initialDraft));
+    onEditDraftChange(
+      task.id,
+      initialDraft,
+      isTaskEditDraftDirty(task, initialDraft),
+    );
+    if (restoredDraft) onEditDraftRestored();
     setConflicts({});
     setShowDetails(false);
     setShowDescription(Boolean(task.description));
@@ -317,12 +343,7 @@ export function TaskModal({
   const draft = workflow.draft;
   const normalizedTitle = draft.title.trim();
   const normalizedDescription = draft.description.trim() || null;
-  const dirty =
-    baseTask !== null &&
-    (normalizedTitle !== baseTask.title ||
-      normalizedDescription !== baseTask.description ||
-      draft.priority !== baseTask.priority ||
-      (draft.due_on || null) !== baseTask.due_on);
+  const dirty = baseTask !== null && isTaskEditDraftDirty(baseTask, draft);
   const hasConflict = Object.keys(conflicts).length > 0;
   const isSaving = workflow.status === "saving";
   const isWorking =
@@ -332,6 +353,11 @@ export function TaskModal({
     isCompleting ||
     isAssigning ||
     isChecklistWorking;
+
+  useEffect(() => {
+    if (!task) return;
+    onEditDraftChange(task.id, draft, dirty);
+  }, [draft, dirty, onEditDraftChange, task]);
 
   useEffect(() => {
     if (!open || !dirty) return;
@@ -345,6 +371,13 @@ export function TaskModal({
 
   function updateDraft(nextDraft: TaskEditDraft) {
     setWorkflow((current) => changeTaskEditDraft(current, nextDraft));
+    if (task) {
+      onEditDraftChange(
+        task.id,
+        nextDraft,
+        baseTask !== null && isTaskEditDraftDirty(baseTask, nextDraft),
+      );
+    }
     setDueOnError("");
     setCloseNotice("");
     setMoveNotice("");

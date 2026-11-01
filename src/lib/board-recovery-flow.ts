@@ -8,6 +8,14 @@ export type BoardRestoreCommandDecision =
   | { kind: "owner_required" }
   | { kind: "owner_locked"; command: BoardRestoreCommand };
 
+export function formatBoardRecoveryDates(
+  deletedAt: string,
+  expiresAt: string,
+  formatDateTime: (value: string) => string,
+): string {
+  return `Borrado el ${formatDateTime(deletedAt)} · Recuperable hasta ${formatDateTime(expiresAt)}`;
+}
+
 export function adminMayResolveBoardRecovery(ownerIsValid: boolean): boolean {
   return !ownerIsValid;
 }

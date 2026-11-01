@@ -809,7 +809,8 @@ DECLARE
 BEGIN
   SELECT board.id INTO v_board_id
   FROM public.boards AS board
-  WHERE board.slug = p_slug;
+  WHERE board.slug = p_slug
+  FOR UPDATE;
   IF NOT FOUND OR NOT public.is_board_owner(v_board_id) THEN
     RAISE EXCEPTION 'Board owner access is required' USING ERRCODE = '42501';
   END IF;
@@ -840,7 +841,8 @@ DECLARE
 BEGIN
   SELECT board.id INTO v_board_id
   FROM public.boards AS board
-  WHERE board.slug = p_slug;
+  WHERE board.slug = p_slug
+  FOR UPDATE;
   IF NOT FOUND OR NOT public.is_board_owner(v_board_id) THEN
     RAISE EXCEPTION 'Board owner access is required' USING ERRCODE = '42501';
   END IF;
@@ -875,7 +877,8 @@ DECLARE
 BEGIN
   SELECT board.id INTO v_board_id
   FROM public.boards AS board
-  WHERE board.slug = p_slug;
+  WHERE board.slug = p_slug
+  FOR SHARE;
   IF NOT FOUND OR NOT public.is_board_owner(v_board_id) THEN
     RAISE EXCEPTION 'Board owner access is required' USING ERRCODE = '42501';
   END IF;
@@ -903,6 +906,11 @@ BEGIN
   SELECT invitation.board_id INTO v_board_id
   FROM public.board_invitations AS invitation
   WHERE invitation.id = p_invitation_id;
+  IF NOT FOUND THEN RETURN false; END IF;
+  PERFORM 1
+  FROM public.boards AS board
+  WHERE board.id = v_board_id
+  FOR UPDATE;
   IF NOT FOUND THEN RETURN false; END IF;
   IF NOT public.is_board_owner(v_board_id) THEN
     RAISE EXCEPTION 'Board owner access is required' USING ERRCODE = '42501';
@@ -935,6 +943,13 @@ BEGIN
   SELECT invitation.board_id INTO v_board_id
   FROM public.board_invitations AS invitation
   WHERE invitation.id = p_invitation_id;
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('status', 'unavailable');
+  END IF;
+  PERFORM 1
+  FROM public.boards AS board
+  WHERE board.id = v_board_id
+  FOR UPDATE;
   IF NOT FOUND THEN
     RETURN jsonb_build_object('status', 'unavailable');
   END IF;

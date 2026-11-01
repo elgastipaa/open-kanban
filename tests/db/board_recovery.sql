@@ -863,3 +863,52 @@ FROM public.issue18_board_recovery_race_fixture AS fixture
 WHERE fixture.board_id = recovery.board_id;
 
 \echo 'PASS: board recovery race fixtures cover purge/restore and content/delete ordering'
+
+CREATE TABLE public.issue18_board_invitation_race_fixture (
+  scenario text PRIMARY KEY,
+  board_id uuid NOT NULL UNIQUE REFERENCES public.boards(id) ON DELETE CASCADE,
+  board_slug text NOT NULL,
+  owner_id uuid NOT NULL,
+  delete_operation_id uuid NOT NULL
+);
+GRANT SELECT, INSERT ON public.issue18_board_invitation_race_fixture TO authenticated;
+
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);
+DO $$
+DECLARE
+  v_case record;
+  v_board record;
+BEGIN
+  FOR v_case IN
+    SELECT * FROM (VALUES
+      ('delete_first'::text, 'b8180000-0000-4000-8000-000000000001'::uuid,
+        'b8180000-0000-4000-8000-000000000011'::uuid),
+      ('create_first'::text, 'b8180000-0000-4000-8000-000000000002'::uuid,
+        'b8180000-0000-4000-8000-000000000012'::uuid)
+    ) AS cases(scenario, create_operation_id, delete_operation_id)
+  LOOP
+    SELECT * INTO STRICT v_board
+    FROM public.create_board_p(
+      'Issue 18 invitation race ' || v_case.scenario,
+      'UTC',
+      v_case.create_operation_id
+    );
+    IF v_case.scenario = 'delete_first' THEN
+      PERFORM public.create_direct_board_invitation_p(
+        v_board.slug,
+        'revocation-user@example.test'
+      );
+    END IF;
+    INSERT INTO public.issue18_board_invitation_race_fixture (
+      scenario, board_id, board_slug, owner_id, delete_operation_id
+    ) VALUES (
+      v_case.scenario, v_board.id, v_board.slug, auth.uid(), v_case.delete_operation_id
+    );
+  END LOOP;
+END;
+$$;
+COMMIT;
+
+\echo 'PASS: invitation wrapper race boards are ready for two-session tests'

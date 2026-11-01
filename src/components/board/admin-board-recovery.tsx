@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   adminMayResolveBoardRecovery,
+  formatBoardRecoveryDates,
   prepareBoardRestoreCommand,
 } from "@/lib/board-recovery-flow";
 import {
@@ -197,8 +198,12 @@ export function AdminBoardRecovery({
                   <div className="min-w-0">
                     <p className="truncate font-medium">{board.name}</p>
                     <p className="mt-1 text-neutral-500 text-xs">
-                      /{board.slug} · Recuperable hasta{" "}
-                      {formatDeadline(board.expires_at)}
+                      /{board.slug} ·{" "}
+                      {formatBoardRecoveryDates(
+                        board.deleted_at,
+                        board.expires_at,
+                        formatDeadline,
+                      )}
                     </p>
                     <p className="mt-2 text-neutral-400 text-sm">
                       {board.owner_is_valid

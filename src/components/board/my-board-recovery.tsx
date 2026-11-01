@@ -4,6 +4,7 @@ import { IconRefresh } from "@tabler/icons-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { formatBoardRecoveryDates } from "@/lib/board-recovery-flow";
 import {
   BoardRecoveryError,
   type RecoverableBoard,
@@ -110,8 +111,12 @@ export function MyBoardRecovery({
               <div className="min-w-0">
                 <p className="truncate font-medium">{board.name}</p>
                 <p className="mt-1 text-neutral-500 text-xs">
-                  /{board.slug} · Recuperable hasta{" "}
-                  {formatDeadline(board.expires_at)}
+                  /{board.slug} ·{" "}
+                  {formatBoardRecoveryDates(
+                    board.deleted_at,
+                    board.expires_at,
+                    formatDeadline,
+                  )}
                 </p>
               </div>
               <Button

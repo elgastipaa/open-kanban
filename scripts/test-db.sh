@@ -1256,6 +1256,234 @@ echo 'PASS: a board tombstone that wins the lock blocks a waiting task edit.'
 
 "${psql[@]}" -q -c 'DROP TABLE public.issue18_board_recovery_race_fixture'
 
+# Invitation wrappers must lock the board before checking ownership. A delete
+# that wins the row lock commits its tombstone before waiting create/list calls
+# revalidate; if a create wins, deletion waits and revokes the new invitation.
+issue18_invitation_race_dir="$test_dir/issue18-invitation-wrapper-race"
+mkdir -- "$issue18_invitation_race_dir"
+issue18_delete_first_lock_log="$issue18_invitation_race_dir/delete-first-lock.log"
+issue18_delete_first_create_log="$issue18_invitation_race_dir/delete-first-create.log"
+issue18_delete_first_list_log="$issue18_invitation_race_dir/delete-first-list.log"
+issue18_create_first_log="$issue18_invitation_race_dir/create-first.log"
+issue18_create_first_delete_log="$issue18_invitation_race_dir/create-first-delete.log"
+
+IFS='|' read -r issue18_delete_first_board_id issue18_delete_first_slug \
+  issue18_delete_first_owner_id issue18_delete_first_operation_id < <(
+  "${psql[@]}" -AtF '|' -c "SELECT board_id, board_slug, owner_id, delete_operation_id FROM public.issue18_board_invitation_race_fixture WHERE scenario = 'delete_first'"
+)
+IFS='|' read -r issue18_create_first_board_id issue18_create_first_slug \
+  issue18_create_first_owner_id issue18_create_first_operation_id < <(
+  "${psql[@]}" -AtF '|' -c "SELECT board_id, board_slug, owner_id, delete_operation_id FROM public.issue18_board_invitation_race_fixture WHERE scenario = 'create_first'"
+)
+
+PGAPPNAME=openkanban_issue18_invitation_delete_first "${psql[@]}" -qAt \
+  -v board_id="$issue18_delete_first_board_id" \
+  -v board_slug="$issue18_delete_first_slug" \
+  -v owner_id="$issue18_delete_first_owner_id" \
+  -v operation_id="$issue18_delete_first_operation_id" \
+  > "$issue18_delete_first_lock_log" 2>&1 <<'SQL' &
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', :'owner_id', true);
+SELECT public.delete_board_p(:'operation_id'::uuid, :'board_slug', :'board_id'::uuid)->>'status';
+SELECT pg_sleep(8);
+COMMIT;
+SQL
+issue18_delete_first_pid=$!
+issue18_delete_first_holds_lock=false
+for _ in $(seq 1 100); do
+  issue18_delete_first_state=$("${psql[@]}" -At -c "SELECT state FROM pg_stat_activity WHERE application_name = 'openkanban_issue18_invitation_delete_first' AND state = 'active' AND query LIKE '%pg_sleep(8)%'")
+  if [[ "$issue18_delete_first_state" == active ]]; then
+    issue18_delete_first_holds_lock=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$issue18_delete_first_holds_lock" != true ]]; then
+  cat -- "$issue18_delete_first_lock_log" >&2
+  echo 'The delete-first invitation race did not hold the board lock.' >&2
+  exit 1
+fi
+
+PGAPPNAME=openkanban_issue18_invitation_create_waiting "${psql[@]}" -qAt \
+  -v board_slug="$issue18_delete_first_slug" \
+  -v owner_id="$issue18_delete_first_owner_id" \
+  > "$issue18_delete_first_create_log" 2>&1 <<'SQL' &
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', :'owner_id', true);
+SELECT set_config('test.board_slug', :'board_slug', true);
+DO $$
+DECLARE
+  v_denied boolean := false;
+BEGIN
+  BEGIN
+    PERFORM public.create_direct_board_invitation_p(
+      current_setting('test.board_slug'), 'revocation-user@example.test'
+    );
+  EXCEPTION WHEN SQLSTATE '42501' THEN
+    v_denied := true;
+  END;
+  IF NOT v_denied THEN
+    RAISE EXCEPTION 'A create waiting behind deletion was not denied after tombstone commit';
+  END IF;
+END;
+$$;
+COMMIT;
+SQL
+issue18_delete_first_create_pid=$!
+
+PGAPPNAME=openkanban_issue18_invitation_list_waiting "${psql[@]}" -qAt \
+  -v board_slug="$issue18_delete_first_slug" \
+  -v owner_id="$issue18_delete_first_owner_id" \
+  > "$issue18_delete_first_list_log" 2>&1 <<'SQL' &
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', :'owner_id', true);
+SELECT set_config('test.board_slug', :'board_slug', true);
+DO $$
+DECLARE
+  v_count integer;
+  v_denied boolean := false;
+BEGIN
+  BEGIN
+    SELECT count(*) INTO v_count
+    FROM public.list_board_invitations_p(current_setting('test.board_slug'));
+  EXCEPTION WHEN SQLSTATE '42501' THEN
+    v_denied := true;
+  END;
+  IF NOT v_denied THEN
+    RAISE EXCEPTION 'A list waiting behind deletion exposed % invitation rows after tombstone commit', v_count;
+  END IF;
+END;
+$$;
+COMMIT;
+SQL
+issue18_delete_first_list_pid=$!
+
+issue18_delete_first_waiting=false
+for _ in $(seq 1 100); do
+  issue18_delete_first_waiters=$("${psql[@]}" -At -c "SELECT count(*) FROM pg_stat_activity WHERE application_name IN ('openkanban_issue18_invitation_create_waiting', 'openkanban_issue18_invitation_list_waiting') AND wait_event_type = 'Lock'")
+  if [[ "$issue18_delete_first_waiters" == 2 ]]; then
+    issue18_delete_first_waiting=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$issue18_delete_first_waiting" != true ]]; then
+  cat -- "$issue18_delete_first_create_log" "$issue18_delete_first_list_log" >&2
+  echo 'Invitation create/list did not both wait for the delete-first board lock.' >&2
+  "${psql[@]}" -q -c "SELECT pg_cancel_backend(pid) FROM pg_stat_activity WHERE application_name = 'openkanban_issue18_invitation_delete_first'" >/dev/null
+  wait "$issue18_delete_first_pid" || true
+  wait "$issue18_delete_first_create_pid" || true
+  wait "$issue18_delete_first_list_pid" || true
+  exit 1
+fi
+wait "$issue18_delete_first_pid" || { cat -- "$issue18_delete_first_lock_log" >&2; exit 1; }
+wait "$issue18_delete_first_create_pid" || { cat -- "$issue18_delete_first_create_log" >&2; exit 1; }
+wait "$issue18_delete_first_list_pid" || { cat -- "$issue18_delete_first_list_log" >&2; exit 1; }
+issue18_delete_first_final=$("${psql[@]}" -At -v board_id="$issue18_delete_first_board_id" <<'SQL'
+SELECT CASE WHEN EXISTS (
+  SELECT 1 FROM public.board_recoverable_deletions AS recovery
+  WHERE recovery.board_id = :'board_id'::uuid
+) AND NOT EXISTS (
+  SELECT 1 FROM public.board_invitations AS invitation
+  WHERE invitation.board_id = :'board_id'::uuid AND invitation.status = 'pending'
+) THEN 'valid' ELSE 'invalid' END;
+SQL
+)
+if [[ "$issue18_delete_first_final" != valid ]]; then
+  echo 'Delete-first wrapper race left a pending invitation or lost its tombstone.' >&2
+  exit 1
+fi
+echo 'PASS: invitation create/list wait behind a board delete and are denied after its tombstone commits.'
+
+PGAPPNAME=openkanban_issue18_invitation_create_first "${psql[@]}" -qAt \
+  -v board_slug="$issue18_create_first_slug" \
+  -v owner_id="$issue18_create_first_owner_id" \
+  > "$issue18_create_first_log" 2>&1 <<'SQL' &
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', :'owner_id', true);
+SELECT public.create_direct_board_invitation_p(
+  :'board_slug', 'revocation-user@example.test'
+)->>'status';
+SELECT pg_sleep(8);
+COMMIT;
+SQL
+issue18_create_first_pid=$!
+issue18_create_first_holds_lock=false
+for _ in $(seq 1 100); do
+  issue18_create_first_state=$("${psql[@]}" -At -c "SELECT state FROM pg_stat_activity WHERE application_name = 'openkanban_issue18_invitation_create_first' AND state = 'active' AND query LIKE '%pg_sleep(8)%'")
+  if [[ "$issue18_create_first_state" == active ]]; then
+    issue18_create_first_holds_lock=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$issue18_create_first_holds_lock" != true ]]; then
+  cat -- "$issue18_create_first_log" >&2
+  echo 'The create-first invitation race did not hold the board lock.' >&2
+  exit 1
+fi
+
+PGAPPNAME=openkanban_issue18_invitation_delete_waiting "${psql[@]}" -qAt \
+  -v board_id="$issue18_create_first_board_id" \
+  -v board_slug="$issue18_create_first_slug" \
+  -v owner_id="$issue18_create_first_owner_id" \
+  -v operation_id="$issue18_create_first_operation_id" \
+  > "$issue18_create_first_delete_log" 2>&1 <<'SQL' &
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', :'owner_id', true);
+SELECT public.delete_board_p(:'operation_id'::uuid, :'board_slug', :'board_id'::uuid)->>'status';
+COMMIT;
+SQL
+issue18_create_first_delete_pid=$!
+issue18_create_first_delete_waits=false
+for _ in $(seq 1 100); do
+  issue18_create_first_delete_waiters=$("${psql[@]}" -At -c "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'openkanban_issue18_invitation_delete_waiting' AND wait_event_type = 'Lock'")
+  if [[ "$issue18_create_first_delete_waiters" == 1 ]]; then
+    issue18_create_first_delete_waits=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$issue18_create_first_delete_waits" != true ]]; then
+  cat -- "$issue18_create_first_delete_log" >&2
+  echo 'The delete did not wait for the create-first board lock.' >&2
+  "${psql[@]}" -q -c "SELECT pg_cancel_backend(pid) FROM pg_stat_activity WHERE application_name = 'openkanban_issue18_invitation_create_first'" >/dev/null
+  wait "$issue18_create_first_pid" || true
+  wait "$issue18_create_first_delete_pid" || true
+  exit 1
+fi
+wait "$issue18_create_first_pid" || { cat -- "$issue18_create_first_log" >&2; exit 1; }
+wait "$issue18_create_first_delete_pid" || { cat -- "$issue18_create_first_delete_log" >&2; exit 1; }
+if ! grep -Fxq 'created' "$issue18_create_first_log" \
+  || ! grep -Fxq 'recoverable' "$issue18_create_first_delete_log"; then
+  echo 'Create-first invitation race did not finish in the expected order.' >&2
+  cat -- "$issue18_create_first_log" "$issue18_create_first_delete_log" >&2
+  exit 1
+fi
+issue18_create_first_final=$("${psql[@]}" -At -v board_id="$issue18_create_first_board_id" <<'SQL'
+SELECT CASE WHEN EXISTS (
+  SELECT 1 FROM public.board_recoverable_deletions AS recovery
+  WHERE recovery.board_id = :'board_id'::uuid
+) AND (
+  SELECT count(*) FROM public.board_invitations AS invitation
+  WHERE invitation.board_id = :'board_id'::uuid AND invitation.status = 'revoked'
+) = 1 AND NOT EXISTS (
+  SELECT 1 FROM public.board_invitations AS invitation
+  WHERE invitation.board_id = :'board_id'::uuid AND invitation.status = 'pending'
+) THEN 'valid' ELSE 'invalid' END;
+SQL
+)
+if [[ "$issue18_create_first_final" != valid ]]; then
+  echo 'The delete after a committed create did not revoke its invitation.' >&2
+  exit 1
+fi
+echo 'PASS: an invitation create that wins the board lock commits before delete and is then revoked.'
+
 restore_wins_first_log="$restore_wins_dir/restorer.log"
 restore_wins_second_log="$restore_wins_dir/purger.log"
 PGAPPNAME=openkanban_issue14_restore_wins_restorer "${psql[@]}" -qAt \

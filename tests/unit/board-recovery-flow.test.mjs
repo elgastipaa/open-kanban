@@ -2,8 +2,20 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   adminMayResolveBoardRecovery,
+  formatBoardRecoveryDates,
   prepareBoardRestoreCommand,
 } from "../../src/lib/board-recovery-flow.ts";
+
+test("recovery metadata shows both deletion time and exact expiry", () => {
+  assert.equal(
+    formatBoardRecoveryDates(
+      "deleted-at",
+      "expires-at",
+      (value) => `formatted ${value}`,
+    ),
+    "Borrado el formatted deleted-at · Recuperable hasta formatted expires-at",
+  );
+});
 
 test("an administrator cannot restore while the current enabled owner is valid", () => {
   assert.equal(adminMayResolveBoardRecovery(true), false);

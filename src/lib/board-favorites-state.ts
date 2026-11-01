@@ -19,6 +19,17 @@ export function updateFavoriteIds(
   return updated;
 }
 
+export function updatePendingFavoriteIds(
+  current: ReadonlySet<string>,
+  boardId: string,
+  isPending: boolean,
+): Set<string> {
+  const updated = new Set(current);
+  if (isPending) updated.add(boardId);
+  else updated.delete(boardId);
+  return updated;
+}
+
 export function boardFavoriteFailureMessage(error: unknown): string {
   if (
     error instanceof Error &&

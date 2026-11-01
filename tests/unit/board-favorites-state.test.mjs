@@ -4,6 +4,7 @@ import {
   boardFavoriteFailureMessage,
   groupFavoriteBoards,
   updateFavoriteIds,
+  updatePendingFavoriteIds,
 } from "../../src/lib/board-favorites-state.ts";
 import { BoardFavoriteError } from "../../src/lib/db/board-favorites.ts";
 
@@ -36,6 +37,17 @@ test("a desired favorite state can be applied repeatedly without inversion", () 
   assert.deepEqual([...setFavorite].sort(), ["board-a", "board-b"]);
   assert.deepEqual([...retry].sort(), ["board-a", "board-b"]);
   assert.deepEqual([...remove], ["board-a"]);
+});
+
+test("one pending favorite blocks only the same board and preserves other operations", () => {
+  const first = updatePendingFavoriteIds(new Set(), "board-a", true);
+  const both = updatePendingFavoriteIds(first, "board-b", true);
+  const afterFirstCompletes = updatePendingFavoriteIds(both, "board-a", false);
+
+  assert.deepEqual([...first], ["board-a"]);
+  assert.deepEqual([...both].sort(), ["board-a", "board-b"]);
+  assert.deepEqual([...afterFirstCompletes], ["board-b"]);
+  assert.deepEqual([...first], ["board-a"]);
 });
 
 test("favorite failures stay clear and do not reveal revoked board names", () => {

@@ -7,6 +7,7 @@ import {
   boardFavoriteFailureMessage,
   groupFavoriteBoards,
   updateFavoriteIds,
+  updatePendingFavoriteIds,
 } from "@/lib/board-favorites-state";
 import { setBoardFavorite } from "@/lib/db/board-favorites";
 import { createClient } from "@/lib/supabase/client";
@@ -26,11 +27,13 @@ export function BoardFavoritesList({
   favoritesLoadError,
 }: BoardFavoritesListProps) {
   const router = useRouter();
-  const pendingBoardId = useRef<string | null>(null);
+  const pendingBoardIdsRef = useRef(new Set<string>());
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(
     () => new Set(favoriteBoardIds),
   );
-  const [pending, setPending] = useState(false);
+  const [pendingBoardIds, setPendingBoardIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [mutationError, setMutationError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -38,11 +41,16 @@ export function BoardFavoritesList({
   }, [favoriteBoardIds]);
 
   async function toggleFavorite(boardId: string) {
-    if (pendingBoardId.current || favoritesLoadError) return;
+    if (pendingBoardIdsRef.current.has(boardId) || favoritesLoadError) return;
 
     const nextValue = !favoriteIds.has(boardId);
-    pendingBoardId.current = boardId;
-    setPending(true);
+    const pending = updatePendingFavoriteIds(
+      pendingBoardIdsRef.current,
+      boardId,
+      true,
+    );
+    pendingBoardIdsRef.current = pending;
+    setPendingBoardIds(pending);
     setMutationError(null);
 
     try {
@@ -50,13 +58,17 @@ export function BoardFavoritesList({
       setFavoriteIds((current) =>
         updateFavoriteIds(current, boardId, nextValue),
       );
-      router.refresh();
     } catch (error) {
       setMutationError(boardFavoriteFailureMessage(error));
       router.refresh();
     } finally {
-      pendingBoardId.current = null;
-      setPending(false);
+      const remaining = updatePendingFavoriteIds(
+        pendingBoardIdsRef.current,
+        boardId,
+        false,
+      );
+      pendingBoardIdsRef.current = remaining;
+      setPendingBoardIds(remaining);
     }
   }
 
@@ -95,6 +107,7 @@ export function BoardFavoritesList({
   const otherBoards = favoritesLoadError ? boards : others;
 
   function boardCard(board: Board, isFavorite: boolean) {
+    const isPending = pendingBoardIds.has(board.id);
     return (
       <li key={board.id}>
         <div className="flex min-h-24 items-center gap-3 rounded-2xl border border-white/10 bg-neutral-950 p-5 transition hover:border-white/25 hover:bg-neutral-900">
@@ -106,15 +119,15 @@ export function BoardFavoritesList({
           </Link>
           {favoritesLoadError ? null : (
             <button
-              aria-busy={pending}
+              aria-busy={isPending}
+              aria-disabled={isPending}
               aria-label={
                 isFavorite
                   ? `Quitar ${board.name} de favoritos`
                   : `Marcar ${board.name} como favorito`
               }
               aria-pressed={isFavorite}
-              className="grid size-11 shrink-0 place-items-center rounded-full text-2xl text-amber-300 transition hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-amber-300 focus-visible:outline-offset-2 disabled:cursor-wait disabled:opacity-60"
-              disabled={pending}
+              className="grid size-11 shrink-0 place-items-center rounded-full text-2xl text-amber-300 transition hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-amber-300 focus-visible:outline-offset-2 aria-disabled:cursor-wait aria-disabled:opacity-60"
               onClick={() => void toggleFavorite(board.id)}
               type="button"
             >

@@ -79,18 +79,16 @@ export default async function HomePage() {
     );
   }
 
-  const { data: boardsData, error: boardsError } =
-    await supabase.rpc("list_my_boards");
+  const boardsPromise = supabase.rpc("list_my_boards");
+  const favoritesPromise = listMyBoardFavoriteIds(supabase).then(
+    (ids) => ({ ids, error: false }),
+    () => ({ ids: [], error: true }),
+  );
+  const [
+    { data: boardsData, error: boardsError },
+    { ids: favoriteBoardIds, error: favoritesLoadError },
+  ] = await Promise.all([boardsPromise, favoritesPromise]);
   const boards = (boardsData ?? []) as Board[];
-  let favoriteBoardIds: string[] = [];
-  let favoritesLoadError = false;
-  if (!boardsError) {
-    try {
-      favoriteBoardIds = await listMyBoardFavoriteIds(supabase);
-    } catch {
-      favoritesLoadError = true;
-    }
-  }
   let invitations: PendingBoardInvitation[] = [];
   let invitationsLoadError = false;
   let recoverableBoards: Awaited<ReturnType<typeof listMyRecoverableBoards>> =

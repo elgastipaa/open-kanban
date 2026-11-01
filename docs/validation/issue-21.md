@@ -21,7 +21,7 @@ La UI añade una estrella por tablero y una sección personal «Favoritos» dent
 - Worktree aislado `C:\Users\gasto\.codex\worktrees\openkanban-issue-21\open-kanban`, rama `codex/issue-21`; no se leyó `.env.local` ni se conectó un proyecto remoto.
 - Node.js `v24.14.1`, pnpm `11.3.0`, Next.js `16.4.2`, PostgreSQL `16.15`.
 - `corepack pnpm test:db` — PASS; clúster PostgreSQL local descartable de `scripts/test-db.sh`, creado bajo `/tmp`, sin `DATABASE_URL`/`PGHOST`; migraciones 001–038 y pruebas de regresión/concurrencia completas. El fixture nuevo usa UUIDs sintéticos y cuentas `@example.test`; no usa sesiones Google.
-- `corepack pnpm test:unit` — PASS; 152 pruebas, 0 fallidas.
+- `corepack pnpm test:unit` — PASS; 153 pruebas, 0 fallidas.
 - `corepack pnpm exec next typegen` — PASS.
 - `corepack pnpm typecheck` — PASS.
 - `corepack pnpm build --webpack` — PASS con Next.js 16.4.2; variables sintéticas solo de build apuntando a `127.0.0.1`, no usadas para acceder a servicios.

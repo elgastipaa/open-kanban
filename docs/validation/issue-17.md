@@ -8,7 +8,7 @@ Fecha de verificación: `2026-11-01`.
 
 - Rama aislada: `codex/issue-17`.
 - Base y merge-base verificados: `120f1ab6f017f856e0934837235a72f734d849ca`.
-- Kickoff registrado: [issue comment 6555760179](https://github.com/elgastipaa/open-kanban/issues/17#issuecomment-6555760179). El issue y sus etiquetas/dependencias no se editaron.
+- Kickoff registrado: [issue comment 6555760179](https://github.com/elgastipaa/open-kanban/issues/17#issuecomment-6555760179). Ese comentario inicial no cambió el issue; después de publicar la entrega, se agregó la evidencia indicada en el apartado de integración y se cambió la etiqueta a `ready-for-human`. Las dependencias se conservaron.
 - Se conservan los blockers #12/#13/#16. Siguen OPEN/ready-for-human; el trabajo local con claims y usuarios sintéticos no constituye aceptación de sus entregas ni de #17.
 - Referencias aplicadas: CF-02/03, C-69/71/80/81/94/95/98; MVP §4.4–4.6; UI-12/UI-15/NAV-05; B-18/B-19/A-02/A-03/A-04/A-06/MP-04 y documentos de errores/sucesión. No se cambiaron contratos.
 - El camino de resolución administrativa global de tableros (resumen, sucesor o recuperación) queda en #19. Esta entrega no agrega consola global ni vuelve lector a un admin. #18 conserva la restauración completa y la elección del nuevo owner al restaurar; #17 solo registra y protege el estado recuperable del último owner.
@@ -61,3 +61,10 @@ Código revisado: `de55379e2f0e88db7131c1226b88977a34d6d3f6`, con base fija y me
 - **Spec:** sin scope creep. La retirada de colaboradores por el propietario cubre UI-12. Siguen parciales la gestión administrativa de propiedad (issue #19), avisos y asignaciones predeterminadas de series cuando existan, y la aceptación visual/accesible/Auth manual; por ello #17 queda abierto.
 - **Standards:** sin infracciones hard. Se aceptan dos observaciones heurísticas de bajo impacto: los wrappers `createBoardDepartureSubmissionGate` y `createBoardMemberRemovalSubmissionGate` conservan una API de dominio para cada flujo sobre el guard genérico compartido; los dos bloques de carrera DB mantienen setup, sincronización y limpieza explícitos porque sus actores, interleavings y aserciones difieren. La duplicación de render del diálogo se corrigió antes de la revisión final.
 - El commit que registra esta sección es solo documentación: no altera el código ni los resultados de prueba del HEAD revisado.
+
+## Integración y publicación
+
+- Código y evidencia quedaron integrados por fast-forward en `codex/openkanban-1-0` y publicados por push ordinario en `dcdb3ed08a77469676c4412bf5ab133e8baf4655`. La rama de trabajo `codex/issue-17` quedó publicada en `7e8862cc69cd1bbc3973b846c4fce848ad87ab65`.
+- GitHub #17 está OPEN/`ready-for-human`, asignado a `elgastipaa`; la evidencia de integración se comentó en [issue comment 6556799706](https://github.com/elgastipaa/open-kanban/issues/17#issuecomment-6556799706). Los blockers #12/#13/#16 siguen OPEN/`ready-for-human` y sus relaciones `Blocked by` no se modificaron.
+- La PR acumulada [#54](https://github.com/elgastipaa/open-kanban/pull/54) permanece OPEN/draft, con base `main`, head `codex/openkanban-1-0` y título «OpenKanban 1.0 — implementación progresiva (#3–#17)»; su body incluye el resumen y evidencia de #17.
+- La referencia remota de `main` sigue en `46c94139bac67aaca1d491b29afc3bc999fc288f`. No hubo merge a `main`, SQL remoto ni despliegue. El siguiente trabajo autorizado se registra en el checkpoint LP-0.2 y no altera los bloqueos humanos de #17.

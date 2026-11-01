@@ -15,6 +15,7 @@ Fecha de validación local: `2026-11-01`.
 - Follow-up de UI-14 y carreras de invitaciones: `7158f0f9441726bfc15dbc57592ba79495f38667` (`fix: serialize recovery invitation access (#18)`).
 - Retry de restore de columna: `826ebaff3034b904e2aae5e447e3c715997db769` (`fix: replay confirmed column restore receipts (#18)`).
 - Retry de borrado de columna y límite de última columna: `bb1597d8ed9fb4387e570b9bcf218b8e4934dab8` (`fix: reconcile column deletion retries and last column UI (#18)`).
+- Mensaje de borrado de columna por resultado real: `f17d040d937bb42c18271b8fcfc6cfa1bc9259b8` (`fix: report actual column deletion result in toast (#18)`).
 - Este documento se actualiza en un commit separado sobre el código final.
 - El issue #18 continúa asignado a `elgastipaa`, con el kickoff existente `6556830777`. Se conservaron `Blocked by #9`, `#14` y `#17`; siguen abiertos/ready-for-human y no se cerraron ni editaron. No se declara QA humana.
 - Referencias: issue #18; C-76, C-94 y C-98; R-02/R-03; P21; C110-AC54; UI-14; CF-01/CF-12 y acuerdos de Estados y errores.
@@ -27,6 +28,7 @@ Fecha de validación local: `2026-11-01`.
 | --- | --- | --- |
 | Borrar una columna con tareas requiere preview vigente y destino explícito del mismo tablero. | `preview_delete_column_p` entrega tarea activa, versión y destinos elegibles. La RPC valida versión, pertenencia del destino y lock de tablero; mueve las tareas y registra snapshot/eliminación en una sola transacción. La UI desktop/móvil comparte diálogo, cancelación sin RPC, estados de carga/error y reintento con la misma operación. | `tests/db/board_column_recovery.sql` y `tests/unit/column-deletion-flow.test.mjs`: pasan. |
 | CF-11: no se borra la última columna si aún no hay un destino. | El preview sin destinos produce `no_destination` tanto para columna vacía como con tareas: no se genera comando, no se muestra selector vacío ni se ofrece eliminar/reintentar. Se indica agregar otra columna; si hay tareas, trasladarlas allí antes del borrado; Cancelar deja la columna existente. El backend conserva el conflicto al borrar la última columna. | Pruebas unitarias del flow verifican ambas situaciones, copy contextual y ausencia de comando. UI visual/manual pendiente. |
+| CF-11 §D: el toast describe lo que ocurrió al borrar una columna. | El texto distingue cero tareas trasladadas, una tarea y varias, y conserva el vencimiento exacto localizado. Para resultado sin conteo no afirma que se movieron tareas. | RED→GREEN en `tests/unit/column-deletion-flow.test.mjs`; UI visual/manual pendiente. |
 | C-95/EE-01/P18: retry de borrado confirmado reconcilia resultado original sin duplicar el traslado. | La RPC valida miembro vigente y tombstone bajo lock del tablero antes de consultar el receipt por actor/operation ID/hash. `result_payload` conserva la respuesta completa —incluidos `moved_task_count` y `expires_at`— para replay incluso si la columna se restaura después. Payload distinto con la misma clave se rechaza con `23514`. | `tests/db/board_column_recovery.sql`: respuesta original, misma clave/conteo/vencimiento, cantidad de tareas sin cambio y colisión de payload. RED→GREEN en PostgreSQL desechable. |
 | Restaurar columna recupera solo la columna; no devuelve tareas trasladadas. | Snapshot y ledger conservan causa, actor, deadline y cantidad trasladada. Restore vuelve a comprobar acceso, generación y plazo; tareas ya trasladadas siguen en destino. Hija borrada aparte mantiene su propia ventana/snapshot. | DB cubre traslado atómico, restore sin traslado inverso e hijo borrado aparte. Pasan. |
 | C-95/P18: un retry tras restore confirmado reconcilia el mismo resultado. | El recibo se consulta bajo lock del tablero y tras validar identidad, membresía vigente y ausencia de tombstone, incluso si el restore exitoso ya eliminó `column_deletions`. El mismo actor/operation ID/board/column devuelve `confirmed`; una carga distinta con la misma clave sigue fallando `23514`. | `tests/db/board_column_recovery.sql`: retry devuelve `confirmed` y queda una sola columna; payload/columna cambiados se rechazan. RED→GREEN en PostgreSQL desechable. |
@@ -72,6 +74,10 @@ La review Spec encontró el mismo orden incorrecto en `delete_column_internal_p`
 
 Para CF-11, el flow unitario salió RED en ambas condiciones sin destinos: la columna vacía daba `ready` y la columna con tareas daba `needs_destination` en vez de bloquear el intento. Tras añadir `no_destination`, ambas producen comando `null`. La prueba de copy salió RED por export inexistente; quedó GREEN con texto distinto para última columna vacía y con tareas. El diálogo usa un `<output aria-live="polite">` y solo conserva Cancelar; no crea una columna automáticamente, no muestra una lista vacía ni ofrece un retry imposible. El conflicto de última columna en la RPC sigue siendo el respaldo de servidor.
 
+### Mensaje de éxito de borrado de columna
+
+La revisión Spec encontró que el toast de `onDeleted` afirmaba que las tareas quedaron en el destino aun cuando `moved_task_count` era cero. En el seam existente `column-deletion-flow.test.mjs`, el caso RED falló porque `columnDeletionSuccessMessage` aún no estaba exportado. El helper GREEN ahora expresa explícitamente que no hubo traslados para cero; usa singular para una y plural para varias. Conserva el vencimiento exacto recibido y localizado con la zona horaria del tablero en el callsite. No se añadió infraestructura de prueba.
+
 ## Ejecución reproducible
 
 Entorno observado: Windows con WSL Ubuntu 24.04 para PostgreSQL; Node `v24.14.1`, pnpm `11.25.0`, Next.js `16.4.2`, Biome `2.2.0`, PostgreSQL `16.15`. `scripts/test-db.sh` crea un cluster desechable bajo `/tmp`, aplica las migraciones `001–035` y lo elimina al terminar. El test usa actores, roles y claims UUID sintéticos. No se usaron OAuth real, datos/cuentas/secretos reales, `.env`, servicios remotos ni producción. No hubo cambio de lockfile.
@@ -83,14 +89,16 @@ Entorno observado: Windows con WSL Ubuntu 24.04 para PostgreSQL; Node `v24.14.1`
 | `pnpm test:db` final con locks de invitación | Exit 0 | Rerun completo 001–033; incluye dos carreras PostgreSQL reales y la eliminación que revoca una invitación creada primero. Salida final: `Database regression tests passed (disposable PostgreSQL).` |
 | `pnpm test:db` después de agregar migration 034 | Primer intento: Exit 1; rerun: Exit 0 | El primer intento pasó el test nuevo de restore, pero falló luego en el detector temporal existente de board delete/edit (`The board deleter did not acquire the board lock` tras reportar `recoverable`). El rerun sin cambios pasó 001–034, incluidas la regresión de receipt, colisión `23514`, carreras de board/invitaciones y las suites anteriores. Salida final: `Database regression tests passed (disposable PostgreSQL).` |
 | `pnpm test:db` final con migration 035 | Exit 0 | Repetición completa desde 001 hasta 035. Pasa replay de delete original, payload `23514`, retries de restore y carreras de board/invitaciones. Salida final: `Database regression tests passed (disposable PostgreSQL).` |
-| `pnpm test:unit` | Exit 0, 124/124 | Incluye ambos estados `no_destination` y mensajes para última columna vacía/con tareas, además de flujos de recovery e importación. |
+| `pnpm test:unit` | Exit 0, 125/125 | Repetido tras el cambio de toast. Incluye ambos estados `no_destination`, mensajes para última columna vacía/con tareas y cero/una/varias tareas trasladadas conservando el vencimiento, además de flujos de recovery e importación. |
 | `pnpm exec next typegen` | Exit 0 | Tipos de rutas Next generados antes de typecheck. |
-| `pnpm typecheck` | Exit 0 | `tsc --noEmit` tras migration 035 y cambios de flow/UI. |
-| `pnpm build` | Exit 0 | Next.js 16.4.2 compiló, terminó TypeScript, generó 13 páginas y finalizó optimización tras los cambios de UI/DB. |
+| `pnpm typecheck` | Exit 0 | `tsc --noEmit` tras migration 035 y cambio del mensaje de éxito en flow/UI. |
+| `pnpm build` | Exit 0 | Next.js 16.4.2 compiló, terminó TypeScript, generó 13 páginas y finalizó optimización incluyendo el cambio del toast. |
 | `pnpm exec biome check --write` dirigido | Exit 0 | Se ejecutó sobre las 22 rutas TS/TSX/MJS/JSON modificadas detectadas desde la base; Biome reportó `Checked 22 files in 51ms. Fixed 21 files.` Incluyó `package.json`. El diff resultante solo altera orden de imports y formato. |
 | `pnpm exec biome check` dirigido, sin `--write` | Exit 0 | Las 22 rutas de código soportadas modificadas desde la base: `Checked 22 files in 28ms. No fixes applied.` Las rutas SQL de esta auditoría no son tipos que Biome procese; se validaron con la suite DB. |
 | `pnpm exec biome check --write` en los tres archivos UI/flow/test nuevos | Exit 0 | Biome aplicó el formato local y pidió usar el elemento semántico `<output>` para el estado accesible. |
 | `pnpm exec biome check` dirigido en los tres archivos UI/flow/test | Exit 0 | `Checked 3 files in 12ms. No fixes applied.` |
+| `pnpm exec biome check --write` en board, helper de borrado y test unitario | Exit 0 | Revisó los tres archivos modificados; corrigió únicamente el orden de imports. |
+| `pnpm exec biome check` dirigido en board, helper de borrado y test unitario | Exit 0 | Exit 0, `Checked 3 files`; no fixes aplicados. |
 | `pnpm lint` | Exit 1 | Repetido después del formato dirigido, sin fixes: `biome check` reportó 144 diagnósticos en 166 archivos, incluidos cambios de formato/CRLF repo-wide. No se aplicaron fixes automáticos globales; el check dirigido pasa. |
 | `bash -n scripts/test-db.sh` | Exit 0 | Sintaxis del runner con ambas carreras de invitación. |
 | `git diff --check` | Exit 0 | Ejecutado sobre el follow-up y contra la base fija. |
@@ -103,6 +111,7 @@ El chequeo Biome dirigido abarcó: `src/app/admin/access/page.tsx`, `src/app/pag
 - Board recovery UI: el test unitario del helper comenzó RED con módulo/export inexistente; tras añadir `board-recovery-flow.ts`, los casos de owner válido, selección ownerless e idempotencia/reintento pasan dentro de `pnpm test:unit`.
 - Column deletion UI: el helper `column-deletion-flow.ts` se añadió desde casos RED para preview pendiente, destino del mismo tablero, cancelación y retry. Los casos pasan en `pnpm test:unit`.
 - C110-AC54: los nuevos asserts de colaborador se ejecutaron primero RED al intentar borrar la única columna del tablero; al corregir el fixture para conservar una columna vigente, colaborador retirado queda denegado y miembro actual restaura con éxito en la suite final.
+- Toast de borrado: RED porque faltaba `columnDeletionSuccessMessage` en el seam de flow existente; GREEN para conteo cero, singular y plural, con verificación del mismo vencimiento localizado. Suite unitaria completa: 125/125.
 
 ## Pendientes y límites explícitos
 

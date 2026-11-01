@@ -57,7 +57,7 @@ El smoke firma tokens solo para los dos IDs sintéticos del fixture con el secre
 - `node tests/realtime/epoch-smoke.mjs` — PASS; WebSocket privado local real, intento de broadcast directo, canal público suscrito, señal previa, refetch denegado y ausencia de publicación posterior en el tema anterior.
 - `corepack pnpm build` — PASS con Next.js 16.4.2 y variables locales del stack.
 - `corepack pnpm typecheck` — PASS después de `corepack pnpm exec next typegen`, que genera el `next-env.d.ts` ignorado requerido para los imports de imagen.
-- `corepack pnpm exec biome check --formatter-enabled=false` sobre los archivos TS/JS/JSON del slice — pendiente de rerun después del fix de borrador.
+- `corepack pnpm exec biome check --formatter-enabled=false` sobre los 7 archivos TS/JS/JSON del slice — PASS.
 - `corepack pnpm lint` — FAIL global con 171 diagnósticos de formato en 171 archivos por finales de línea CRLF del checkout. No se reformateó el repositorio; el slice modificado pasa Biome.
 
 ## Pendientes humanos y límites

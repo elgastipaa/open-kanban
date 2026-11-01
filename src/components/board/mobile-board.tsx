@@ -106,10 +106,6 @@ export function MobileBoard({
   function handleDeleteColumn() {
     if (!activeColumn) return;
     onRequestDeleteColumn(activeColumn.id);
-    // Navigate left if possible after deletion (handled after confirm)
-    if (safeIndex > 0) {
-      goTo(safeIndex - 1);
-    }
   }
 
   function handleMoveTaskToColumn(taskId: string, targetColumnId: string) {

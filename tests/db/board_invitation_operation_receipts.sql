@@ -246,7 +246,11 @@ $$;
 BEGIN;
 SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);
-SELECT public.delete_board_p(reference.board_slug, reference.board_id)
+SELECT public.delete_board_p(
+  'e1240000-0000-4000-8000-000000000020',
+  reference.board_slug,
+  reference.board_id
+)
 FROM pg_temp.issue12_invitation_operation_refs AS reference;
 COMMIT;
 

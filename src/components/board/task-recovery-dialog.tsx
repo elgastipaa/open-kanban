@@ -5,6 +5,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import {
+  ColumnRecoveryError,
+  type DeletedColumnRecoveryItem,
+  listDeletedColumns,
+  restoreColumn,
+} from "@/lib/db/columns";
+import {
   listDeletedTaskChecklistSteps,
   listDeletedTasks,
   restoreTask,
@@ -51,6 +57,10 @@ type TimedChecklistRecoveryItem = TaskChecklistRecoveryItem & {
   eligibilityRequestStartedAtMonotonic: number;
 };
 
+type TimedColumnRecoveryItem = DeletedColumnRecoveryItem & {
+  eligibilityRequestStartedAtMonotonic: number;
+};
+
 export function TaskRecoveryDialog({
   open,
   onClose,
@@ -63,12 +73,16 @@ export function TaskRecoveryDialog({
   const [checklistItems, setChecklistItems] = useState<
     TimedChecklistRecoveryItem[]
   >([]);
+  const [columnItems, setColumnItems] = useState<TimedColumnRecoveryItem[]>([]);
   const [selectedDestinations, setSelectedDestinations] = useState<
     Record<string, string>
   >({});
   const [isLoading, setIsLoading] = useState(false);
   const [restoringTaskId, setRestoringTaskId] = useState<string | null>(null);
   const [restoringStepId, setRestoringStepId] = useState<string | null>(null);
+  const [restoringColumnId, setRestoringColumnId] = useState<string | null>(
+    null,
+  );
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [monotonicNow, setMonotonicNow] = useState(0);
@@ -78,7 +92,7 @@ export function TaskRecoveryDialog({
   const listViewState = getTaskRecoveryListViewState({
     isLoading,
     hasError: Boolean(error),
-    itemCount: items.length + checklistItems.length,
+    itemCount: items.length + checklistItems.length + columnItems.length,
     hasCurrentEligibility,
   });
 
@@ -91,10 +105,12 @@ export function TaskRecoveryDialog({
     try {
       const client = createClient();
       const eligibilityRequestStartedAtMonotonic = performance.now();
-      const [listedItems, listedChecklistItems] = await Promise.all([
-        listDeletedTasks(client, slug),
-        listDeletedTaskChecklistSteps(client, slug),
-      ]);
+      const [listedItems, listedChecklistItems, listedColumns] =
+        await Promise.all([
+          listDeletedTasks(client, slug),
+          listDeletedTaskChecklistSteps(client, slug),
+          listDeletedColumns(client, slug),
+        ]);
       if (refreshId !== latestRefreshId.current) return;
       const eligibilityResponseReceivedAtMonotonic = performance.now();
       setItems(
@@ -109,6 +125,12 @@ export function TaskRecoveryDialog({
           eligibilityRequestStartedAtMonotonic,
         })),
       );
+      setColumnItems(
+        listedColumns.map((item) => ({
+          ...item,
+          eligibilityRequestStartedAtMonotonic,
+        })),
+      );
       setMonotonicNow(eligibilityResponseReceivedAtMonotonic);
       hasCurrentEligibilityRef.current = true;
       setHasCurrentEligibility(true);
@@ -116,12 +138,14 @@ export function TaskRecoveryDialog({
       if (refreshId !== latestRefreshId.current) return;
       const reason =
         loadError instanceof TaskRecoveryError ||
-        loadError instanceof TaskChecklistError
+        loadError instanceof TaskChecklistError ||
+        loadError instanceof ColumnRecoveryError
           ? loadError.reason
           : null;
       if (shouldClearTaskRecoveryItems(reason)) {
         setItems([]);
         setChecklistItems([]);
+        setColumnItems([]);
       }
       setError(taskRecoveryLoadErrorMessage(reason));
     } finally {
@@ -133,6 +157,7 @@ export function TaskRecoveryDialog({
     if (!open) return;
     setItems([]);
     setChecklistItems([]);
+    setColumnItems([]);
     setSelectedDestinations({});
     setError("");
     setMessage("");
@@ -162,10 +187,16 @@ export function TaskRecoveryDialog({
   }, [open, refresh]);
 
   useEffect(() => {
-    if (!open || (items.length === 0 && checklistItems.length === 0)) return;
+    if (
+      !open ||
+      (items.length === 0 &&
+        checklistItems.length === 0 &&
+        columnItems.length === 0)
+    )
+      return;
 
     const currentMonotonicTime = Math.max(performance.now(), monotonicNow);
-    const nextDeadline = [...items, ...checklistItems]
+    const nextDeadline = [...items, ...checklistItems, ...columnItems]
       .filter((item) => item.can_restore)
       .map((item) => {
         return getTaskRecoveryExpiryMonotonicTime(
@@ -188,7 +219,7 @@ export function TaskRecoveryDialog({
       Math.max(0, nextDeadline - currentMonotonicTime),
     );
     return () => window.clearTimeout(timer);
-  }, [checklistItems, items, monotonicNow, open]);
+  }, [checklistItems, columnItems, items, monotonicNow, open]);
 
   async function restore(item: TimedTaskRecoveryItem) {
     if (!hasCurrentEligibilityRef.current) {
@@ -337,18 +368,86 @@ export function TaskRecoveryDialog({
     }
   }
 
+  async function recoverColumn(item: TimedColumnRecoveryItem) {
+    if (!hasCurrentEligibilityRef.current) {
+      setError(
+        "Actualizando la lista. Espera a que se confirme la disponibilidad.",
+      );
+      return;
+    }
+    if (
+      !isTaskRecoveryRestorableAtMonotonicTime(
+        item,
+        item.eligibilityRequestStartedAtMonotonic,
+        performance.now(),
+        hasCurrentEligibilityRef.current,
+      )
+    ) {
+      setError(
+        "El plazo de recuperación venció. Esta columna ya no se puede recuperar.",
+      );
+      return;
+    }
+
+    setRestoringColumnId(item.column_id);
+    setError("");
+    setMessage("");
+    try {
+      const result = await restoreColumn(
+        createClient(),
+        slug,
+        generateUUID(),
+        item.column_id,
+      );
+      if (result.status === "confirmed") {
+        setMessage(
+          "Columna recuperada. Las tareas trasladadas siguen en su destino.",
+        );
+        try {
+          await onRestored();
+        } catch {
+          setMessage(
+            "Columna recuperada. No se pudo actualizar el tablero; vuelve a cargarlo.",
+          );
+        }
+        await refresh();
+      } else if (result.status === "expired") {
+        await refresh();
+        setError(
+          "El plazo de recuperación venció. Esta columna ya no se puede recuperar.",
+        );
+      } else {
+        await refresh();
+        setError(
+          "La columna ya no está disponible para recuperar. Actualiza la lista.",
+        );
+      }
+    } catch (restoreError) {
+      await refresh();
+      setError(
+        restoreError instanceof ColumnRecoveryError &&
+          restoreError.reason === "access_denied"
+          ? "Ya no tienes permiso para recuperar columnas de este tablero."
+          : "No se pudo confirmar si la columna se recuperó. Actualiza la lista antes de volver a intentarlo.",
+      );
+    } finally {
+      setRestoringColumnId(null);
+    }
+  }
+
   return (
     <Modal
       open={open}
       onClose={onClose}
-      title="Recuperación de tareas"
+      title="Recuperación del tablero"
       fullScreenMobile
-      closeLabel="Cerrar recuperación de tareas"
+      closeLabel="Cerrar recuperación del tablero"
     >
       <div className="space-y-5 text-text-primary">
         <p className="text-sm text-text-secondary">
-          Las tareas y pasos se pueden recuperar durante siete días desde su
-          eliminación. Abrir esta lista no restaura nada automáticamente.
+          Las tareas, columnas y pasos se pueden recuperar durante siete días
+          desde su eliminación. Abrir esta lista no restaura nada
+          automáticamente.
         </p>
 
         <div className="flex items-center justify-between gap-3">
@@ -357,7 +456,10 @@ export function TaskRecoveryDialog({
             type="button"
             onClick={() => void refresh()}
             disabled={
-              isLoading || restoringTaskId !== null || restoringStepId !== null
+              isLoading ||
+              restoringTaskId !== null ||
+              restoringStepId !== null ||
+              restoringColumnId !== null
             }
             aria-label="Actualizar recuperación"
             title="Actualizar recuperación"
@@ -494,6 +596,85 @@ export function TaskRecoveryDialog({
           <p className="rounded-lg border border-border border-dashed p-4 text-sm text-text-muted">
             No hay tareas ni pasos eliminados para recuperar en este tablero.
           </p>
+        ) : null}
+
+        {hasCurrentEligibility && columnItems.length > 0 ? (
+          <section aria-labelledby="deleted-columns-heading">
+            <h3
+              id="deleted-columns-heading"
+              className="mb-2 font-semibold text-sm"
+            >
+              Columnas eliminadas
+            </h3>
+            <ul className="divide-y divide-border rounded-lg border border-border">
+              {columnItems.map((item) => {
+                const canRestore = isTaskRecoveryRestorableAtMonotonicTime(
+                  item,
+                  item.eligibilityRequestStartedAtMonotonic,
+                  monotonicNow,
+                  hasCurrentEligibility,
+                );
+                const destination = columns.find(
+                  (column) => column.id === item.destination_column_id,
+                );
+                const isRestoring = restoringColumnId === item.column_id;
+                return (
+                  <li
+                    key={item.column_id}
+                    className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    <div className="min-w-0 space-y-1">
+                      <p className="font-medium text-sm">{item.title}</p>
+                      <p className="text-text-muted text-xs">Tipo: Columna</p>
+                      <p className="text-text-muted text-xs">
+                        Eliminada:{" "}
+                        {formatTaskRecoveryTimestamp(item.deleted_at, timeZone)}
+                      </p>
+                      <p className="text-text-muted text-xs">
+                        Vence:{" "}
+                        {formatTaskRecoveryTimestamp(item.expires_at, timeZone)}
+                      </p>
+                      {item.moved_task_count > 0 ? (
+                        <p className="text-text-muted text-xs">
+                          Se trasladaron {item.moved_task_count}{" "}
+                          {item.moved_task_count === 1 ? "tarea" : "tareas"}
+                          {destination
+                            ? ` a “${destination.title}”`
+                            : " a otra columna"}
+                          . Recuperar la estructura no revierte el traslado.
+                        </p>
+                      ) : null}
+                      {!canRestore ? (
+                        <p className="text-priority-urgent text-xs">
+                          El plazo venció; no se puede recuperar.
+                        </p>
+                      ) : null}
+                    </div>
+                    {canRestore ? (
+                      <Button
+                        type="button"
+                        variant="primary"
+                        onClick={() => void recoverColumn(item)}
+                        disabled={
+                          restoringTaskId !== null ||
+                          restoringStepId !== null ||
+                          restoringColumnId !== null
+                        }
+                        aria-label={`Recuperar columna: ${item.title}`}
+                        className="min-h-11 shrink-0"
+                      >
+                        {isRestoring ? "Recuperando…" : "Recuperar columna"}
+                      </Button>
+                    ) : (
+                      <span className="shrink-0 text-sm text-text-muted">
+                        No recuperable
+                      </span>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
         ) : null}
 
         {hasCurrentEligibility && checklistItems.length > 0 ? (

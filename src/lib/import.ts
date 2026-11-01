@@ -1,12 +1,7 @@
 import { z } from "zod/v4";
-import {
-  createColumn,
-  createTask,
-  deleteColumn,
-  getBoard,
-  getColumns,
-} from "@/lib/db";
+import { createColumn, createTask, getBoard, getColumns } from "@/lib/db";
 import type { ExportData } from "@/lib/export";
+import { ensureImportReplacementAvailable } from "@/lib/import-replacement-boundary";
 import { createClient } from "@/lib/supabase/client";
 import type { Board, ColumnWithTasks, Priority } from "@/lib/types";
 import { generateUUID } from "@/lib/utils";
@@ -95,11 +90,8 @@ export async function importBoard(
   const board = await getBoard(supabase, slug);
 
   if (board) {
-    // Clear existing columns (cascade deletes tasks)
     const existingCols = await getColumns(supabase, board.id);
-    for (const col of existingCols) {
-      await deleteColumn(supabase, slug, col.id);
-    }
+    ensureImportReplacementAvailable(existingCols.length);
   } else {
     throw new Error("This board is no longer available.");
   }

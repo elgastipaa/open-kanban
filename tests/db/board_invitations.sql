@@ -702,7 +702,11 @@ DECLARE
   v_ref record;
 BEGIN
   SELECT * INTO STRICT v_ref FROM pg_temp.issue12_invitation_refs WHERE label = 'deleted-link';
-  PERFORM public.delete_board_p(v_ref.board_slug, v_ref.board_id);
+  PERFORM public.delete_board_p(
+    'e1220000-0000-4000-8000-000000000020',
+    v_ref.board_slug,
+    v_ref.board_id
+  );
 END;
 $$;
 COMMIT;

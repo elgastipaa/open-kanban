@@ -81,6 +81,7 @@ export function useBoard({
     isPersistedRef,
     onMutationRef,
     persistBoard,
+    refreshFromDB,
     enqueue,
     ledger: taskMutationLedger,
   });

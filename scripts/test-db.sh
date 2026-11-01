@@ -247,9 +247,11 @@ done
 "${psql[@]}" -q -f "$repo_dir/tests/db/board_invitation_operation_receipts.sql"
 "${psql[@]}" -q -f "$repo_dir/tests/db/my_tasks.sql"
 "${psql[@]}" -q -f "$repo_dir/tests/db/task_recovery.sql"
+"${psql[@]}" -q -f "$repo_dir/tests/db/board_column_recovery.sql"
 "${psql[@]}" -q -f "$repo_dir/tests/db/task_comment_recovery_window.sql"
 "${psql[@]}" -q -f "$repo_dir/tests/db/task_comment_operation.sql"
 "${psql[@]}" -q -f "$repo_dir/tests/db/board_membership_departure.sql"
+"${psql[@]}" -q -f "$repo_dir/tests/db/board_recovery.sql"
 "${psql[@]}" -q -f "$repo_dir/tests/db/board_member_removal.sql"
 
 # The owner departure is atomic even when two sessions submit the same
@@ -700,6 +702,560 @@ if [[ "$purge_wins_final" != valid ]]; then
 fi
 echo 'PASS: an exact-deadline purge wins atomically over a waiting restore.'
 
+# Column restore and purge lock the same recovery snapshot. Exercise each
+# possible winner against the issue #18 controlled-deadline fixtures.
+column_recovery_race_dir="$test_dir/column-recovery-race"
+mkdir -- "$column_recovery_race_dir"
+column_purge_wins_dir="$column_recovery_race_dir/purge-wins"
+column_restore_wins_dir="$column_recovery_race_dir/restore-wins"
+mkdir -- "$column_purge_wins_dir" "$column_restore_wins_dir"
+column_purge_wins_id=$(
+  "${psql[@]}" -At -c "SELECT column_id FROM public.issue18_column_recovery_race_fixture WHERE scenario = 'purge_wins'"
+)
+column_purge_wins_slug=$(
+  "${psql[@]}" -At -c "SELECT board_slug FROM public.issue18_column_recovery_race_fixture WHERE scenario = 'purge_wins'"
+)
+column_restore_wins_id=$(
+  "${psql[@]}" -At -c "SELECT column_id FROM public.issue18_column_recovery_race_fixture WHERE scenario = 'restore_wins'"
+)
+column_restore_wins_slug=$(
+  "${psql[@]}" -At -c "SELECT board_slug FROM public.issue18_column_recovery_race_fixture WHERE scenario = 'restore_wins'"
+)
+column_recovery_boundary='2035-10-26 12:00:00+00'
+
+column_purge_wins_purger_log="$column_purge_wins_dir/purger.log"
+column_purge_wins_restorer_log="$column_purge_wins_dir/restorer.log"
+PGAPPNAME=openkanban_issue18_column_purge_wins_purger "${psql[@]}" -qAt \
+  -v column_id="$column_purge_wins_id" -v expires_at="$column_recovery_boundary" \
+  > "$column_purge_wins_purger_log" 2>&1 <<'SQL' &
+BEGIN;
+SELECT column_id FROM public.column_deletions WHERE column_id = :'column_id'::uuid FOR UPDATE;
+SELECT pg_sleep(2);
+SELECT public.purge_expired_column_internal_p(:'column_id'::uuid, :'expires_at'::timestamptz);
+COMMIT;
+SQL
+column_purge_wins_purger_pid=$!
+column_purge_wins_lock_held=false
+for _ in $(seq 1 100); do
+  column_purge_wins_state=$("${psql[@]}" -At -c "SELECT state FROM pg_stat_activity WHERE application_name = 'openkanban_issue18_column_purge_wins_purger' AND state = 'active' AND query LIKE '%pg_sleep(2)%'")
+  if [[ "$column_purge_wins_state" == active ]]; then
+    column_purge_wins_lock_held=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$column_purge_wins_lock_held" != true ]]; then
+  cat -- "$column_purge_wins_purger_log" >&2
+  echo 'The column purger did not acquire the recovery lock.' >&2
+  exit 1
+fi
+
+PGAPPNAME=openkanban_issue18_column_purge_wins_restorer "${psql[@]}" -qAt \
+  -v column_id="$column_purge_wins_id" -v board_slug="$column_purge_wins_slug" \
+  -v expires_at="$column_recovery_boundary" \
+  > "$column_purge_wins_restorer_log" 2>&1 <<'SQL' &
+BEGIN;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);
+SELECT public.restore_column_internal_p(
+  '18000000-0000-4000-8000-000000000131', :'board_slug', :'column_id'::uuid,
+  :'expires_at'::timestamptz
+)->>'status';
+COMMIT;
+SQL
+column_purge_wins_restorer_pid=$!
+column_purge_wins_waits=false
+for _ in $(seq 1 100); do
+  column_purge_wins_waiters=$("${psql[@]}" -At -c "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'openkanban_issue18_column_purge_wins_restorer' AND wait_event_type = 'Lock'")
+  if [[ "$column_purge_wins_waiters" == 1 ]]; then
+    column_purge_wins_waits=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$column_purge_wins_waits" != true ]]; then
+  cat -- "$column_purge_wins_restorer_log" >&2
+  echo 'The column restorer did not wait for the concurrent purge.' >&2
+  "${psql[@]}" -q -c "SELECT pg_cancel_backend(pid) FROM pg_stat_activity WHERE application_name = 'openkanban_issue18_column_purge_wins_purger'" >/dev/null
+  wait "$column_purge_wins_purger_pid" || true
+  wait "$column_purge_wins_restorer_pid" || true
+  exit 1
+fi
+wait "$column_purge_wins_purger_pid" || { cat -- "$column_purge_wins_purger_log" >&2; exit 1; }
+wait "$column_purge_wins_restorer_pid" || { cat -- "$column_purge_wins_restorer_log" >&2; exit 1; }
+if ! grep -Fxq 'purged' "$column_purge_wins_purger_log" \
+  || ! grep -Fxq 'unavailable' "$column_purge_wins_restorer_log"; then
+  echo 'Purge-first column recovery race did not produce one terminal result.' >&2
+  cat -- "$column_purge_wins_purger_log" "$column_purge_wins_restorer_log" >&2
+  exit 1
+fi
+column_purge_wins_final=$("${psql[@]}" -At -v column_id="$column_purge_wins_id" <<'SQL'
+SELECT CASE WHEN deletion.state = 'purged' AND deletion.column_snapshot IS NULL
+  AND NOT EXISTS (SELECT 1 FROM public.columns AS column_row WHERE column_row.id = deletion.column_id)
+  THEN 'valid' ELSE 'invalid' END
+FROM public.column_deletions AS deletion
+WHERE deletion.column_id = :'column_id'::uuid;
+SQL
+)
+if [[ "$column_purge_wins_final" != valid ]]; then
+  echo 'Purge-first column race left a partial snapshot or restored row.' >&2
+  exit 1
+fi
+echo 'PASS: an exact-deadline column purge wins atomically over a waiting restore.'
+
+column_restore_wins_restorer_log="$column_restore_wins_dir/restorer.log"
+column_restore_wins_purger_log="$column_restore_wins_dir/purger.log"
+PGAPPNAME=openkanban_issue18_column_restore_wins_restorer "${psql[@]}" -qAt \
+  -v column_id="$column_restore_wins_id" -v board_slug="$column_restore_wins_slug" \
+  -v expires_at="$column_recovery_boundary" \
+  > "$column_restore_wins_restorer_log" 2>&1 <<'SQL' &
+BEGIN;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);
+SELECT public.restore_column_internal_p(
+  '18000000-0000-4000-8000-000000000132', :'board_slug', :'column_id'::uuid,
+  :'expires_at'::timestamptz - interval '1 microsecond'
+)->>'status';
+SELECT pg_sleep(2);
+COMMIT;
+SQL
+column_restore_wins_restorer_pid=$!
+column_restore_wins_lock_held=false
+for _ in $(seq 1 100); do
+  column_restore_wins_state=$("${psql[@]}" -At -c "SELECT state FROM pg_stat_activity WHERE application_name = 'openkanban_issue18_column_restore_wins_restorer' AND state = 'active' AND query LIKE '%pg_sleep(2)%'")
+  if [[ "$column_restore_wins_state" == active ]]; then
+    column_restore_wins_lock_held=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$column_restore_wins_lock_held" != true ]]; then
+  cat -- "$column_restore_wins_restorer_log" >&2
+  echo 'The column restorer did not acquire the recovery lock.' >&2
+  exit 1
+fi
+
+PGAPPNAME=openkanban_issue18_column_restore_wins_purger "${psql[@]}" -qAt \
+  -v column_id="$column_restore_wins_id" -v expires_at="$column_recovery_boundary" \
+  > "$column_restore_wins_purger_log" 2>&1 <<'SQL' &
+BEGIN;
+SELECT column_id FROM public.column_deletions WHERE column_id = :'column_id'::uuid FOR UPDATE;
+SELECT public.purge_expired_column_internal_p(:'column_id'::uuid, :'expires_at'::timestamptz);
+COMMIT;
+SQL
+column_restore_wins_purger_pid=$!
+column_restore_wins_waits=false
+for _ in $(seq 1 100); do
+  column_restore_wins_waiters=$("${psql[@]}" -At -c "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'openkanban_issue18_column_restore_wins_purger' AND wait_event_type = 'Lock'")
+  if [[ "$column_restore_wins_waiters" == 1 ]]; then
+    column_restore_wins_waits=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$column_restore_wins_waits" != true ]]; then
+  cat -- "$column_restore_wins_purger_log" >&2
+  echo 'The column purger did not wait for the concurrent restore.' >&2
+  "${psql[@]}" -q -c "SELECT pg_cancel_backend(pid) FROM pg_stat_activity WHERE application_name = 'openkanban_issue18_column_restore_wins_restorer'" >/dev/null
+  wait "$column_restore_wins_restorer_pid" || true
+  wait "$column_restore_wins_purger_pid" || true
+  exit 1
+fi
+wait "$column_restore_wins_restorer_pid" || { cat -- "$column_restore_wins_restorer_log" >&2; exit 1; }
+wait "$column_restore_wins_purger_pid" || { cat -- "$column_restore_wins_purger_log" >&2; exit 1; }
+if ! grep -Fxq 'confirmed' "$column_restore_wins_restorer_log" \
+  || ! grep -Fxq 'already_terminal' "$column_restore_wins_purger_log"; then
+  echo 'Restore-first column recovery race did not produce one terminal result.' >&2
+  cat -- "$column_restore_wins_restorer_log" "$column_restore_wins_purger_log" >&2
+  exit 1
+fi
+column_restore_wins_final=$("${psql[@]}" -At -v column_id="$column_restore_wins_id" <<'SQL'
+SELECT CASE WHEN EXISTS (SELECT 1 FROM public.columns AS column_row WHERE column_row.id = :'column_id'::uuid)
+  AND NOT EXISTS (SELECT 1 FROM public.column_deletions AS deletion WHERE deletion.column_id = :'column_id'::uuid)
+  THEN 'valid' ELSE 'invalid' END;
+SQL
+)
+if [[ "$column_restore_wins_final" != valid ]]; then
+  echo 'Restore-first column race left a missing column or deletion snapshot.' >&2
+  exit 1
+fi
+echo 'PASS: a column restore wins atomically over a waiting exact-deadline purge.'
+"${psql[@]}" -q -c 'DROP TABLE public.issue18_column_recovery_race_fixture'
+
+# Board purge/restore serialize on the board row and recovery ledger. Also
+# exercise edits racing the tombstone in both commit orders.
+board_recovery_race_dir="$test_dir/board-recovery-race"
+mkdir -- "$board_recovery_race_dir"
+board_recovery_boundary='2020-10-26 12:00:00+00'
+board_purge_wins_id=$(
+  "${psql[@]}" -At -c "SELECT board_id FROM public.issue18_board_recovery_race_fixture WHERE scenario = 'purge_wins'"
+)
+board_restore_wins_id=$(
+  "${psql[@]}" -At -c "SELECT board_id FROM public.issue18_board_recovery_race_fixture WHERE scenario = 'restore_wins'"
+)
+board_edit_wins_id=$(
+  "${psql[@]}" -At -c "SELECT board_id FROM public.issue18_board_recovery_race_fixture WHERE scenario = 'edit_wins'"
+)
+board_edit_wins_slug=$(
+  "${psql[@]}" -At -c "SELECT board_slug FROM public.issue18_board_recovery_race_fixture WHERE scenario = 'edit_wins'"
+)
+board_edit_wins_task=$(
+  "${psql[@]}" -At -c "SELECT task_id FROM public.issue18_board_recovery_race_fixture WHERE scenario = 'edit_wins'"
+)
+board_delete_wins_id=$(
+  "${psql[@]}" -At -c "SELECT board_id FROM public.issue18_board_recovery_race_fixture WHERE scenario = 'delete_wins'"
+)
+board_delete_wins_slug=$(
+  "${psql[@]}" -At -c "SELECT board_slug FROM public.issue18_board_recovery_race_fixture WHERE scenario = 'delete_wins'"
+)
+board_delete_wins_task=$(
+  "${psql[@]}" -At -c "SELECT task_id FROM public.issue18_board_recovery_race_fixture WHERE scenario = 'delete_wins'"
+)
+
+board_purge_wins_purger_log="$board_recovery_race_dir/purge-wins-purger.log"
+board_purge_wins_restorer_log="$board_recovery_race_dir/purge-wins-restorer.log"
+PGAPPNAME=openkanban_issue18_board_purge_wins_purger "${psql[@]}" -qAt \
+  -v board_id="$board_purge_wins_id" -v expires_at="$board_recovery_boundary" \
+  > "$board_purge_wins_purger_log" 2>&1 <<'SQL' &
+BEGIN;
+SELECT id FROM public.boards WHERE id = :'board_id'::uuid FOR UPDATE;
+SELECT pg_sleep(2);
+SELECT set_config('request.jwt.claim.role', 'service_role', true);
+SELECT public.purge_expired_board_internal_p(:'board_id'::uuid, :'expires_at'::timestamptz);
+COMMIT;
+SQL
+board_purge_wins_purger_pid=$!
+board_purge_wins_lock_held=false
+for _ in $(seq 1 100); do
+  board_purge_wins_state=$("${psql[@]}" -At -c "SELECT state FROM pg_stat_activity WHERE application_name = 'openkanban_issue18_board_purge_wins_purger' AND state = 'active' AND query LIKE '%pg_sleep(2)%'")
+  if [[ "$board_purge_wins_state" == active ]]; then
+    board_purge_wins_lock_held=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$board_purge_wins_lock_held" != true ]]; then
+  cat -- "$board_purge_wins_purger_log" >&2
+  echo 'The board purger did not acquire the board lock.' >&2
+  exit 1
+fi
+
+PGAPPNAME=openkanban_issue18_board_purge_wins_restorer "${psql[@]}" -qAt \
+  -v board_id="$board_purge_wins_id" -v expires_at="$board_recovery_boundary" \
+  > "$board_purge_wins_restorer_log" 2>&1 <<'SQL' &
+BEGIN;
+SELECT set_config('request.jwt.claim.sub', '41600000-0000-4000-8000-000000000001', true);
+SELECT public.restore_board_internal_p(
+  'a8180000-0000-4000-8000-000000000431', :'board_id'::uuid, NULL,
+  :'expires_at'::timestamptz
+)->>'status';
+COMMIT;
+SQL
+board_purge_wins_restorer_pid=$!
+board_purge_wins_waits=false
+for _ in $(seq 1 100); do
+  board_purge_wins_waiters=$("${psql[@]}" -At -c "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'openkanban_issue18_board_purge_wins_restorer' AND wait_event_type = 'Lock'")
+  if [[ "$board_purge_wins_waiters" == 1 ]]; then
+    board_purge_wins_waits=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$board_purge_wins_waits" != true ]]; then
+  cat -- "$board_purge_wins_restorer_log" >&2
+  echo 'The board restorer did not wait for the concurrent purge.' >&2
+  "${psql[@]}" -q -c "SELECT pg_cancel_backend(pid) FROM pg_stat_activity WHERE application_name = 'openkanban_issue18_board_purge_wins_purger'" >/dev/null
+  wait "$board_purge_wins_purger_pid" || true
+  wait "$board_purge_wins_restorer_pid" || true
+  exit 1
+fi
+wait "$board_purge_wins_purger_pid" || { cat -- "$board_purge_wins_purger_log" >&2; exit 1; }
+wait "$board_purge_wins_restorer_pid" || { cat -- "$board_purge_wins_restorer_log" >&2; exit 1; }
+if ! grep -Fxq 'purged' "$board_purge_wins_purger_log" \
+  || ! grep -Fxq 'unavailable' "$board_purge_wins_restorer_log"; then
+  echo 'Purge-first board recovery race did not produce one terminal result.' >&2
+  cat -- "$board_purge_wins_purger_log" "$board_purge_wins_restorer_log" >&2
+  exit 1
+fi
+board_purge_wins_final=$("${psql[@]}" -At -v board_id="$board_purge_wins_id" <<'SQL'
+SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM public.boards WHERE id = :'board_id'::uuid)
+  AND NOT EXISTS (SELECT 1 FROM public.tasks WHERE id = (
+    SELECT task_id FROM public.issue18_board_recovery_race_fixture
+    WHERE scenario = 'purge_wins'
+  )) THEN 'valid' ELSE 'invalid' END;
+SQL
+)
+if [[ "$board_purge_wins_final" != valid ]]; then
+  echo 'Purge-first board race left board/task content behind.' >&2
+  exit 1
+fi
+echo 'PASS: an exact-deadline board purge wins atomically over a waiting restore.'
+
+board_restore_wins_restorer_log="$board_recovery_race_dir/restore-wins-restorer.log"
+board_restore_wins_purger_log="$board_recovery_race_dir/restore-wins-purger.log"
+PGAPPNAME=openkanban_issue18_board_restore_wins_restorer "${psql[@]}" -qAt \
+  -v board_id="$board_restore_wins_id" -v expires_at="$board_recovery_boundary" \
+  > "$board_restore_wins_restorer_log" 2>&1 <<'SQL' &
+BEGIN;
+SELECT set_config('request.jwt.claim.sub', '41600000-0000-4000-8000-000000000001', true);
+SELECT public.restore_board_internal_p(
+  'a8180000-0000-4000-8000-000000000432', :'board_id'::uuid, NULL,
+  :'expires_at'::timestamptz - interval '1 microsecond'
+)->>'status';
+SELECT pg_sleep(2);
+COMMIT;
+SQL
+board_restore_wins_restorer_pid=$!
+board_restore_wins_lock_held=false
+for _ in $(seq 1 100); do
+  board_restore_wins_state=$("${psql[@]}" -At -c "SELECT state FROM pg_stat_activity WHERE application_name = 'openkanban_issue18_board_restore_wins_restorer' AND state = 'active' AND query LIKE '%pg_sleep(2)%'")
+  if [[ "$board_restore_wins_state" == active ]]; then
+    board_restore_wins_lock_held=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$board_restore_wins_lock_held" != true ]]; then
+  cat -- "$board_restore_wins_restorer_log" >&2
+  echo 'The board restorer did not acquire the board lock.' >&2
+  exit 1
+fi
+
+PGAPPNAME=openkanban_issue18_board_restore_wins_purger "${psql[@]}" -qAt \
+  -v board_id="$board_restore_wins_id" -v expires_at="$board_recovery_boundary" \
+  > "$board_restore_wins_purger_log" 2>&1 <<'SQL' &
+BEGIN;
+SELECT set_config('request.jwt.claim.role', 'service_role', true);
+SELECT public.purge_expired_board_internal_p(:'board_id'::uuid, :'expires_at'::timestamptz);
+COMMIT;
+SQL
+board_restore_wins_purger_pid=$!
+board_restore_wins_waits=false
+for _ in $(seq 1 100); do
+  board_restore_wins_waiters=$("${psql[@]}" -At -c "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'openkanban_issue18_board_restore_wins_purger' AND wait_event_type = 'Lock'")
+  if [[ "$board_restore_wins_waiters" == 1 ]]; then
+    board_restore_wins_waits=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$board_restore_wins_waits" != true ]]; then
+  cat -- "$board_restore_wins_purger_log" >&2
+  echo 'The board purger did not wait for the concurrent restore.' >&2
+  "${psql[@]}" -q -c "SELECT pg_cancel_backend(pid) FROM pg_stat_activity WHERE application_name = 'openkanban_issue18_board_restore_wins_restorer'" >/dev/null
+  wait "$board_restore_wins_restorer_pid" || true
+  wait "$board_restore_wins_purger_pid" || true
+  exit 1
+fi
+wait "$board_restore_wins_restorer_pid" || { cat -- "$board_restore_wins_restorer_log" >&2; exit 1; }
+wait "$board_restore_wins_purger_pid" || { cat -- "$board_restore_wins_purger_log" >&2; exit 1; }
+if ! grep -Fxq 'confirmed' "$board_restore_wins_restorer_log" \
+  || ! grep -Fxq 'already_terminal' "$board_restore_wins_purger_log"; then
+  echo 'Restore-first board recovery race did not produce one terminal result.' >&2
+  cat -- "$board_restore_wins_restorer_log" "$board_restore_wins_purger_log" >&2
+  exit 1
+fi
+board_restore_wins_final=$("${psql[@]}" -At -v board_id="$board_restore_wins_id" <<'SQL'
+SELECT CASE WHEN EXISTS (SELECT 1 FROM public.boards WHERE id = :'board_id'::uuid)
+  AND EXISTS (
+    SELECT 1 FROM public.tasks AS task
+    JOIN public.columns AS column_row ON column_row.id = task.column_id
+    WHERE column_row.board_id = :'board_id'::uuid
+  )
+  AND NOT EXISTS (SELECT 1 FROM public.board_recoverable_deletions WHERE board_id = :'board_id'::uuid)
+  THEN 'valid' ELSE 'invalid' END;
+SQL
+)
+if [[ "$board_restore_wins_final" != valid ]]; then
+  echo 'Restore-first board race left a missing board/task or recovery marker.' >&2
+  exit 1
+fi
+echo 'PASS: a board restore wins atomically over a waiting exact-deadline purge.'
+
+board_edit_wins_editor_log="$board_recovery_race_dir/edit-wins-editor.log"
+board_edit_wins_deleter_log="$board_recovery_race_dir/edit-wins-deleter.log"
+PGAPPNAME=openkanban_issue18_board_edit_wins_editor "${psql[@]}" -qAt \
+  -v board_slug="$board_edit_wins_slug" -v task_id="$board_edit_wins_task" \
+  > "$board_edit_wins_editor_log" 2>&1 <<'SQL' &
+BEGIN;
+SELECT set_config('request.jwt.claim.sub', '41600000-0000-4000-8000-000000000001', true);
+SELECT public.edit_task_fields_p(
+  'a8180000-0000-4000-8000-000000000441', :'board_slug', :'task_id'::uuid,
+  '{"title":"Edición concurrente conservada"}'::jsonb, '{"title":1}'::jsonb
+)->>'status';
+SELECT pg_sleep(2);
+COMMIT;
+SQL
+board_edit_wins_editor_pid=$!
+board_edit_wins_lock_held=false
+for _ in $(seq 1 100); do
+  board_edit_wins_state=$("${psql[@]}" -At -c "SELECT state FROM pg_stat_activity WHERE application_name = 'openkanban_issue18_board_edit_wins_editor' AND state = 'active' AND query LIKE '%pg_sleep(2)%'")
+  if [[ "$board_edit_wins_state" == active ]]; then
+    board_edit_wins_lock_held=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$board_edit_wins_lock_held" != true ]]; then
+  cat -- "$board_edit_wins_editor_log" >&2
+  echo 'The task editor did not acquire the board lock.' >&2
+  exit 1
+fi
+PGAPPNAME=openkanban_issue18_board_edit_wins_deleter "${psql[@]}" -qAt \
+  -v board_id="$board_edit_wins_id" \
+  -v board_slug="$board_edit_wins_slug" \
+  > "$board_edit_wins_deleter_log" 2>&1 <<'SQL' &
+BEGIN;
+SELECT set_config('request.jwt.claim.sub', '41600000-0000-4000-8000-000000000001', true);
+SELECT public.delete_board_p(
+  'a8180000-0000-4000-8000-000000000451', :'board_slug', :'board_id'::uuid
+)->>'status';
+COMMIT;
+SQL
+board_edit_wins_deleter_pid=$!
+board_edit_wins_waits=false
+for _ in $(seq 1 100); do
+  board_edit_wins_waiters=$("${psql[@]}" -At -c "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'openkanban_issue18_board_edit_wins_deleter' AND wait_event_type = 'Lock'")
+  if [[ "$board_edit_wins_waiters" == 1 ]]; then
+    board_edit_wins_waits=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$board_edit_wins_waits" != true ]]; then
+  cat -- "$board_edit_wins_deleter_log" >&2
+  echo 'The board deleter did not wait for the concurrent edit.' >&2
+  "${psql[@]}" -q -c "SELECT pg_cancel_backend(pid) FROM pg_stat_activity WHERE application_name = 'openkanban_issue18_board_edit_wins_editor'" >/dev/null
+  wait "$board_edit_wins_editor_pid" || true
+  wait "$board_edit_wins_deleter_pid" || true
+  exit 1
+fi
+wait "$board_edit_wins_editor_pid" || { cat -- "$board_edit_wins_editor_log" >&2; exit 1; }
+wait "$board_edit_wins_deleter_pid" || { cat -- "$board_edit_wins_deleter_log" >&2; exit 1; }
+if ! grep -Fxq 'confirmed' "$board_edit_wins_editor_log" \
+  || ! grep -Fxq 'recoverable' "$board_edit_wins_deleter_log"; then
+  echo 'Edit-first board deletion race did not preserve one ordered result.' >&2
+  cat -- "$board_edit_wins_editor_log" "$board_edit_wins_deleter_log" >&2
+  exit 1
+fi
+board_edit_wins_final=$("${psql[@]}" -At -v task_id="$board_edit_wins_task" <<'SQL'
+SELECT CASE WHEN task.title = 'Edición concurrente conservada'
+  AND EXISTS (
+    SELECT 1 FROM public.board_recoverable_deletions AS recovery
+    JOIN public.columns AS column_row ON column_row.board_id = recovery.board_id
+    WHERE column_row.id = task.column_id
+  ) THEN 'valid' ELSE 'invalid' END
+FROM public.tasks AS task WHERE task.id = :'task_id'::uuid;
+SQL
+)
+if [[ "$board_edit_wins_final" != valid ]]; then
+  echo 'Edit-first board deletion race lost the committed task content or tombstone.' >&2
+  exit 1
+fi
+echo 'PASS: a task edit that wins the board lock commits before the board tombstone.'
+
+board_delete_wins_deleter_log="$board_recovery_race_dir/delete-wins-deleter.log"
+board_delete_wins_editor_log="$board_recovery_race_dir/delete-wins-editor.log"
+PGAPPNAME=openkanban_issue18_board_delete_wins_deleter "${psql[@]}" -qAt \
+  -v board_id="$board_delete_wins_id" -v board_slug="$board_delete_wins_slug" \
+  > "$board_delete_wins_deleter_log" 2>&1 <<'SQL' &
+BEGIN;
+SELECT set_config('request.jwt.claim.sub', '41600000-0000-4000-8000-000000000001', true);
+SELECT public.delete_board_p(
+  'a8180000-0000-4000-8000-000000000452', :'board_slug', :'board_id'::uuid
+)->>'status';
+SELECT pg_sleep(2);
+COMMIT;
+SQL
+board_delete_wins_deleter_pid=$!
+board_delete_wins_lock_held=false
+for _ in $(seq 1 100); do
+  board_delete_wins_state=$("${psql[@]}" -At -c "SELECT state FROM pg_stat_activity WHERE application_name = 'openkanban_issue18_board_delete_wins_deleter' AND state = 'active' AND query LIKE '%pg_sleep(2)%'")
+  if [[ "$board_delete_wins_state" == active ]]; then
+    board_delete_wins_lock_held=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$board_delete_wins_lock_held" != true ]]; then
+  cat -- "$board_delete_wins_deleter_log" >&2
+  echo 'The board deleter did not acquire the board lock.' >&2
+  exit 1
+fi
+PGAPPNAME=openkanban_issue18_board_delete_wins_editor "${psql[@]}" -qAt \
+  > "$board_delete_wins_editor_log" 2>&1 <<'SQL' &
+BEGIN;
+SELECT set_config('request.jwt.claim.sub', '41600000-0000-4000-8000-000000000001', true);
+DO $$
+DECLARE
+  v_result jsonb;
+  v_board_slug text;
+  v_task_id uuid;
+BEGIN
+  SELECT fixture.board_slug, fixture.task_id
+  INTO STRICT v_board_slug, v_task_id
+  FROM public.issue18_board_recovery_race_fixture AS fixture
+  WHERE fixture.scenario = 'delete_wins';
+  BEGIN
+    v_result := public.edit_task_fields_p(
+      'a8180000-0000-4000-8000-000000000442', v_board_slug, v_task_id,
+      '{"title":"No debe escribirse"}'::jsonb, '{"title":1}'::jsonb
+    );
+  EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'board access blocked';
+    RETURN;
+  END;
+  IF v_result->>'status' = 'unavailable' THEN
+    RAISE NOTICE 'board access blocked';
+    RETURN;
+  END IF;
+  RAISE EXCEPTION 'An edit crossed the board tombstone: %', v_result;
+END;
+$$;
+COMMIT;
+SQL
+board_delete_wins_editor_pid=$!
+board_delete_wins_waits=false
+for _ in $(seq 1 100); do
+  board_delete_wins_waiters=$("${psql[@]}" -At -c "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'openkanban_issue18_board_delete_wins_editor' AND wait_event_type = 'Lock'")
+  if [[ "$board_delete_wins_waiters" == 1 ]]; then
+    board_delete_wins_waits=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$board_delete_wins_waits" != true ]]; then
+  cat -- "$board_delete_wins_editor_log" >&2
+  echo 'The task editor did not wait for the board tombstone.' >&2
+  "${psql[@]}" -q -c "SELECT pg_cancel_backend(pid) FROM pg_stat_activity WHERE application_name = 'openkanban_issue18_board_delete_wins_deleter'" >/dev/null
+  wait "$board_delete_wins_deleter_pid" || true
+  wait "$board_delete_wins_editor_pid" || true
+  exit 1
+fi
+wait "$board_delete_wins_deleter_pid" || { cat -- "$board_delete_wins_deleter_log" >&2; exit 1; }
+wait "$board_delete_wins_editor_pid" || { cat -- "$board_delete_wins_editor_log" >&2; exit 1; }
+if ! grep -Fxq 'recoverable' "$board_delete_wins_deleter_log" \
+  || ! grep -Fq 'board access blocked' "$board_delete_wins_editor_log"; then
+  echo 'Delete-first board content race did not block the waiting edit.' >&2
+  cat -- "$board_delete_wins_deleter_log" "$board_delete_wins_editor_log" >&2
+  exit 1
+fi
+board_delete_wins_final=$("${psql[@]}" -At -v task_id="$board_delete_wins_task" <<'SQL'
+SELECT CASE WHEN task.title = 'Título inicial delete_wins'
+  AND EXISTS (
+    SELECT 1 FROM public.board_recoverable_deletions AS recovery
+    JOIN public.columns AS column_row ON column_row.board_id = recovery.board_id
+    WHERE column_row.id = task.column_id
+  ) THEN 'valid' ELSE 'invalid' END
+FROM public.tasks AS task WHERE task.id = :'task_id'::uuid;
+SQL
+)
+if [[ "$board_delete_wins_final" != valid ]]; then
+  echo 'Delete-first board content race changed content after the tombstone.' >&2
+  exit 1
+fi
+echo 'PASS: a board tombstone that wins the lock blocks a waiting task edit.'
+
+"${psql[@]}" -q -c 'DROP TABLE public.issue18_board_recovery_race_fixture'
+
 restore_wins_first_log="$restore_wins_dir/restorer.log"
 restore_wins_second_log="$restore_wins_dir/purger.log"
 PGAPPNAME=openkanban_issue14_restore_wins_restorer "${psql[@]}" -qAt \
@@ -976,7 +1532,11 @@ fi
 BEGIN;
 SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);
-SELECT public.delete_board_p(:'board_slug', :'board_id'::uuid);
+SELECT public.delete_board_p(
+  'e1240000-0000-4000-8000-000000000021'::uuid,
+  :'board_slug',
+  :'board_id'::uuid
+);
 COMMIT;
 DROP TABLE public.issue12_invitation_race_fixture;
 SQL

@@ -318,6 +318,7 @@ DECLARE
   v_deleted jsonb;
   v_restored jsonb;
   v_needs_destination jsonb;
+  v_column_preview jsonb;
   v_task_id uuid;
   v_before_expiry timestamptz;
   v_after_expiry timestamptz;
@@ -348,7 +349,20 @@ BEGIN
   FROM public.list_deleted_tasks_p(v_reference.board_slug) AS item
   WHERE item.task_id = v_task_id;
 
-  PERFORM public.delete_column_p(v_reference.board_slug, v_parent_column.id);
+  v_column_preview := public.preview_delete_column_p(
+    v_reference.board_slug, v_parent_column.id
+  );
+  v_deleted := public.delete_column_p(
+    '14000000-0000-4000-8000-000000000013',
+    v_reference.board_slug,
+    v_parent_column.id,
+    NULL,
+    (v_column_preview->>'task_order_version')::bigint
+  );
+  IF v_deleted->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Empty parent column was not removed with a recoverable deletion: %',
+      v_deleted;
+  END IF;
 
   SELECT item.expires_at INTO STRICT v_after_expiry
   FROM public.list_deleted_tasks_p(v_reference.board_slug) AS item

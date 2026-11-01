@@ -259,7 +259,7 @@ export function BoardToolbar({
                   onClick={onOpenTaskRecovery}
                   className="cursor-pointer"
                 >
-                  Recuperación de tareas
+                  Recuperación
                 </DropdownMenuItem>
               ) : null}
               <DropdownMenuItem

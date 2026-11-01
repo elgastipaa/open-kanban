@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { useCallback } from "react";
+import type { ColumnDeletionCommand } from "@/lib/column-deletion-flow";
 import {
   batchToggleColumnsCollapse,
   createColumn,
@@ -7,6 +8,7 @@ import {
   updateColumn,
   updateColumnPositions,
 } from "@/lib/db";
+import type { ColumnRecoveryResult } from "@/lib/db/columns";
 import type { Board, Column, ColumnWithTasks } from "@/lib/types";
 import type { TaskMutationLedger } from "./task-mutation-ledger";
 import { makeLocalColumn, showMutationError } from "./utils";
@@ -19,7 +21,8 @@ interface UseColumnOperationsProps {
   isPersistedRef: React.RefObject<boolean>;
   onMutationRef: React.RefObject<(() => void) | undefined>;
   persistBoard: () => Promise<Board>;
-  enqueue: (op: () => Promise<void>) => void;
+  refreshFromDB: () => Promise<void>;
+  enqueue: (op: () => Promise<void>) => Promise<void>;
   ledger: TaskMutationLedger;
 }
 
@@ -31,6 +34,7 @@ export function useColumnOperations({
   isPersistedRef,
   onMutationRef,
   persistBoard,
+  refreshFromDB,
   enqueue,
   ledger,
 }: UseColumnOperationsProps) {
@@ -189,66 +193,32 @@ export function useColumnOperations({
   );
 
   const removeColumn = useCallback(
-    (columnId: string) => {
-      const currentCols = columnsRef.current ?? [];
-      if (currentCols.length <= 1) return;
-
-      const snapshot = currentCols;
-      const filtered = currentCols.filter((col) => col.id !== columnId);
-      const newCols = filtered.map((col, i) => ({ ...col, position: i }));
-
-      // Optimistic UI update
-      if (isPersistedRef.current && !columnId.startsWith("local-")) {
-        ledger.markColumnDeleted(columnId);
+    async (command: ColumnDeletionCommand): Promise<ColumnRecoveryResult> => {
+      if (!isPersistedRef.current || command.column_id.startsWith("local-")) {
+        throw new Error("No se puede recuperar una columna sin guardar.");
       }
-      setColumns(newCols);
-
-      if (!isPersistedRef.current || columnId.startsWith("local-")) return;
-
-      const colUpdates: Column[] = newCols.map((col) => ({
-        id: col.id,
-        board_id: col.board_id,
-        title: col.title,
-        position: col.position,
-        is_collapsed: col.is_collapsed,
-        task_order_version: col.task_order_version,
-        created_at: col.created_at,
-      }));
-
-      enqueue(async () => {
-        let deleteCommitted = false;
+      let result: ColumnRecoveryResult | null = null;
+      let failure: unknown;
+      await enqueue(async () => {
         try {
-          await dbDeleteColumn(supabase, slug, columnId);
-          deleteCommitted = true;
-          if (colUpdates.length > 0) {
-            await updateColumnPositions(supabase, slug, colUpdates);
+          result = await dbDeleteColumn(supabase, slug, command);
+          await refreshFromDB();
+          if (result.status === "confirmed") onMutationRef.current?.();
+        } catch (error) {
+          failure = error;
+          try {
+            await refreshFromDB();
+          } catch {
+            // Preserve the original operation error; the UI will ask for review.
           }
-          onMutationRef.current?.();
-        } catch {
-          if (deleteCommitted) {
-            setColumns(newCols);
-            onMutationRef.current?.();
-          } else {
-            setColumns(
-              ledger.restoreColumnAfterFailedDelete(columnId, snapshot),
-            );
-          }
-          showMutationError(
-            deleteCommitted ? "reorder columns" : "delete column",
-          );
         }
       });
+      if (failure) throw failure;
+      if (!result)
+        throw new Error("No se recibió el resultado de la operación.");
+      return result;
     },
-    [
-      columnsRef,
-      setColumns,
-      isPersistedRef,
-      enqueue,
-      supabase,
-      slug,
-      onMutationRef,
-      ledger,
-    ],
+    [isPersistedRef, enqueue, supabase, slug, onMutationRef, refreshFromDB],
   );
 
   const moveColumn = useCallback(

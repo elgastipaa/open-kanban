@@ -1,10 +1,14 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { useCallback, useRef } from "react";
-import { deleteBoard as dbDeleteBoard, getBoard, getFullBoard } from "@/lib/db";
+import {
+  deleteBoard as dbDeleteBoard,
+  getBoard,
+  getFullBoard,
+  type BoardRecoveryResult,
+} from "@/lib/db";
 import { getSessionEpoch } from "@/lib/supabase/client";
 import type { Board, ColumnWithTasks } from "@/lib/types";
 import type { TaskMutationLedger } from "./task-mutation-ledger";
-import { showMutationError } from "./utils";
 
 interface UseBoardSyncProps {
   slug: string;
@@ -90,21 +94,21 @@ export function useBoardSync({
     [boardRef, isPersistedRef, setBoard],
   );
 
-  const removeBoard = useCallback(async () => {
-    if (boardRef.current && isPersistedRef.current) {
-      try {
-        await dbDeleteBoard(supabase, slug, boardRef.current.id);
-      } catch {
-        showMutationError("delete board");
-        return false;
-      }
-    }
+  const removeBoard = useCallback(async (operationId: string) => {
+    if (!boardRef.current || !isPersistedRef.current) return null;
+    const result: BoardRecoveryResult = await dbDeleteBoard(
+      supabase,
+      slug,
+      boardRef.current.id,
+      operationId,
+    );
+    if (result.status !== "recoverable") return null;
     refreshGenerationRef.current += 1;
     boardRef.current = null;
     isPersistedRef.current = false;
     setBoard(null);
     setColumns(taskMutationLedger.sync([], true));
-    return true;
+    return result;
   }, [
     supabase,
     slug,

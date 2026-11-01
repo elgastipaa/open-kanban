@@ -130,6 +130,7 @@ DECLARE
   v_delete_column_id uuid;
   v_row_count integer;
   v_channel_count integer;
+  v_delete_result jsonb;
   v_denied boolean := false;
 BEGIN
   v_access := public.resolve_application_access();
@@ -200,9 +201,18 @@ BEGIN
     v_delete_column_id,
     'Cascade fixture'
   );
-  PERFORM public.delete_board_p(v_delete_board_slug, v_delete_board_id);
-  IF EXISTS (SELECT 1 FROM public.boards WHERE id = v_delete_board_id) THEN
-    RAISE EXCEPTION 'An owner could not delete a board and its children';
+  v_delete_result := public.delete_board_p(
+    'f7000000-0000-4000-8000-000000000004',
+    v_delete_board_slug,
+    v_delete_board_id
+  );
+  IF v_delete_result->>'status' IS DISTINCT FROM 'recoverable'
+    OR public.get_full_board_p(v_delete_board_slug) IS NOT NULL
+    OR NOT EXISTS (
+      SELECT 1 FROM public.list_my_recoverable_boards_p() AS recovery
+      WHERE recovery.id = v_delete_board_id
+    ) THEN
+    RAISE EXCEPTION 'An owner could not hide a board for recovery: %', v_delete_result;
   END IF;
 END;
 $$;

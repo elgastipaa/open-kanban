@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { AddColumn } from "@/components/board/add-column";
 import { BoardToolbar } from "@/components/board/board-toolbar";
 import { Column } from "@/components/board/column";
+import { ColumnDeletionDialog } from "@/components/board/column-deletion-dialog";
 import { KeyboardShortcuts } from "@/components/board/keyboard-shortcuts";
 import { MobileBoard } from "@/components/board/mobile-board";
 import { TaskModal } from "@/components/board/task-modal";
@@ -21,7 +22,11 @@ import { useOnlineStatus } from "@/hooks/use-online-status";
 import { usePresence } from "@/hooks/use-presence";
 import { useRealtime } from "@/hooks/use-realtime";
 import { resolveApplicationAccess } from "@/lib/auth";
-import { previewBoardTimeZone, updateBoardTimeZone } from "@/lib/db/boards";
+import {
+  BoardRecoveryError,
+  previewBoardTimeZone,
+  updateBoardTimeZone,
+} from "@/lib/db/boards";
 import { setTaskAssignee, TaskAssigneeError } from "@/lib/db/my-tasks";
 import { exportBoard } from "@/lib/export";
 import { importBoard } from "@/lib/import";
@@ -515,6 +520,7 @@ function BoardWorkspace({
   // Delete board confirmation
   const [showDeleteBoard, setShowDeleteBoard] = useState(false);
   const [isDeletingBoard, setIsDeletingBoard] = useState(false);
+  const boardDeleteOperationIdRef = useRef<string | null>(null);
   const [isTaskRecoveryDialogOpen, setIsTaskRecoveryDialogOpen] =
     useState(false);
 
@@ -646,16 +652,40 @@ function BoardWorkspace({
 
   // Board delete handler
   async function handleDeleteBoard() {
+    const operationId = boardDeleteOperationIdRef.current ?? generateUUID();
+    boardDeleteOperationIdRef.current = operationId;
     setIsDeletingBoard(true);
+    let completed = false;
     try {
-      const deleted = await removeBoard();
-      if (!deleted) return;
+      const result = await removeBoard(operationId);
+      if (!result) return;
+      const expiresAt = new Intl.DateTimeFormat("es-AR", {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }).format(new Date(result.expires_at ?? ""));
+      toast.success("Tablero enviado a recuperación", {
+        description: `Podrás restaurarlo hasta el ${expiresAt}. Las invitaciones pendientes se revocaron.`,
+      });
       // Notify other users looking at this board
       broadcastBoardDeleted();
       router.push("/");
+      completed = true;
+    } catch (error) {
+      const description =
+        error instanceof BoardRecoveryError && error.reason === "access_denied"
+          ? "Tu autoridad sobre este tablero cambió. Actualiza el estado antes de volver a intentarlo."
+          : error instanceof BoardRecoveryError && error.reason === "conflict"
+            ? "El tablero cambió durante la confirmación. Actualiza el estado antes de continuar."
+            : "No se pudo confirmar el resultado. Puedes reintentar; se consultará la misma operación sin duplicarla.";
+      toast.error("No se pudo enviar el tablero a recuperación", {
+        description,
+      });
     } finally {
       setIsDeletingBoard(false);
-      setShowDeleteBoard(false);
+      if (completed) {
+        boardDeleteOperationIdRef.current = null;
+        setShowDeleteBoard(false);
+      }
     }
   }
 
@@ -677,12 +707,10 @@ function BoardWorkspace({
     broadcastSync();
   }
 
-  // Column delete handler (optimistic: close dialog instantly, removeColumn handles rollback)
-  function handleDeleteColumn() {
-    if (!deletingColumnId) return;
-    const columnId = deletingColumnId;
-    setDeletingColumnId(null);
-    removeColumn(columnId);
+  async function handleDeleteColumn(
+    command: Parameters<typeof removeColumn>[0],
+  ) {
+    return removeColumn(command);
   }
 
   // Task delete handler
@@ -810,7 +838,10 @@ function BoardWorkspace({
         onSaveTimeZone={handleSaveTimeZone}
         viewerCount={viewerCount}
         isConnected={isConnected}
-        onDeleteBoard={() => setShowDeleteBoard(true)}
+        onDeleteBoard={() => {
+          boardDeleteOperationIdRef.current = generateUUID();
+          setShowDeleteBoard(true);
+        }}
         onExport={handleExport}
         onImport={handleImport}
       />
@@ -864,7 +895,7 @@ function BoardWorkspace({
                   column={column}
                   boardToday={board?.today ?? initialBoard.today}
                   currentMemberNames={currentMemberNames}
-                  canDelete
+                  canDelete={columns.length > 1}
                   canShiftLeft={index > 0}
                   canShiftRight={index < columns.length - 1}
                   onRenameColumn={renameColumn}
@@ -926,7 +957,7 @@ function BoardWorkspace({
         open={isTaskRecoveryDialogOpen}
         onClose={() => setIsTaskRecoveryDialogOpen(false)}
         onRestored={async () => {
-          await refreshBoardFromDB();
+          await refreshFromDB();
           broadcastSync();
         }}
         slug={slug}
@@ -957,22 +988,30 @@ function BoardWorkspace({
       {/* Delete board confirmation */}
       <ConfirmDialog
         open={showDeleteBoard}
-        onClose={() => setShowDeleteBoard(false)}
+        onClose={() => {
+          setShowDeleteBoard(false);
+          boardDeleteOperationIdRef.current = null;
+        }}
         onConfirm={handleDeleteBoard}
-        title="Delete Board"
-        description={`Are you sure you want to delete the board "/${slug}"? This will permanently remove all columns and tasks. This action cannot be undone.`}
-        confirmLabel="Delete Board"
+        title="Enviar tablero a recuperación"
+        description={`Se ocultará /${slug} y su contenido quedará inaccesible. Podrás restaurarlo durante 7 días. Las invitaciones pendientes se revocarán y no volverán al restaurar.`}
+        confirmLabel="Eliminar tablero"
+        cancelLabel="Cancelar"
         loading={isDeletingBoard}
       />
 
       {/* Delete column confirmation */}
-      <ConfirmDialog
+      <ColumnDeletionDialog
         open={deletingColumnId !== null}
+        slug={slug}
+        columnId={deletingColumnId}
         onClose={() => setDeletingColumnId(null)}
-        onConfirm={handleDeleteColumn}
-        title="Delete Column"
-        description="Are you sure you want to delete this column? All tasks in this column will be permanently removed."
-        confirmLabel="Delete Column"
+        onDelete={handleDeleteColumn}
+        onDeleted={(result) => {
+          toast.success("Columna eliminada", {
+            description: `Su estructura se podrá recuperar hasta ${new Date(result.expires_at ?? Date.now()).toLocaleString("es-AR", { timeZone: board?.time_zone ?? initialBoard.time_zone })}. Las tareas quedaron en la columna elegida.`,
+          });
+        }}
       />
 
       {/* Delete task confirmation */}

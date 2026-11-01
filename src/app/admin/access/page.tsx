@@ -1,9 +1,12 @@
 import { notFound, redirect } from "next/navigation";
 import { AccessManager } from "@/components/auth/access-manager";
+import { AdminBoardRecovery } from "@/components/board/admin-board-recovery";
 import { SignOutButton } from "@/components/auth/sign-out-button";
 import { Logo } from "@/components/ui/logo";
 import { resolveApplicationAccess } from "@/lib/auth";
+import type { AdminRecoverableBoard } from "@/lib/db/boards";
 import { createClient } from "@/lib/supabase/server";
+import { listAdminRecoverableBoards } from "@/lib/db/boards";
 
 export default async function AccessAdminPage() {
   const supabase = await createClient();
@@ -14,6 +17,13 @@ export default async function AccessAdminPage() {
   if (access.status !== "active" || !access.isAdmin) notFound();
 
   const { data: entries, error } = await supabase.rpc("admin_list_access");
+  let recoverableBoards: AdminRecoverableBoard[] = [];
+  let recoveryLoadError = false;
+  try {
+    recoverableBoards = await listAdminRecoverableBoards(supabase);
+  } catch {
+    recoveryLoadError = true;
+  }
 
   return (
     <main className="mx-auto min-h-dvh max-w-4xl bg-black px-5 py-8 text-white sm:px-8">
@@ -40,6 +50,10 @@ export default async function AccessAdminPage() {
       ) : (
         <AccessManager entries={entries ?? []} />
       )}
+      <AdminBoardRecovery
+        boards={recoverableBoards}
+        loadError={recoveryLoadError}
+      />
     </main>
   );
 }

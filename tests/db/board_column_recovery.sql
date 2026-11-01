@@ -34,6 +34,7 @@ DECLARE
   v_preview jsonb;
   v_deleted jsonb;
   v_restored jsonb;
+  v_restore_replay jsonb;
   v_live_task_id uuid;
   v_deleted_task_id uuid;
   v_expires_at timestamptz;
@@ -128,6 +129,24 @@ BEGIN
   IF v_restored->>'status' IS DISTINCT FROM 'confirmed' THEN
     RAISE EXCEPTION 'Column restoration failed: %', v_restored;
   END IF;
+  v_restore_replay := public.restore_column_p(
+    '18000000-0000-4000-8000-000000000007', v_board.slug, v_source.id
+  );
+  IF v_restore_replay->>'status' IS DISTINCT FROM 'confirmed'
+    OR v_restore_replay->>'operation_id' IS DISTINCT FROM '18000000-0000-4000-8000-000000000007'
+    OR (SELECT count(*) FROM public.columns AS column_row
+        WHERE column_row.id = v_source.id) <> 1 THEN
+    RAISE EXCEPTION 'Retrying a confirmed column restore must reconcile its receipt without duplicating the column: %',
+      v_restore_replay;
+  END IF;
+  BEGIN
+    PERFORM public.restore_column_p(
+      '18000000-0000-4000-8000-000000000007', v_board.slug, v_destination.id
+    );
+    RAISE EXCEPTION 'Reusing a column restore operation with a different column must be rejected';
+  EXCEPTION WHEN check_violation THEN
+    NULL;
+  END;
   SELECT count(*) INTO v_task_count
   FROM public.get_tasks_by_board_p(v_board.id) AS task
   WHERE task.id = v_live_task_id AND task.column_id = v_destination.id;

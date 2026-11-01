@@ -265,6 +265,20 @@ Frontera siguiente verificada en GitHub/mapa: #17 «Retirar miembros y transferi
 - PR #54 sigue OPEN/draft, base `main`, head `codex/openkanban-1-0`, título «OpenKanban 1.0 — implementación progresiva (#3–#17)»; el body contiene la evidencia de #17. No se hará merge a `main`, SQL remoto ni despliegue.
 - Se preservan `docs/VALIDATION.md` ajeno con SHA-256 `B8669EAAFEA1A6D41C1342470E49324D2FAA50BED03DCCCFE7E94AF17D51FD9C` y `.scratch/` local sin seguimiento, fuera del stage/commit.
 
-## Frontera siguiente LP-0.2 — 2026-11-01
+## Frontera al iniciar #18 — 2026-11-01
 
 Lectura de GitHub posterior a la publicación: #17 OPEN/`ready-for-human`, con dos comentarios, asignado a `elgastipaa`; #12/#13/#16 también OPEN/`ready-for-human`. #18 «Borrar columnas y tableros con recuperación» está OPEN/`ready-for-agent`, sin asignación ni comentarios, y su `Blocked by #17` se conserva. La excepción LP-0.2 permite implementarlo localmente con actores sintéticos; no permite cerrar #17 ni afirmar su QA humana. #19 también está abierto/`ready-for-agent`, pero no es alcanzable antes de #18. La siguiente base de trabajo es el HEAD integrado de `codex/openkanban-1-0` tras este checkpoint.
+
+## Entrega integrada y publicada de #18 — 2026-11-01
+
+«Borrar columnas y tableros con recuperación» se implementó en `codex/issue-18`, con base y merge-base `a9f6d013c431ee65fae05d38a2d119562bc59d7f`. HEAD final revisado y publicado: `64e93eb48dfa93c0ea97f5fc97df19f516eba5b6`. La rama de integración avanzó por fast-forward a ese mismo HEAD. Evidencia por criterio: [docs/validation/issue-18.md](../validation/issue-18.md). Revisión final Spec/Standards contra la misma base y HEAD: sin otros desvíos funcionales ni infracciones duras; quedan smells heurísticos no bloqueantes.
+
+- Migraciones 032–035 y PostgreSQL 16.15 desechable con actores sintéticos cubren destino explícito, traslados sin reversión, restauración/purga, deadlines, board tombstone, permisos owner/admin/miembro, invitaciones y carreras. Receipts de delete/restore reconcilian replay bajo lock y autorización vigente, sin mutar dos veces; payload distinto falla `23514`. La última columna sin destino bloquea el comando y presenta guía en español; el toast distingue cero/una/varias tareas y no inventa vencimiento si un recibo legado no lo devuelve.
+- Pasaron `pnpm test:db` completo (001–035), `pnpm test:unit` (126/126), `pnpm typecheck`, `pnpm build` (Next 16.4.2), Biome dirigido, `bash -n scripts/test-db.sh` y `git diff --check`. `pnpm lint` global sigue reportando diagnósticos repo-wide; el slice modificado pasa Biome dirigido.
+- La QA manual visual y accesible sigue pendiente: confirmación/cancelación, recuperación owner/admin, errores/loading, móvil/escritorio, teclado y lector de pantalla. No se usó OAuth real ni se hizo bypass. El ticket permanece OPEN/`ready-for-human` y asignado a `elgastipaa`; se marcaron completados los criterios automatizados y se dejó sin completar la verificación que exige recorrido humano.
+- #18 conserva `Blocked by #9`, `#14` y `#17`; los tres siguen OPEN/`ready-for-human`. Se publicó el comentario de entrega [6559690170](https://github.com/elgastipaa/open-kanban/issues/18#issuecomment-6559690170). PR #54 continúa OPEN/draft, base `main`, head `codex/openkanban-1-0`, título «OpenKanban 1.0 — implementación progresiva (#3–#18)» y cuerpo actualizado con la evidencia.
+- Se preservaron `docs/VALIDATION.md` con SHA-256 `B8669EAAFEA1A6D41C1342470E49324D2FAA50BED03DCCCFE7E94AF17D51FD9C` y `.scratch/` local sin seguimiento. No se hizo merge a `main`, SQL remoto ni despliegue.
+
+## Frontera siguiente LP-0.2 — 2026-11-01
+
+Lectura posterior de GitHub: #19 «Suspender cuentas con sucesión íntegra» está OPEN/`ready-for-agent`, sin asignación ni comentarios. Sus blockers #5 y #18 están OPEN/`ready-for-human`; #18 quedó integrado con evidencia, pero espera QA manual. La autorización LP-0.2 permite avanzar secuencialmente con actores sintéticos y conservar ambos tickets/aristas abiertos. El código revisado de #18 se publicó en `64e93eb48dfa93c0ea97f5fc97df19f516eba5b6`; crear el worktree de #19 desde el HEAD exacto vigente de `codex/openkanban-1-0` después de guardar este checkpoint y reconciliar la referencia remota. Issue #53 conserva su aprobación específica de corte.

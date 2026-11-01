@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod/v4";
 import { resolveApplicationAccess } from "@/lib/auth";
 import type { BoardDepartureCommand } from "@/lib/board-departure-flow";
+import { isRpcStatusResult } from "@/lib/rpc-status-result";
 import { createClient } from "@/lib/supabase/server";
 import { slugSchema } from "@/lib/validations";
 
@@ -39,13 +40,6 @@ type DepartureActionResult =
       status: "access_denied" | "operation_conflict" | "rejected";
       message: string;
     };
-
-function isDepartureRpcResult(value: unknown): value is {
-  status: string;
-  expires_at?: string;
-} {
-  return typeof value === "object" && value !== null && "status" in value;
-}
 
 export async function submitBoardDeparture(
   slug: string,
@@ -112,7 +106,7 @@ export async function submitBoardDeparture(
       return { status: "retryable" };
     }
 
-    if (!isDepartureRpcResult(data)) return { status: "retryable" };
+    if (!isRpcStatusResult(data)) return { status: "retryable" };
     const status = data.status;
     if (
       ![

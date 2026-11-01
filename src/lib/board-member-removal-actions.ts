@@ -5,6 +5,7 @@ import { z } from "zod/v4";
 import { resolveApplicationAccess } from "@/lib/auth";
 import type { BoardMemberRemovalCommand } from "@/lib/board-member-removal-flow";
 import { getBoard } from "@/lib/db/boards";
+import { isRpcStatusResult } from "@/lib/rpc-status-result";
 import { createClient } from "@/lib/supabase/server";
 import { slugSchema } from "@/lib/validations";
 
@@ -29,10 +30,6 @@ export type BoardMemberRemovalActionResult =
       status: "access_denied" | "operation_conflict" | "rejected";
       message: string;
     };
-
-function isRemovalRpcResult(value: unknown): value is { status: string } {
-  return typeof value === "object" && value !== null && "status" in value;
-}
 
 export async function removeBoardCollaborator(
   slug: string,
@@ -104,7 +101,7 @@ export async function removeBoardCollaborator(
       return { status: "retryable" };
     }
 
-    if (!isRemovalRpcResult(data)) return { status: "retryable" };
+    if (!isRpcStatusResult(data)) return { status: "retryable" };
     const status = data.status;
     if (
       ![

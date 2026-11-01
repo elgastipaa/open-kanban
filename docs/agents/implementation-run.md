@@ -317,6 +317,20 @@ Lectura de GitHub al iniciar: #21 «Marcar tableros favoritos» estaba OPEN/`rea
 - PR #54 permanece OPEN/draft, base `main`, head `codex/openkanban-1-0`, título #3–#21 y matriz de evidencia actualizada. El SHA local/remoto de integración coincide con `f4ac3fe832dbafb8e625b13679c9819735c402f2`; `main` y producción no cambiaron.
 - Se preservan `docs/VALIDATION.md` ajeno con SHA-256 `B8669EAAFEA1A6D41C1342470E49324D2FAA50BED03DCCCFE7E94AF17D51FD9C` y `.scratch/` sin seguimiento, fuera de commits.
 
-## Frontera siguiente LP-0.2 — #22 — 2026-11-01
+## Frontera al iniciar #22 LP-0.2 — 2026-11-01
 
 Lectura de GitHub tras publicar #21: #22 «Elegir tema claro, oscuro o Sistema» está OPEN/`ready-for-agent`, sin asignación ni comentarios. `Blocked by #4` se conserva; #4 sigue OPEN/`ready-for-human` por OAuth real con identidades habilitada/no habilitada pendiente, aunque su código y evidencia están integrados. Por autorización vigente, se puede trabajar #22 solo con fixtures/datos sintéticos aislados; no cerrar #4 ni #22 hasta la aceptación aplicable. La base para la siguiente rama de trabajo será el HEAD resultante de este checkpoint documental en `codex/openkanban-1-0`.
+
+## Entrega integrada y publicada de #22 — 2026-11-01
+
+«Elegir tema claro, oscuro o Sistema» quedó integrado por fast-forward y publicado en `codex/openkanban-1-0`. Base/merge-base fija `bfb70e0964693a8e8739b07a4ca77968dd07e63b`; HEAD final revisado e integrado `15b77cde3ac88fdc0248e95f3be52e4e09bae3ce`, rama de trabajo `codex/issue-22`. La matriz reproducible está en [docs/validation/issue-22.md](../validation/issue-22.md); comentario de entrega: [issue #22](https://github.com/elgastipaa/open-kanban/issues/22#issuecomment-6565167225).
+
+- Migración 039 para preferencias de tema personales con versión optimista; lectura posterior a autenticación y validación de acceso activo en el RPC. PostgreSQL descartable con identidades sintéticas y migraciones 001–039; unit 164/164; Next typegen, typecheck, build Webpack, Biome dirigido y `git diff --check` pasaron. Reviews Spec/Standards sobre el HEAD final: sin hallazgos accionables.
+- El smoke sintético confirmó que la capa Cuenta se cierra con Escape sin cerrar TaskModal, que el foco vuelve al botón invocador y que el borrador permanece. No incluyó sesión ni cambio de tema autenticado.
+- #22 permanece OPEN/`ready-for-human`; quedaron marcados solo los criterios automatizables verificados. Pendientes: login normal, guardado/lectura autenticados, sincronización entre dispositivos, QA visual/accesible en móvil/escritorio y revisión manual de conflicto/error desde la UI. `Blocked by #4` intacto; #4 OPEN/`ready-for-human` por Auth/OAuth real. No hubo bypass, lectura de datos reales, SQL remoto, despliegue ni cambio a `main`.
+- PR #54 sigue OPEN/draft, ahora con título #3–#22 y evidencia de #22. La ref remota de integración coincidió con `15b77cde3ac88fdc0248e95f3be52e4e09bae3ce` tras publicar el código; este checkpoint documental se registra como commit separado.
+- Se preserva `docs/VALIDATION.md` ajeno con SHA-256 `B8669EAAFEA1A6D41C1342470E49324D2FAA50BED03DCCCFE7E94AF17D51FD9C` y `.scratch/` local sin seguimiento.
+
+## Frontera siguiente LP-0.2 — #23 — 2026-11-01
+
+Lectura de GitHub tras publicar #22: #23 «Repetir diariamente con ejecución durable» está OPEN/`ready-for-agent`, sin asignación. Conserva `Blocked by #11`, `#14` y `#15`; los tres permanecen OPEN/`ready-for-human` aunque su código y evidencia están integrados. La excepción operativa LP-0.2 permite trabajo aislado con actores/fechas sintéticos sobre esas bases integradas; no permite retirar las aristas, cerrar dependencias ni afirmar aceptación humana. #23 requiere host/cron para ejecutar ocurrencias sin navegador: solo puede verificarse el mecanismo local aislado; el host/cron de despliegue no verificado debe seguir explícitamente pendiente. Sin producción, despliegue ni SQL remoto. La siguiente rama de trabajo deberá partir del HEAD resultante del checkpoint documental en `codex/openkanban-1-0`.

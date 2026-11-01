@@ -4,6 +4,7 @@ import { Board } from "@/components/board/board";
 import { Unavailable } from "@/components/board/Unavailable";
 import { resolveApplicationAccess } from "@/lib/auth";
 import { getFullBoard } from "@/lib/db";
+import { hasOtherCurrentBoardMembers } from "@/lib/db/membership-departure";
 import { listAssignableBoardMembers } from "@/lib/db/my-tasks";
 import { myTasksHref } from "@/lib/my-tasks-navigation";
 import { createClient } from "@/lib/supabase/server";
@@ -99,10 +100,21 @@ export default async function BoardPage({
   }
 
   let assignableMembers: AssignableBoardMember[] | null = null;
+  let hasOtherCurrentMembers: boolean | null = null;
   try {
     assignableMembers = await listAssignableBoardMembers(supabase, slug);
   } catch {
     assignableMembers = null;
+  }
+  if (boardData.board.role === "owner") {
+    try {
+      hasOtherCurrentMembers = await hasOtherCurrentBoardMembers(
+        supabase,
+        boardData.board.id,
+      );
+    } catch {
+      hasOtherCurrentMembers = null;
+    }
   }
 
   return (
@@ -112,6 +124,7 @@ export default async function BoardPage({
       initialColumns={boardData.columns}
       ownerAuthUserId={authData.user.id}
       assignableMembers={assignableMembers}
+      hasOtherCurrentMembers={hasOtherCurrentMembers}
       initialTaskId={initialTaskId}
       initialCommentId={initialTaskId ? requestedCommentId : null}
       myTasksReturnHref={fromMyTasks ? myTasksHref(myTasksReturnOrder) : null}

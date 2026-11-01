@@ -70,6 +70,7 @@ interface BoardProps {
   initialColumns: ColumnWithTasks[];
   ownerAuthUserId: string;
   assignableMembers: AssignableBoardMember[] | null;
+  hasOtherCurrentMembers: boolean | null;
   initialTaskId: string | null;
   initialCommentId: string | null;
   myTasksReturnHref: string | null;
@@ -89,6 +90,7 @@ export function Board({
   initialColumns,
   ownerAuthUserId,
   assignableMembers,
+  hasOtherCurrentMembers,
   initialTaskId,
   initialCommentId,
   myTasksReturnHref,
@@ -220,6 +222,7 @@ export function Board({
       initialBoard={initialBoard}
       initialColumns={initialColumns}
       assignableMembers={assignableMembers}
+      hasOtherCurrentMembers={hasOtherCurrentMembers}
       initialTaskId={initialTaskId}
       initialCommentId={initialCommentId}
       myTasksReturnHref={myTasksReturnHref}
@@ -235,6 +238,7 @@ function BoardWorkspace({
   initialBoard,
   initialColumns,
   assignableMembers,
+  hasOtherCurrentMembers,
   initialTaskId,
   initialCommentId,
   myTasksReturnHref,
@@ -787,6 +791,11 @@ function BoardWorkspace({
         name={board?.name ?? initialBoard.name}
         timeZone={board?.time_zone ?? initialBoard.time_zone}
         canRename={board?.role === "owner"}
+        memberRole={initialBoard.role}
+        boardId={initialBoard.id}
+        actorId={actorId}
+        hasOtherCurrentMembers={hasOtherCurrentMembers}
+        eligibleSuccessors={assignableMembers}
         canRecoverTasks={
           initialBoard.role === "owner" || initialBoard.role === "collaborator"
         }

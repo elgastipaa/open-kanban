@@ -255,6 +255,7 @@ done
 "${psql[@]}" -q -f "$repo_dir/tests/db/board_recovery.sql"
 "${psql[@]}" -q -f "$repo_dir/tests/db/board_member_removal.sql"
 "${psql[@]}" -q -f "$repo_dir/tests/db/access_suspension.sql"
+"${psql[@]}" -q -f "$repo_dir/tests/db/board_favorites.sql"
 
 # Suspension takes the account lock before boards. A waiting task write and
 # outgoing invitation must observe the committed suspension before touching a

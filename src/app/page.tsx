@@ -3,10 +3,12 @@ import Link from "next/link";
 import { PendingInvitations } from "@/components/auth/pending-invitations";
 import { SignInButton } from "@/components/auth/sign-in-button";
 import { SignOutButton } from "@/components/auth/sign-out-button";
+import { BoardFavoritesList } from "@/components/board/board-favorites-list";
 import { CreateBoardForm } from "@/components/board/create-board-form";
 import { MyBoardRecovery } from "@/components/board/my-board-recovery";
 import { Logo } from "@/components/ui/logo";
 import { resolveApplicationAccess } from "@/lib/auth";
+import { listMyBoardFavoriteIds } from "@/lib/db/board-favorites";
 import { listMyRecoverableBoards } from "@/lib/db/boards";
 import type { PendingBoardInvitation } from "@/lib/db/invitations";
 import { listMyPendingBoardInvitations } from "@/lib/db/invitations";
@@ -80,6 +82,15 @@ export default async function HomePage() {
   const { data: boardsData, error: boardsError } =
     await supabase.rpc("list_my_boards");
   const boards = (boardsData ?? []) as Board[];
+  let favoriteBoardIds: string[] = [];
+  let favoritesLoadError = false;
+  if (!boardsError) {
+    try {
+      favoriteBoardIds = await listMyBoardFavoriteIds(supabase);
+    } catch {
+      favoritesLoadError = true;
+    }
+  }
   let invitations: PendingBoardInvitation[] = [];
   let invitationsLoadError = false;
   let recoverableBoards: Awaited<ReturnType<typeof listMyRecoverableBoards>> =
@@ -141,39 +152,12 @@ export default async function HomePage() {
         loadError={recoveryLoadError}
       />
 
-      {boardsError ? (
-        <p
-          className="mt-8 rounded-xl border border-red-400/20 bg-red-400/5 p-4 text-red-200 text-sm"
-          role="alert"
-        >
-          No se pudieron cargar tus tableros.
-        </p>
-      ) : boards.length === 0 ? (
-        <p className="mt-8 rounded-2xl border border-white/15 border-dashed p-10 text-center text-neutral-400 text-sm">
-          Todavía no tienes tableros. Acepta una invitación o crea uno para
-          empezar.
-        </p>
-      ) : (
-        <ul className="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {boards.map((board) => (
-            <li key={board.id}>
-              <Link
-                href={`/${board.slug}`}
-                className="block rounded-2xl border border-white/10 bg-neutral-950 p-5 transition hover:border-white/25 hover:bg-neutral-900"
-              >
-                <span className="block truncate font-semibold">
-                  {board.name}
-                </span>
-                <span className="mt-2 block text-neutral-500 text-xs">
-                  {board.role === "owner"
-                    ? "Propietario"
-                    : "Compartido contigo"}
-                </span>
-              </Link>
-            </li>
-          ))}
-        </ul>
-      )}
+      <BoardFavoritesList
+        boards={boards}
+        boardsLoadError={Boolean(boardsError)}
+        favoriteBoardIds={favoriteBoardIds}
+        favoritesLoadError={favoritesLoadError}
+      />
     </main>
   );
 }

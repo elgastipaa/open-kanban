@@ -281,4 +281,17 @@ Lectura de GitHub posterior a la publicación: #17 OPEN/`ready-for-human`, con d
 
 ## Frontera siguiente LP-0.2 — 2026-11-01
 
-Lectura posterior de GitHub: #19 «Suspender cuentas con sucesión íntegra» está OPEN/`ready-for-agent`, sin asignación ni comentarios. Sus blockers #5 y #18 están OPEN/`ready-for-human`; #18 quedó integrado con evidencia, pero espera QA manual. La autorización LP-0.2 permite avanzar secuencialmente con actores sintéticos y conservar ambos tickets/aristas abiertos. El código revisado de #18 se publicó en `64e93eb48dfa93c0ea97f5fc97df19f516eba5b6`; crear el worktree de #19 desde el HEAD exacto vigente de `codex/openkanban-1-0` después de guardar este checkpoint y reconciliar la referencia remota. Issue #53 conserva su aprobación específica de corte.
+## Entrega integrada y publicada de #19 — 2026-11-01
+
+«Suspender cuentas con sucesión íntegra» se implementó en `codex/issue-19`, desde la base fija `1fcd3cd6542f35b37251118017f159e47d671ac6`. El commit funcional revisado es `355ac32b02f9718f8a5f9396f6d3c5251cbc93ad`; evidencia y HEAD publicado `aabb044569f3277feec38cabc462b1803f40b3a8`. La integración avanzó por fast-forward desde la base y se publicó por push ordinario en `codex/openkanban-1-0`. Evidencia por criterio: [docs/validation/issue-19.md](../validation/issue-19.md).
+
+- La migración 036 implementa preview metadata-only, sucesión atómica, propiedad de recuperación protegida, revocación de membresías/asignaciones/invitaciones sin reconstrucción al reactivar, protección del último admin, serialización de escrituras e invitaciones, rollback y refresco de UI obsoleta. PostgreSQL desechable con actores sintéticos cubre además la carrera de escritura de tarea e invitación saliente.
+- Pasaron `pnpm test:db` completo (001–036), `pnpm test:unit` (137/137), `pnpm exec next typegen`, `pnpm typecheck`, `pnpm build` (13 páginas), Biome dirigido, `bash -n scripts/test-db.sh` y `git diff --check`.
+- Reviews finales Spec y Standards contra el mismo HEAD/base: sin hallazgos materiales ni infracciones duras. Se corrigieron antes la fixture de claims admin y un detalle de fin de archivo.
+- GitHub #19 continúa OPEN/`ready-for-human`, asignado a `elgastipaa`; los criterios automáticos están marcados y el recorrido manual de aceptación sigue pendiente. #5 y #18 permanecen OPEN/`ready-for-human`, con sus dependencias intactas. Evidencia comentada: https://github.com/elgastipaa/open-kanban/issues/19#issuecomment-6560258907.
+- PR #54 sigue OPEN/draft, base `main`, head `codex/openkanban-1-0`; su título/body incluyen #3–#19 y evidencia de #19. No se modificó `main`, no se ejecutó SQL remoto ni hubo despliegue.
+- Se preservan `docs/VALIDATION.md` con SHA-256 `B8669EAAFEA1A6D41C1342470E49324D2FAA50BED03DCCCFE7E94AF17D51FD9C` y `.scratch/` local sin seguimiento, fuera de commits.
+
+## Frontera siguiente LP-0.2 — 2026-11-01
+
+Lectura actual de GitHub: #20 «Sincronizar con canales privados y revocación» está OPEN/`ready-for-agent`, sin asignación ni comentarios. Depende únicamente de #19, que continúa OPEN/`ready-for-human`; el código y la evidencia de #19 están integrados. LP-0.2 permite avanzar secuencialmente con datos y actores sintéticos, sin cerrar #19 ni cambiar la arista. El HEAD funcional integrado es `aabb044569f3277feec38cabc462b1803f40b3a8`; primero guardar este checkpoint documental y reconciliar `codex/openkanban-1-0` con `origin`, luego crear el worktree y rama aislados de #20 desde el HEAD exacto resultante. Issue #53 conserva su aprobación específica de corte.

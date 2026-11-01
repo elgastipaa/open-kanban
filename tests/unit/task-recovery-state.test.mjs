@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   formatTaskRecoveryTimestamp,
+  getTaskRecoveryExpiryMonotonicTime,
   getTaskRecoveryListViewState,
   getTaskRecoveryRestoreAction,
   isTaskRecoveryRestorableAtMonotonicTime,
@@ -12,21 +13,32 @@ import {
   taskRecoveryRestoreErrorMessage,
 } from "../../src/lib/task-recovery-state.ts";
 
-test("response latency does not consume the database recovery deadline", () => {
+test("request latency is conservatively included to avoid post-deadline actions", () => {
   const deadline = {
     can_restore: true,
-    expires_at: "2026-11-01T00:00:00.000Z",
-    eligibility_checked_at: "2026-10-31T23:59:00.000Z",
+    expires_at: "2026-11-01T00:00:02.000Z",
+    eligibility_checked_at: "2026-10-31T23:59:02.000Z",
   };
   const requestStartedAt = 1_000;
+  const eligibilityCheckedAtMonotonic = 3_000;
   const eligibilityResponseReceivedAt = 5_000;
 
-  assert.ok(eligibilityResponseReceivedAt > requestStartedAt);
+  assert.ok(eligibilityCheckedAtMonotonic > requestStartedAt);
+  assert.ok(eligibilityResponseReceivedAt > eligibilityCheckedAtMonotonic);
+  const expiryMonotonicTime = getTaskRecoveryExpiryMonotonicTime(
+    deadline,
+    requestStartedAt,
+  );
+  assert.equal(
+    expiryMonotonicTime,
+    requestStartedAt + 60_000,
+    "server-to-browser latency is conservatively included in the UI deadline",
+  );
   assert.equal(
     isTaskRecoveryRestorableAtMonotonicTime(
       deadline,
-      eligibilityResponseReceivedAt,
-      eligibilityResponseReceivedAt + 59_999,
+      requestStartedAt,
+      requestStartedAt + 59_999,
       true,
     ),
     true,
@@ -34,12 +46,22 @@ test("response latency does not consume the database recovery deadline", () => {
   assert.equal(
     isTaskRecoveryRestorableAtMonotonicTime(
       deadline,
-      eligibilityResponseReceivedAt,
-      eligibilityResponseReceivedAt + 60_000,
+      requestStartedAt,
+      requestStartedAt + 60_000,
       true,
     ),
     false,
-    "the UI must stop offering restore at the exact response-anchored deadline",
+    "using request start may hide restore early, but must never offer it after the server deadline",
+  );
+  assert.equal(
+    isTaskRecoveryRestorableAtMonotonicTime(
+      deadline,
+      requestStartedAt,
+      eligibilityCheckedAtMonotonic + 60_000,
+      true,
+    ),
+    false,
+    "restore must already be hidden at the database deadline despite response latency",
   );
 });
 
@@ -103,7 +125,12 @@ test("recovery list maps loading, failure, empty, and ready states distinctly", 
   );
 });
 
-test("a resumed recovery list hides stale entries until current server eligibility returns", () => {
+test("after suspension, stale recovery rows and actions stay hidden until DB rechecks them", () => {
+  const staleDeadline = {
+    can_restore: true,
+    expires_at: "2026-11-01T00:00:00.000Z",
+    eligibility_checked_at: "2026-10-31T23:59:00.000Z",
+  };
   assert.equal(
     getTaskRecoveryListViewState({
       isLoading: true,
@@ -123,6 +150,16 @@ test("a resumed recovery list hides stale entries until current server eligibili
     "error",
   );
   assert.equal(
+    isTaskRecoveryRestorableAtMonotonicTime(
+      staleDeadline,
+      1_000,
+      70_000,
+      false,
+    ),
+    false,
+    "a throttled timer cannot keep a stale restore action available after resume",
+  );
+  assert.equal(
     getTaskRecoveryListViewState({
       isLoading: false,
       hasError: false,
@@ -130,6 +167,16 @@ test("a resumed recovery list hides stale entries until current server eligibili
       hasCurrentEligibility: true,
     }),
     "ready",
+  );
+  assert.equal(
+    isTaskRecoveryRestorableAtMonotonicTime(
+      { ...staleDeadline, can_restore: false },
+      70_000,
+      70_000,
+      true,
+    ),
+    false,
+    "after resume, the fresh database result remains authoritative",
   );
 });
 

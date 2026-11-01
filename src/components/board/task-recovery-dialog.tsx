@@ -13,6 +13,7 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import {
   formatTaskRecoveryTimestamp,
+  getTaskRecoveryExpiryMonotonicTime,
   getTaskRecoveryListViewState,
   getTaskRecoveryRestoreAction,
   isTaskRecoveryRestorableAtMonotonicTime,
@@ -39,7 +40,7 @@ interface TaskRecoveryDialogProps {
 }
 
 type TimedTaskRecoveryItem = TaskRecoveryItem & {
-  eligibilityReceivedAtMonotonic: number;
+  eligibilityRequestStartedAtMonotonic: number;
 };
 
 export function TaskRecoveryDialog({
@@ -76,16 +77,18 @@ export function TaskRecoveryDialog({
     setHasCurrentEligibility(false);
     setError("");
     try {
-      const listedItems = await listDeletedTasks(createClient(), slug);
+      const client = createClient();
+      const eligibilityRequestStartedAtMonotonic = performance.now();
+      const listedItems = await listDeletedTasks(client, slug);
       if (refreshId !== latestRefreshId.current) return;
-      const eligibilityReceivedAtMonotonic = performance.now();
+      const eligibilityResponseReceivedAtMonotonic = performance.now();
       setItems(
         listedItems.map((item) => ({
           ...item,
-          eligibilityReceivedAtMonotonic,
+          eligibilityRequestStartedAtMonotonic,
         })),
       );
-      setMonotonicNow(eligibilityReceivedAtMonotonic);
+      setMonotonicNow(eligibilityResponseReceivedAtMonotonic);
       hasCurrentEligibilityRef.current = true;
       setHasCurrentEligibility(true);
     } catch (loadError) {
@@ -137,11 +140,15 @@ export function TaskRecoveryDialog({
     const nextDeadline = items
       .filter((item) => item.can_restore)
       .map((item) => {
-        const remainingMilliseconds =
-          Date.parse(item.expires_at) - Date.parse(item.eligibility_checked_at);
-        return item.eligibilityReceivedAtMonotonic + remainingMilliseconds;
+        return getTaskRecoveryExpiryMonotonicTime(
+          item,
+          item.eligibilityRequestStartedAtMonotonic,
+        );
       })
-      .filter((deadline) => deadline > currentMonotonicTime)
+      .filter(
+        (deadline): deadline is number =>
+          deadline !== null && deadline > currentMonotonicTime,
+      )
       .sort((left, right) => left - right)[0];
 
     if (nextDeadline === undefined) return;
@@ -164,7 +171,7 @@ export function TaskRecoveryDialog({
     }
     const canRestore = isTaskRecoveryRestorableAtMonotonicTime(
       item,
-      item.eligibilityReceivedAtMonotonic,
+      item.eligibilityRequestStartedAtMonotonic,
       performance.now(),
       hasCurrentEligibilityRef.current,
     );
@@ -283,7 +290,7 @@ export function TaskRecoveryDialog({
                 selectedDestinations[item.task_id] ?? null;
               const canRestore = isTaskRecoveryRestorableAtMonotonicTime(
                 item,
-                item.eligibilityReceivedAtMonotonic,
+                item.eligibilityRequestStartedAtMonotonic,
                 monotonicNow,
                 hasCurrentEligibility,
               );

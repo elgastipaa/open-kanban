@@ -106,28 +106,41 @@ export function isTaskRecoveryRestorableAtMonotonicTime(
     expires_at: string;
     eligibility_checked_at: string;
   },
-  eligibilityReceivedAtMonotonic: number,
+  eligibilityRequestStartedAtMonotonic: number,
   currentMonotonicTime: number,
   hasCurrentEligibility: boolean,
 ): boolean {
   if (
     !item.can_restore ||
     !hasCurrentEligibility ||
-    !Number.isFinite(eligibilityReceivedAtMonotonic) ||
     !Number.isFinite(currentMonotonicTime)
   ) {
     return false;
   }
 
+  const expiryMonotonicTime = getTaskRecoveryExpiryMonotonicTime(
+    item,
+    eligibilityRequestStartedAtMonotonic,
+  );
+  return (
+    expiryMonotonicTime !== null && currentMonotonicTime < expiryMonotonicTime
+  );
+}
+
+export function getTaskRecoveryExpiryMonotonicTime(
+  item: {
+    expires_at: string;
+    eligibility_checked_at: string;
+  },
+  eligibilityRequestStartedAtMonotonic: number,
+): number | null {
+  if (!Number.isFinite(eligibilityRequestStartedAtMonotonic)) return null;
+
   const expiresAt = Date.parse(item.expires_at);
   const checkedAt = Date.parse(item.eligibility_checked_at);
-  if (!Number.isFinite(expiresAt) || !Number.isFinite(checkedAt)) return false;
+  if (!Number.isFinite(expiresAt) || !Number.isFinite(checkedAt)) return null;
 
-  const elapsedSinceResponse = Math.max(
-    0,
-    currentMonotonicTime - eligibilityReceivedAtMonotonic,
-  );
-  return expiresAt - checkedAt > elapsedSinceResponse;
+  return eligibilityRequestStartedAtMonotonic + (expiresAt - checkedAt);
 }
 
 export function taskRecoveryDestinationFieldIds(taskId: string): {

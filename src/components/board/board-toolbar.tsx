@@ -13,8 +13,9 @@ import {
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { BoardSignOutButton } from "@/components/auth/board-sign-out-button";
-import { BoardInvitationsDialog } from "@/components/board/board-invitations-dialog";
 import { BoardDepartureDialog } from "@/components/board/board-departure-dialog";
+import { BoardInvitationsDialog } from "@/components/board/board-invitations-dialog";
+import { BoardMembersDialog } from "@/components/board/board-members-dialog";
 import { BoardTimeZoneDialog } from "@/components/board/board-time-zone-dialog";
 import { Button } from "@/components/ui/button";
 import {
@@ -25,7 +26,11 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Logo } from "@/components/ui/logo";
 import { renameBoard } from "@/lib/auth-actions";
-import type { AssignableBoardMember, BoardTimeZonePreview } from "@/lib/types";
+import type {
+  AssignableBoardMember,
+  BoardTimeZonePreview,
+  CurrentBoardMember,
+} from "@/lib/types";
 
 interface BoardToolbarProps {
   slug: string;
@@ -37,6 +42,7 @@ interface BoardToolbarProps {
   memberRole: "owner" | "collaborator";
   boardId: string;
   actorId: string;
+  currentMembers: CurrentBoardMember[] | null;
   hasOtherCurrentMembers: boolean | null;
   eligibleSuccessors: AssignableBoardMember[] | null;
   onOpenTaskRecovery: () => void;
@@ -59,6 +65,7 @@ export function BoardToolbar({
   memberRole,
   boardId,
   actorId,
+  currentMembers,
   hasOtherCurrentMembers,
   eligibleSuccessors,
   onOpenTaskRecovery,
@@ -76,6 +83,7 @@ export function BoardToolbar({
   const [isSaving, setIsSaving] = useState(false);
   const [isTimeZoneDialogOpen, setIsTimeZoneDialogOpen] = useState(false);
   const [isInvitationsDialogOpen, setIsInvitationsDialogOpen] = useState(false);
+  const [isMembersDialogOpen, setIsMembersDialogOpen] = useState(false);
   const [isDepartureDialogOpen, setIsDepartureDialogOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -239,6 +247,13 @@ export function BoardToolbar({
               <IconDots size={18} aria-hidden="true" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="min-w-56">
+              <DropdownMenuItem
+                onClick={() => setIsMembersDialogOpen(true)}
+                className="cursor-pointer"
+              >
+                <IconUsers size={16} aria-hidden="true" />
+                Miembros
+              </DropdownMenuItem>
               {canRecoverTasks ? (
                 <DropdownMenuItem
                   onClick={onOpenTaskRecovery}
@@ -289,29 +304,27 @@ export function BoardToolbar({
               onClose={() => setIsInvitationsDialogOpen(false)}
               slug={slug}
             />
-            <BoardDepartureDialog
-              open={isDepartureDialogOpen}
-              onClose={() => setIsDepartureDialogOpen(false)}
-              slug={slug}
-              boardId={boardId}
-              actorId={actorId}
-              memberRole={memberRole}
-              hasOtherCurrentMembers={hasOtherCurrentMembers}
-              eligibleSuccessors={eligibleSuccessors}
-            />
           </>
-        ) : (
-          <BoardDepartureDialog
-            open={isDepartureDialogOpen}
-            onClose={() => setIsDepartureDialogOpen(false)}
-            slug={slug}
-            boardId={boardId}
-            actorId={actorId}
-            memberRole={memberRole}
-            hasOtherCurrentMembers={hasOtherCurrentMembers}
-            eligibleSuccessors={eligibleSuccessors}
-          />
-        )}
+        ) : null}
+        <BoardMembersDialog
+          open={isMembersDialogOpen}
+          onClose={() => setIsMembersDialogOpen(false)}
+          slug={slug}
+          boardId={boardId}
+          actorId={actorId}
+          memberRole={memberRole}
+          members={currentMembers}
+        />
+        <BoardDepartureDialog
+          open={isDepartureDialogOpen}
+          onClose={() => setIsDepartureDialogOpen(false)}
+          slug={slug}
+          boardId={boardId}
+          actorId={actorId}
+          memberRole={memberRole}
+          hasOtherCurrentMembers={hasOtherCurrentMembers}
+          eligibleSuccessors={eligibleSuccessors}
+        />
         {canRename ? (
           <Button
             variant="ghost"

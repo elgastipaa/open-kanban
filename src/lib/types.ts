@@ -243,6 +243,13 @@ export interface AssignableBoardMember {
   role: "owner" | "collaborator";
 }
 
+export interface CurrentBoardMember {
+  membership_id: string;
+  user_id: string;
+  name: string;
+  role: "owner" | "collaborator";
+}
+
 export interface TaskAssigneeCommand {
   id: string;
   operation_id: string;

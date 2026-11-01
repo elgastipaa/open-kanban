@@ -250,6 +250,7 @@ done
 "${psql[@]}" -q -f "$repo_dir/tests/db/task_comment_recovery_window.sql"
 "${psql[@]}" -q -f "$repo_dir/tests/db/task_comment_operation.sql"
 "${psql[@]}" -q -f "$repo_dir/tests/db/board_membership_departure.sql"
+"${psql[@]}" -q -f "$repo_dir/tests/db/board_member_removal.sql"
 
 # The owner departure is atomic even when two sessions submit the same
 # operation after one has committed but before its response reaches the client.
@@ -368,6 +369,130 @@ if [[ "$issue17_departure_first_result" != 1 \
 fi
 echo 'PASS: two concurrent owner departure requests share one receipt and transfer'
 "${psql[@]}" -q -c 'DROP TABLE public.issue17_departure_concurrency_fixture'
+
+# Owner removal and collaborator self-departure serialize on the board lock.
+issue17_removal_race_dir="$test_dir/issue17-removal-race"
+mkdir -- "$issue17_removal_race_dir"
+issue17_removal_race_first_log="$issue17_removal_race_dir/owner.log"
+issue17_removal_race_second_log="$issue17_removal_race_dir/collaborator.log"
+IFS='|' read -r issue17_removal_board_id issue17_removal_slug \
+  issue17_removal_owner_id issue17_removal_collaborator_id \
+  issue17_removal_membership_id issue17_removal_task_id \
+  issue17_removal_operation_id issue17_leave_operation_id < <(
+    "${psql[@]}" -AtF '|' -c "SELECT board_id, board_slug, owner_id, collaborator_id, membership_id, task_id, remove_operation_id, leave_operation_id FROM public.issue17_member_removal_concurrency_fixture"
+  )
+
+PGAPPNAME=openkanban_issue17_removal_owner "${psql[@]}" -qAt \
+  -v board_id="$issue17_removal_board_id" \
+  -v owner_id="$issue17_removal_owner_id" \
+  -v membership_id="$issue17_removal_membership_id" \
+  -v operation_id="$issue17_removal_operation_id" \
+  > "$issue17_removal_race_first_log" 2>&1 <<'SQL' &
+BEGIN;
+SELECT id FROM public.boards WHERE id = :'board_id'::uuid FOR UPDATE;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', :'owner_id', true);
+SELECT pg_sleep(4);
+SELECT public.remove_board_collaborator_p(
+  :'operation_id'::uuid, :'board_id'::uuid, :'membership_id'::uuid
+)->>'status';
+SELECT pg_sleep(2);
+COMMIT;
+SQL
+issue17_removal_race_first_pid=$!
+
+issue17_removal_race_first_holds_lock=false
+for _ in $(seq 1 100); do
+  issue17_removal_race_first_state=$("${psql[@]}" -At -c "SELECT state FROM pg_stat_activity WHERE application_name = 'openkanban_issue17_removal_owner' AND state = 'active' AND query LIKE '%pg_sleep(4)%'")
+  if [[ "$issue17_removal_race_first_state" == active ]]; then
+    issue17_removal_race_first_holds_lock=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$issue17_removal_race_first_holds_lock" != true ]]; then
+  cat -- "$issue17_removal_race_first_log" >&2
+  echo 'The owner-removal session did not acquire the board lock.' >&2
+  wait "$issue17_removal_race_first_pid" || true
+  exit 1
+fi
+
+PGAPPNAME=openkanban_issue17_removal_collaborator "${psql[@]}" -qAt \
+  -v board_id="$issue17_removal_board_id" \
+  -v collaborator_id="$issue17_removal_collaborator_id" \
+  -v leave_operation_id="$issue17_leave_operation_id" \
+  > "$issue17_removal_race_second_log" 2>&1 <<'SQL' &
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', :'collaborator_id', true);
+SELECT public.leave_board_p(
+  :'leave_operation_id'::uuid, :'board_id'::uuid, NULL
+)->>'status';
+COMMIT;
+SQL
+issue17_removal_race_second_pid=$!
+
+issue17_removal_race_second_waiting=false
+for _ in $(seq 1 100); do
+  issue17_removal_race_waiters=$("${psql[@]}" -At -c "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'openkanban_issue17_removal_collaborator' AND wait_event_type = 'Lock'")
+  if [[ "$issue17_removal_race_waiters" == 1 ]]; then
+    issue17_removal_race_second_waiting=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$issue17_removal_race_second_waiting" != true ]]; then
+  cat -- "$issue17_removal_race_first_log" "$issue17_removal_race_second_log" >&2
+  echo 'The collaborator departure did not wait for the owner-removal board lock.' >&2
+  "${psql[@]}" -q -c "SELECT pg_cancel_backend(pid) FROM pg_stat_activity WHERE application_name = 'openkanban_issue17_removal_owner'" >/dev/null
+  wait "$issue17_removal_race_first_pid" || true
+  wait "$issue17_removal_race_second_pid" || true
+  exit 1
+fi
+
+wait "$issue17_removal_race_first_pid" || { cat -- "$issue17_removal_race_first_log" >&2; exit 1; }
+wait "$issue17_removal_race_second_pid" || { cat -- "$issue17_removal_race_second_log" >&2; exit 1; }
+issue17_removal_owner_confirmed=$(grep -xc 'confirmed' "$issue17_removal_race_first_log" || true)
+issue17_removal_collaborator_unavailable=$(grep -xc 'unavailable' "$issue17_removal_race_second_log" || true)
+issue17_removal_race_state=$("${psql[@]}" -At \
+  -v board_id="$issue17_removal_board_id" \
+  -v owner_id="$issue17_removal_owner_id" \
+  -v collaborator_id="$issue17_removal_collaborator_id" \
+  -v task_id="$issue17_removal_task_id" \
+  -v operation_id="$issue17_removal_operation_id" <<'SQL'
+SELECT CASE WHEN (
+  board.owner_id = :'owner_id'::uuid
+  AND (SELECT count(*) FROM public.board_memberships AS membership
+       WHERE membership.board_id = board.id
+         AND membership.user_id = :'owner_id'::uuid
+         AND membership.role = 'owner'
+         AND membership.revoked_at IS NULL) = 1
+  AND (SELECT count(*) FROM public.board_memberships AS membership
+       WHERE membership.board_id = board.id
+         AND membership.user_id = :'collaborator_id'::uuid
+         AND membership.revoked_at IS NULL) = 0
+  AND (SELECT task.assignee_id IS NULL AND task.assignee_version = 3
+       FROM public.tasks AS task WHERE task.id = :'task_id'::uuid)
+  AND (SELECT count(*) FROM public.board_departure_operation_receipts AS receipt
+       WHERE receipt.actor_id = :'owner_id'::uuid
+         AND receipt.operation_id = :'operation_id'::uuid
+         AND receipt.action = 'remove_collaborator'
+         AND receipt.result_status = 'confirmed') = 1
+) THEN 'ok' ELSE 'bad' END
+FROM public.boards AS board
+WHERE board.id = :'board_id'::uuid;
+SQL
+)
+if [[ "$issue17_removal_owner_confirmed" != 1 \
+  || "$issue17_removal_collaborator_unavailable" != 1 \
+  || "$issue17_removal_race_state" != ok ]]; then
+  echo 'Concurrent owner removal and collaborator departure left an invalid state.' >&2
+  cat -- "$issue17_removal_race_first_log" "$issue17_removal_race_second_log" >&2
+  echo "owner_confirmed=$issue17_removal_owner_confirmed collaborator_unavailable=$issue17_removal_collaborator_unavailable state=$issue17_removal_race_state" >&2
+  exit 1
+fi
+echo 'PASS: owner removal serializes with collaborator departure without duplicate cleanup'
+"${psql[@]}" -q -c 'DROP TABLE public.issue17_member_removal_concurrency_fixture'
 
 # Two sessions can both lose the response to one comment operation. The
 # receipt's unique-key winner must be returned to both without duplicating text.

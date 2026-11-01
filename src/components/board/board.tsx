@@ -55,6 +55,7 @@ import type {
   AssignableBoardMember,
   Board as BoardType,
   ColumnWithTasks,
+  CurrentBoardMember,
   Task,
   TaskAssigneeCommand,
   TaskAssigneeResult,
@@ -70,6 +71,7 @@ interface BoardProps {
   initialColumns: ColumnWithTasks[];
   ownerAuthUserId: string;
   assignableMembers: AssignableBoardMember[] | null;
+  currentMembers: CurrentBoardMember[] | null;
   hasOtherCurrentMembers: boolean | null;
   initialTaskId: string | null;
   initialCommentId: string | null;
@@ -90,6 +92,7 @@ export function Board({
   initialColumns,
   ownerAuthUserId,
   assignableMembers,
+  currentMembers,
   hasOtherCurrentMembers,
   initialTaskId,
   initialCommentId,
@@ -222,6 +225,7 @@ export function Board({
       initialBoard={initialBoard}
       initialColumns={initialColumns}
       assignableMembers={assignableMembers}
+      currentMembers={currentMembers}
       hasOtherCurrentMembers={hasOtherCurrentMembers}
       initialTaskId={initialTaskId}
       initialCommentId={initialCommentId}
@@ -238,6 +242,7 @@ function BoardWorkspace({
   initialBoard,
   initialColumns,
   assignableMembers,
+  currentMembers,
   hasOtherCurrentMembers,
   initialTaskId,
   initialCommentId,
@@ -796,6 +801,7 @@ function BoardWorkspace({
         actorId={actorId}
         hasOtherCurrentMembers={hasOtherCurrentMembers}
         eligibleSuccessors={assignableMembers}
+        currentMembers={currentMembers}
         canRecoverTasks={
           initialBoard.role === "owner" || initialBoard.role === "collaborator"
         }

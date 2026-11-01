@@ -4,11 +4,16 @@ import { Board } from "@/components/board/board";
 import { Unavailable } from "@/components/board/Unavailable";
 import { resolveApplicationAccess } from "@/lib/auth";
 import { getFullBoard } from "@/lib/db";
+import { listCurrentBoardMembers } from "@/lib/db/board-members";
 import { hasOtherCurrentBoardMembers } from "@/lib/db/membership-departure";
 import { listAssignableBoardMembers } from "@/lib/db/my-tasks";
 import { myTasksHref } from "@/lib/my-tasks-navigation";
 import { createClient } from "@/lib/supabase/server";
-import type { AssignableBoardMember, MyTasksOrder } from "@/lib/types";
+import type {
+  AssignableBoardMember,
+  CurrentBoardMember,
+  MyTasksOrder,
+} from "@/lib/types";
 
 interface BoardPageProps {
   params: Promise<{ slug: string }>;
@@ -100,11 +105,17 @@ export default async function BoardPage({
   }
 
   let assignableMembers: AssignableBoardMember[] | null = null;
+  let currentMembers: CurrentBoardMember[] | null = null;
   let hasOtherCurrentMembers: boolean | null = null;
   try {
     assignableMembers = await listAssignableBoardMembers(supabase, slug);
   } catch {
     assignableMembers = null;
+  }
+  try {
+    currentMembers = await listCurrentBoardMembers(supabase, slug);
+  } catch {
+    currentMembers = null;
   }
   if (boardData.board.role === "owner") {
     try {
@@ -124,6 +135,7 @@ export default async function BoardPage({
       initialColumns={boardData.columns}
       ownerAuthUserId={authData.user.id}
       assignableMembers={assignableMembers}
+      currentMembers={currentMembers}
       hasOtherCurrentMembers={hasOtherCurrentMembers}
       initialTaskId={initialTaskId}
       initialCommentId={initialTaskId ? requestedCommentId : null}

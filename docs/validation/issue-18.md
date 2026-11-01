@@ -10,6 +10,7 @@ Fecha de validación local: `2026-11-01`.
 - Base y merge-base: `a9f6d013c431ee65fae05d38a2d119562bc59d7f` (`codex/openkanban-1-0`).
 - Commit de implementación: `8602286` (`feat: recover deleted boards and columns (#18)`).
 - Commit adicional de cobertura C110-AC54: `61149ea` (`test: cover collaborator column recovery (#18)`).
+- Commit de formato Biome: `9d9d57e` (`style: format issue 18 code with Biome (#18)`); HEAD de código validado: `9d9d57e64e2911cc56dee58f23da8bc6beaa7688`.
 - El issue #18 continúa asignado a `elgastipaa`, con el kickoff existente `6556830777`. Se conservaron `Blocked by #9`, `#14` y `#17`; siguen abiertos/ready-for-human y no se cerraron ni editaron. No se declara QA humana.
 - Referencias: issue #18; C-76, C-94 y C-98; R-02/R-03; P21; C110-AC54; UI-14; CF-01/CF-12 y acuerdos de Estados y errores.
 - El borrado de series y sus restricciones de destino siguen en #28. No se añadió lógica de series.
@@ -54,11 +55,12 @@ Entorno observado: Windows con WSL Ubuntu 24.04 para PostgreSQL; Node `v24.14.1`
 | `pnpm test:unit` | Exit 0, 120/120 | Incluye flujos de board recovery, delete/restore de columna y frontera cerrada de importación. |
 | `pnpm exec next typegen` | Exit 0 | Tipos de rutas Next generados antes de typecheck. |
 | `pnpm typecheck` | Exit 0 | `tsc --noEmit`. El build también terminó su fase TypeScript. |
-| `pnpm build` | Exit 0 | Next.js compiló, generó 13 páginas estáticas/dinámicas y finalizó optimización. |
-| `pnpm exec biome lint --max-diagnostics=none` dirigido | Exit 0 | 21 archivos TS/TSX/MJS cambiados: `Checked 21 files`; sin diagnostics ni fixes. |
-| `pnpm lint` | Exit 1 | `biome check` reportó 170 diagnósticos en 166 archivos, incluidos cambios de formato/CRLF repo-wide. No se aplicaron fixes automáticos globales. El lint dirigido pasa. |
+| `pnpm build` | Exit 0 antes del commit solo de formato | Next.js compiló, generó 13 páginas estáticas/dinámicas y finalizó optimización en `77e6854`; no se repitió tras `9d9d57e` porque solo ordena imports/formato. |
+| `pnpm exec biome check --write` dirigido | Exit 0 | Se ejecutó sobre las 22 rutas TS/TSX/MJS/JSON modificadas detectadas desde la base; Biome reportó `Checked 22 files in 51ms. Fixed 21 files.` Incluyó `package.json`. El diff resultante solo altera orden de imports y formato. |
+| `pnpm exec biome check` dirigido, sin `--write` | Exit 0 | Las mismas 22 rutas: `Checked 22 files in 43ms. No fixes applied.` |
+| `pnpm lint` | Exit 1 | Repetido después del formato dirigido, sin fixes: `biome check` reportó 144 diagnósticos en 166 archivos, incluidos cambios de formato/CRLF repo-wide. No se aplicaron fixes automáticos globales; el check dirigido pasa. |
 | `bash -n scripts/test-db.sh` | Exit 0 | Sintaxis de runner. |
-| `git diff --check` | Exit 0 | Revisado tras ambos commits de código/test. |
+| `git diff --check` | Exit 0 | Repetido tras el commit de formato, también contra la base fija. |
 
 El chequeo Biome dirigido abarcó: `src/app/admin/access/page.tsx`, `src/app/page.tsx`, los componentes `board-toolbar`, `board`, `mobile-board`, `task-recovery-dialog`, `admin-board-recovery`, `column-deletion-dialog` y `my-board-recovery`; `src/hooks/use-board.ts`, `use-board-sync.ts`, `use-column-operations.ts`; `src/lib/db/boards.ts`, `columns.ts`, `import.ts`, `board-recovery-flow.ts`, `column-deletion-flow.ts`, `import-replacement-boundary.ts`; y los tres tests unitarios nuevos de esos helpers.
 

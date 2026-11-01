@@ -1,17 +1,25 @@
 "use client";
 
 import {
+  IconDots,
   IconDownload,
   IconPencil,
   IconTrash,
   IconUpload,
   IconUsers,
+  IconWorld,
 } from "@tabler/icons-react";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { BoardSignOutButton } from "@/components/auth/board-sign-out-button";
 import { BoardTimeZoneDialog } from "@/components/board/board-time-zone-dialog";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Logo } from "@/components/ui/logo";
 import { renameBoard } from "@/lib/auth-actions";
 import type { BoardTimeZonePreview } from "@/lib/types";
@@ -47,6 +55,7 @@ export function BoardToolbar({
   const [editValue, setEditValue] = useState(name);
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isTimeZoneDialogOpen, setIsTimeZoneDialogOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const isSavingRef = useRef(false);
@@ -194,11 +203,33 @@ export function BoardToolbar({
 
       <div className="flex items-center gap-1">
         {canRename ? (
-          <BoardTimeZoneDialog
-            timeZone={timeZone}
-            onPreview={onPreviewTimeZone}
-            onSave={onSaveTimeZone}
-          />
+          <>
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                title="Más acciones del tablero"
+                aria-label="Más acciones del tablero"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-transparent text-text-secondary transition-colors hover:bg-surface-overlay hover:text-text-primary focus-visible:ring-1 focus-visible:ring-accent"
+              >
+                <IconDots size={18} aria-hidden="true" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-56">
+                <DropdownMenuItem
+                  onClick={() => setIsTimeZoneDialogOpen(true)}
+                  className="cursor-pointer"
+                >
+                  <IconWorld size={16} aria-hidden="true" />
+                  Zona horaria del tablero
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <BoardTimeZoneDialog
+              open={isTimeZoneDialogOpen}
+              onClose={() => setIsTimeZoneDialogOpen(false)}
+              timeZone={timeZone}
+              onPreview={onPreviewTimeZone}
+              onSave={onSaveTimeZone}
+            />
+          </>
         ) : null}
         {canRename ? (
           <Button

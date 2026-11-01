@@ -10,6 +10,7 @@ interface ConfirmDialogProps {
   title: string;
   description: string;
   confirmLabel?: string;
+  cancelLabel?: string;
   loading?: boolean;
   onAfterClose?: () => void;
 }
@@ -21,6 +22,7 @@ export function ConfirmDialog({
   title,
   description,
   confirmLabel = "Delete",
+  cancelLabel = "Cancel",
   loading = false,
   onAfterClose,
 }: ConfirmDialogProps) {
@@ -36,7 +38,7 @@ export function ConfirmDialog({
       </p>
       <div className="flex items-center justify-end gap-2">
         <Button variant="ghost" onClick={onClose} disabled={loading}>
-          Cancel
+          {cancelLabel}
         </Button>
         <Button variant="danger" onClick={onConfirm} disabled={loading}>
           {loading ? "Deleting..." : confirmLabel}

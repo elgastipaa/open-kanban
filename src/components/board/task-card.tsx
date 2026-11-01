@@ -11,6 +11,7 @@ import {
 import type { MouseEvent } from "react";
 import { createPortal } from "react-dom";
 import { TaskDueDate } from "@/components/board/task-due-date";
+import { getTaskChecklistProgress } from "@/lib/task-checklist-state";
 import type { Priority, Task } from "@/lib/types";
 
 interface TaskCardProps {
@@ -56,6 +57,7 @@ export function TaskCard({
   onMoveDown,
 }: TaskCardProps) {
   const priority = priorityConfig[task.priority];
+  const checklistProgress = getTaskChecklistProgress(task.steps);
 
   return (
     <Draggable
@@ -138,6 +140,12 @@ export function TaskCard({
                 >
                   {priority.label}
                 </span>
+                {checklistProgress.totalCount > 0 ? (
+                  <span className="mr-2 ml-auto text-[10px] text-text-muted">
+                    Pasos {checklistProgress.completedCount}/
+                    {checklistProgress.totalCount}
+                  </span>
+                ) : null}
                 {task.due_on ? (
                   <TaskDueDate
                     dueOn={task.due_on}

@@ -29,6 +29,11 @@ import {
   abortPendingSessionRequests,
   createClient,
 } from "@/lib/supabase/client";
+import { resolveTaskChecklistCompletionReview } from "@/lib/task-checklist-completion";
+import {
+  getTaskChecklistCompletionReview,
+  type TaskChecklistCompletionReview,
+} from "@/lib/task-checklist-state";
 import { pendingTaskInsertionIndex } from "@/lib/task-completion";
 import {
   cancelTaskDelete,
@@ -52,6 +57,8 @@ import type {
   Task,
   TaskAssigneeCommand,
   TaskAssigneeResult,
+  TaskCompletionCommand,
+  TaskCompletionResult,
   TaskOrderResult,
 } from "@/lib/types";
 import { generateUUID } from "@/lib/utils";
@@ -274,6 +281,7 @@ function BoardWorkspace({
     addTask,
     editTask,
     completeTask,
+    mutateChecklistStep,
     refreshTaskForEdit,
     refreshBoardFromDB,
     applyBoardSettings,
@@ -340,6 +348,13 @@ function BoardWorkspace({
 
   // Task modal state
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [pendingCardCompletionReview, setPendingCardCompletionReview] =
+    useState<{
+      command: TaskCompletionCommand;
+      review: TaskChecklistCompletionReview;
+    } | null>(null);
+  const [isConfirmingCardCompletion, setIsConfirmingCardCompletion] =
+    useState(false);
   const taskOriginRef = useRef<TaskFocusOrigin | null>(null);
   const { isOnline } = useOnlineStatus();
   const editingTask = editingTaskId
@@ -537,30 +552,72 @@ function BoardWorkspace({
     [columns, moveTask],
   );
 
-  async function handleCardCompletion(task: Task, isCompleted: boolean) {
-    try {
-      const result = await completeTask({
-        id: task.id,
-        operation_id: generateUUID(),
-        is_completed: isCompleted,
-        expected_version: task.completion_version,
+  function reportCardCompletion(result: TaskCompletionResult) {
+    if (result.status === "confirmed") {
+      toast.success(
+        result.task.is_completed ? "Tarea completada" : "Tarea reabierta",
+      );
+    } else if (result.status === "conflict") {
+      toast.error("El estado de la tarea cambió", {
+        description:
+          "Actualizamos el tablero. Abre la tarea y elige de nuevo la acción.",
       });
-      if (result.status === "confirmed") {
-        toast.success(isCompleted ? "Tarea completada" : "Tarea reabierta");
-      } else if (result.status === "conflict") {
-        toast.error("El estado de la tarea cambió", {
-          description:
-            "Actualizamos el tablero. Abre la tarea y elige de nuevo la acción.",
-        });
-      } else {
-        toast.error("No se pudo confirmar el cambio de estado", {
-          description: "Revisa el tablero antes de volver a elegir la acción.",
-        });
+    } else {
+      toast.error("No se pudo confirmar el cambio de estado", {
+        description: "Revisa el tablero antes de volver a elegir la acción.",
+      });
+    }
+  }
+
+  async function handleCardCompletion(task: Task, isCompleted: boolean) {
+    const command: TaskCompletionCommand = {
+      id: task.id,
+      operation_id: generateUUID(),
+      is_completed: isCompleted,
+      expected_version: task.completion_version,
+    };
+    try {
+      const result = await completeTask(command);
+      const review = getTaskChecklistCompletionReview(result);
+      if (review) {
+        setPendingCardCompletionReview({ command, review });
+        return;
       }
+      reportCardCompletion(result);
     } catch {
       toast.error("No se pudo confirmar el cambio de estado", {
         description: "Revisa el tablero antes de volver a elegir la acción.",
       });
+    }
+  }
+
+  async function acceptCardCompletionReview() {
+    if (!pendingCardCompletionReview || isConfirmingCardCompletion) return;
+    const command = resolveTaskChecklistCompletionReview(
+      pendingCardCompletionReview.command,
+      pendingCardCompletionReview.review,
+      "accept",
+    );
+    if (!command) {
+      setPendingCardCompletionReview(null);
+      return;
+    }
+    setIsConfirmingCardCompletion(true);
+    try {
+      const result = await completeTask(command);
+      const refreshedReview = getTaskChecklistCompletionReview(result);
+      if (refreshedReview) {
+        setPendingCardCompletionReview({ command, review: refreshedReview });
+        return;
+      }
+      setPendingCardCompletionReview(null);
+      reportCardCompletion(result);
+    } catch {
+      toast.error("No se pudo confirmar el cambio de estado", {
+        description: "Revisa el tablero antes de volver a elegir la acción.",
+      });
+    } finally {
+      setIsConfirmingCardCompletion(false);
     }
   }
 
@@ -818,6 +875,7 @@ function BoardWorkspace({
         onReconcileTask={refreshTaskForEdit}
         onSave={editTask}
         onSetTaskCompletion={completeTask}
+        onMutateChecklist={mutateChecklistStep}
         assignableMembers={assignableMembers}
         onSetTaskAssignee={assignTask}
         onMoveTask={moveTaskFromEditor}
@@ -837,6 +895,23 @@ function BoardWorkspace({
           id: column.id,
           title: column.title,
         }))}
+      />
+
+      <ConfirmDialog
+        open={pendingCardCompletionReview !== null}
+        onClose={() => setPendingCardCompletionReview(null)}
+        onConfirm={acceptCardCompletionReview}
+        title="Completar tarea con pasos pendientes"
+        description={
+          pendingCardCompletionReview
+            ? pendingCardCompletionReview.review.pendingStepsCount === 1
+              ? "Queda 1 paso sin marcar. ¿Completar igual?"
+              : `Quedan ${pendingCardCompletionReview.review.pendingStepsCount} pasos sin marcar. ¿Completar igual?`
+            : ""
+        }
+        confirmLabel="Completar igual"
+        cancelLabel="Cancelar"
+        loading={isConfirmingCardCompletion}
       />
 
       {/* Delete board confirmation */}

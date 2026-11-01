@@ -16,6 +16,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { getTaskChecklistProgress } from "@/lib/task-checklist-state";
 import type { ColumnWithTasks, Priority, Task } from "@/lib/types";
 
 interface MobileTaskCardProps {
@@ -68,6 +69,7 @@ export function MobileTaskCard({
   onMoveDown,
 }: MobileTaskCardProps) {
   const priority = priorityConfig[task.priority];
+  const checklistProgress = getTaskChecklistProgress(task.steps);
   const [showMoveMenu, setShowMoveMenu] = useState(false);
 
   // Columns that are valid move targets (not the current one)
@@ -123,6 +125,12 @@ export function MobileTaskCard({
           >
             {priority.label}
           </span>
+          {checklistProgress.totalCount > 0 ? (
+            <span className="mr-2 ml-auto text-[10px] text-text-muted">
+              Pasos {checklistProgress.completedCount}/
+              {checklistProgress.totalCount}
+            </span>
+          ) : null}
           {task.due_on ? (
             <TaskDueDate
               dueOn={task.due_on}

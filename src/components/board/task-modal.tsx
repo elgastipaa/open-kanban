@@ -12,6 +12,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { TaskDueDate } from "@/components/board/task-due-date";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -19,7 +20,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Modal } from "@/components/ui/modal";
-import { TaskEditError } from "@/lib/db/tasks";
+import { TaskChecklistError, TaskEditError } from "@/lib/db/tasks";
+import { resolveTaskChecklistCompletionReview } from "@/lib/task-checklist-completion";
+import {
+  getTaskChecklistCompletionReview,
+  getTaskChecklistProgress,
+  moveTaskChecklistStep,
+  type TaskChecklistCompletionReview,
+} from "@/lib/task-checklist-state";
 import { taskCompletionFollowUp } from "@/lib/task-completion";
 import { formatTaskDueDate, isDateOnly } from "@/lib/task-date";
 import {
@@ -44,6 +52,8 @@ import type {
   Task,
   TaskAssigneeCommand,
   TaskAssigneeResult,
+  TaskChecklistCommand,
+  TaskChecklistResult,
   TaskCompletionCommand,
   TaskCompletionResult,
   TaskEditableField,
@@ -73,6 +83,9 @@ interface TaskModalProps {
   onSetTaskCompletion: (
     command: TaskCompletionCommand,
   ) => Promise<TaskCompletionResult>;
+  onMutateChecklist: (
+    command: TaskChecklistCommand,
+  ) => Promise<TaskChecklistResult>;
   onMoveTask: (
     taskId: string,
     targetColumnId: string,
@@ -168,6 +181,7 @@ export function TaskModal({
   assignableMembers,
   onSetTaskAssignee,
   onSetTaskCompletion,
+  onMutateChecklist,
   onMoveTask,
   onDelete,
 }: TaskModalProps) {
@@ -199,6 +213,19 @@ export function TaskModal({
   >(null);
   const [isCompleting, setIsCompleting] = useState(false);
   const [completionNotice, setCompletionNotice] = useState("");
+  const [pendingChecklistReview, setPendingChecklistReview] =
+    useState<TaskChecklistCompletionReview | null>(null);
+  const [
+    pendingChecklistCompletionCommand,
+    setPendingChecklistCompletionCommand,
+  ] = useState<TaskCompletionCommand | null>(null);
+  const [isChecklistWorking, setIsChecklistWorking] = useState(false);
+  const [checklistNotice, setChecklistNotice] = useState("");
+  const [newChecklistStepText, setNewChecklistStepText] = useState("");
+  const [editingChecklistStepId, setEditingChecklistStepId] = useState<
+    string | null
+  >(null);
+  const [editingChecklistStepText, setEditingChecklistStepText] = useState("");
   const [selectedAssigneeId, setSelectedAssigneeId] = useState(
     task?.assignee_id ?? "",
   );
@@ -232,6 +259,13 @@ export function TaskModal({
     setPendingCompletionTarget(null);
     setIsCompleting(false);
     setCompletionNotice("");
+    setPendingChecklistReview(null);
+    setPendingChecklistCompletionCommand(null);
+    setIsChecklistWorking(false);
+    setChecklistNotice("");
+    setNewChecklistStepText("");
+    setEditingChecklistStepId(null);
+    setEditingChecklistStepText("");
     setSelectedAssigneeId(task.assignee_id ?? "");
     setIsAssigning(false);
     setAssigneeNotice("");
@@ -253,7 +287,12 @@ export function TaskModal({
   const hasConflict = Object.keys(conflicts).length > 0;
   const isSaving = workflow.status === "saving";
   const isWorking =
-    isSaving || isReconciling || isMoving || isCompleting || isAssigning;
+    isSaving ||
+    isReconciling ||
+    isMoving ||
+    isCompleting ||
+    isAssigning ||
+    isChecklistWorking;
 
   useEffect(() => {
     if (!open || !dirty) return;
@@ -334,6 +373,10 @@ export function TaskModal({
   }
 
   function requestClose() {
+    if (pendingChecklistReview) {
+      cancelChecklistCompletionReview();
+      return;
+    }
     if (isWorking) {
       setCloseNotice("Espera a que termine el guardado antes de cerrar.");
       return;
@@ -418,15 +461,42 @@ export function TaskModal({
     ) {
       return;
     }
+    const command: TaskCompletionCommand = {
+      id: task.id,
+      operation_id: generateUUID(),
+      is_completed: target,
+      expected_version: taskSnapshot.completion_version,
+    };
+    await submitCompletion(command, afterSave);
+  }
+
+  async function submitCompletion(
+    command: TaskCompletionCommand,
+    afterSave = false,
+  ) {
     setIsCompleting(true);
     setCompletionNotice("");
     try {
-      const result = await onSetTaskCompletion({
-        id: task.id,
-        operation_id: generateUUID(),
-        is_completed: target,
-        expected_version: taskSnapshot.completion_version,
-      });
+      const result = await onSetTaskCompletion(command);
+      const checklistReview = getTaskChecklistCompletionReview(result);
+      if (
+        checklistReview &&
+        (result.status === "confirmation_required" ||
+          result.status === "conflict")
+      ) {
+        setPendingChecklistCompletionCommand({
+          ...command,
+          operation_id: checklistReview.operationId,
+          expected_version: result.task.completion_version,
+        });
+        setPendingChecklistReview(checklistReview);
+        setBaseTask(result.task);
+        if (afterSave) setWorkflow(confirmTaskEditSave(draftFor(result.task)));
+        setCompletionNotice("");
+        return;
+      }
+      setPendingChecklistReview(null);
+      setPendingChecklistCompletionCommand(null);
       if (result.status !== "confirmed" && result.status !== "conflict") {
         setCompletionNotice(
           "No se pudo confirmar el cambio de estado. Revisa la tarea antes de volver a elegir la acción.",
@@ -436,7 +506,9 @@ export function TaskModal({
       setBaseTask(result.task);
       if (result.status === "confirmed") {
         setWorkflow(confirmTaskEditSave(draftFor(result.task)));
-        setCompletionNotice(target ? "Tarea completada." : "Tarea reabierta.");
+        setCompletionNotice(
+          command.is_completed ? "Tarea completada." : "Tarea reabierta.",
+        );
       } else {
         setCompletionNotice(
           "El estado cambió o no se pudo confirmar. Actualizamos la tarea; vuelve a elegir la acción.",
@@ -452,6 +524,136 @@ export function TaskModal({
       setCloseAction("close");
       setShowCloseChoices(false);
     }
+  }
+
+  function cancelChecklistCompletionReview() {
+    if (!pendingChecklistCompletionCommand || !pendingChecklistReview) return;
+    const commandAfterCancellation = resolveTaskChecklistCompletionReview(
+      pendingChecklistCompletionCommand,
+      pendingChecklistReview,
+      "cancel",
+    );
+    if (commandAfterCancellation !== null) return;
+    setPendingChecklistReview(null);
+    setPendingChecklistCompletionCommand(null);
+  }
+
+  function acceptChecklistCompletionReview() {
+    if (!pendingChecklistCompletionCommand || !pendingChecklistReview) return;
+    if (!isOnline) {
+      setCompletionNotice(
+        "Estás sin conexión. La tarea no cambiará de estado.",
+      );
+      return;
+    }
+    const command = resolveTaskChecklistCompletionReview(
+      pendingChecklistCompletionCommand,
+      pendingChecklistReview,
+      "accept",
+    );
+    if (!command) {
+      cancelChecklistCompletionReview();
+      return;
+    }
+    void submitCompletion(command);
+  }
+
+  async function mutateChecklist(
+    mutation: TaskChecklistCommand["command"],
+    successMessage: string,
+  ): Promise<boolean> {
+    if (!task || !baseTask || isChecklistWorking || !isOnline) return false;
+    setIsChecklistWorking(true);
+    setChecklistNotice("");
+    try {
+      const result = await onMutateChecklist({
+        id: task.id,
+        operation_id: generateUUID(),
+        command: mutation,
+      });
+      if (result.status === "confirmed" || result.status === "conflict") {
+        setBaseTask((current) =>
+          current
+            ? {
+                ...current,
+                steps: result.task.steps,
+                steps_order_version: result.task.steps_order_version,
+                checklist_version: result.task.checklist_version,
+              }
+            : current,
+        );
+        if (result.status === "confirmed") {
+          setChecklistNotice(successMessage);
+          return true;
+        } else {
+          setChecklistNotice(
+            "La checklist cambió en otro momento. Actualizamos sus pasos; revisa antes de volver a intentar.",
+          );
+          return false;
+        }
+      } else {
+        setChecklistNotice(
+          "No se pudo confirmar el cambio de checklist. Actualiza la tarea antes de volver a intentarlo.",
+        );
+        return false;
+      }
+    } catch (error) {
+      setChecklistNotice(
+        error instanceof TaskChecklistError && error.reason === "access_denied"
+          ? "Tu acceso al tablero cambió. Actualiza la página antes de continuar."
+          : "No se pudo confirmar el cambio de checklist. Actualiza la tarea antes de volver a intentarlo.",
+      );
+      return false;
+    } finally {
+      setIsChecklistWorking(false);
+    }
+  }
+
+  function addChecklistStep() {
+    const text = newChecklistStepText.trim();
+    if (!text) return;
+    void mutateChecklist({ action: "add", text }, "Paso agregado.").then(
+      (confirmed) => {
+        if (confirmed) setNewChecklistStepText("");
+      },
+    );
+  }
+
+  function saveChecklistStep(stepId: string) {
+    const step = baseTask?.steps.find((candidate) => candidate.id === stepId);
+    const text = editingChecklistStepText.trim();
+    if (!step || !text) return;
+    void mutateChecklist(
+      {
+        action: "edit",
+        step_id: step.id,
+        text,
+        expected_version: step.version,
+      },
+      "Paso actualizado.",
+    ).then((confirmed) => {
+      if (!confirmed) return;
+      setEditingChecklistStepId(null);
+      setEditingChecklistStepText("");
+    });
+  }
+
+  function moveChecklistStep(stepId: string, offset: number) {
+    if (!baseTask) return;
+    const reordered = moveTaskChecklistStep(baseTask.steps, stepId, offset);
+    if (
+      reordered.every((step, index) => step.id === baseTask.steps[index]?.id)
+    ) {
+      return;
+    }
+    void mutateChecklist(
+      {
+        action: "reorder",
+        step_ids: reordered.map((step) => step.id),
+        expected_order_version: baseTask.steps_order_version,
+      },
+      "Orden actualizado.",
+    );
   }
 
   function requestCompletion() {
@@ -799,643 +1001,864 @@ export function TaskModal({
     year: "numeric",
   });
   const otherColumns = columns.filter((column) => column.id !== task.column_id);
+  const checklistProgress = getTaskChecklistProgress(baseTask.steps);
 
   return (
-    <Modal
-      open={open}
-      onClose={requestClose}
-      title="Detalle de la tarea"
-      fullScreenMobile
-      closeLabel="Cerrar detalle de tarea"
-      onAfterClose={onAfterClose}
-    >
-      <div className="flex min-h-[calc(100dvh-5rem)] flex-col gap-5 sm:min-h-0">
-        <div>
-          <p className="mb-3 text-text-muted text-xs">{contextLabel}</p>
-          <label
-            htmlFor="task-title"
-            className="mb-2 flex items-center gap-1.5 font-semibold text-text-muted text-xs"
-          >
-            <IconTypography size={14} aria-hidden="true" /> Título
-          </label>
-          <input
-            id="task-title"
-            ref={titleInputRef}
-            data-modal-autofocus
-            value={draft.title}
-            disabled={isWorking}
-            onChange={(event) =>
-              updateDraft({ ...draft, title: event.target.value })
-            }
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                void save();
-              }
-            }}
-            placeholder="¿Qué hay que hacer?"
-            className="w-full rounded-md border border-border bg-transparent px-3 py-3 font-medium text-base text-text-primary outline-none transition-colors placeholder:text-text-muted/60 focus:border-accent focus:ring-1 focus:ring-accent disabled:opacity-60"
-          />
-        </div>
-
-        <section aria-labelledby="task-description-heading">
-          <div className="mb-2 flex items-center justify-between">
-            <h3
-              id="task-description-heading"
-              className="font-semibold text-sm text-text-primary"
+    <>
+      <Modal
+        open={open}
+        onClose={requestClose}
+        title="Detalle de la tarea"
+        fullScreenMobile
+        closeLabel="Cerrar detalle de tarea"
+        onAfterClose={onAfterClose}
+      >
+        <div className="flex min-h-[calc(100dvh-5rem)] flex-col gap-5 sm:min-h-0">
+          <div>
+            <p className="mb-3 text-text-muted text-xs">{contextLabel}</p>
+            <label
+              htmlFor="task-title"
+              className="mb-2 flex items-center gap-1.5 font-semibold text-text-muted text-xs"
             >
-              Descripción
-            </h3>
-            {!showDescription && (
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setShowDescription(true)}
-                aria-expanded={false}
-              >
-                Añadir descripción
-              </Button>
-            )}
-          </div>
-          {showDescription && (
-            <textarea
-              id="task-description"
-              aria-label="Descripción de la tarea"
-              value={draft.description}
+              <IconTypography size={14} aria-hidden="true" /> Título
+            </label>
+            <input
+              id="task-title"
+              ref={titleInputRef}
+              data-modal-autofocus
+              value={draft.title}
               disabled={isWorking}
               onChange={(event) =>
-                updateDraft({ ...draft, description: event.target.value })
+                updateDraft({ ...draft, title: event.target.value })
               }
-              rows={5}
-              placeholder="Añade los detalles necesarios para completar la tarea."
-              className="w-full resize-y rounded-md border border-border bg-transparent px-3 py-2.5 text-sm text-text-primary outline-none transition-colors placeholder:text-text-muted/60 focus:border-accent focus:ring-1 focus:ring-accent disabled:opacity-60"
-            />
-          )}
-        </section>
-
-        <section
-          className="border-border border-t pt-3"
-          aria-labelledby="task-assignee-heading"
-        >
-          <label
-            id="task-assignee-heading"
-            htmlFor="task-assignee"
-            className="mb-2 block font-semibold text-text-muted text-xs"
-          >
-            Responsable actual (opcional)
-          </label>
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <select
-              id="task-assignee"
-              value={selectedAssigneeId}
-              disabled={isWorking || !isOnline || !assignableMembers}
-              onChange={(event) => {
-                setSelectedAssigneeId(event.target.value);
-                setAssigneeNotice("");
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void save();
+                }
               }}
-              className="h-11 min-w-0 flex-1 rounded-md border border-border bg-surface-base px-3 text-sm text-text-primary outline-none focus:border-accent disabled:opacity-60"
-            >
-              <option value="">Sin responsable</option>
-              {baseTask.assignee_id &&
-              !assignableMembers?.some(
-                (member) => member.user_id === baseTask.assignee_id,
-              ) ? (
-                <option value={baseTask.assignee_id} disabled>
-                  Responsable actual no disponible
-                </option>
-              ) : null}
-              {assignableMembers?.map((member) => (
-                <option key={member.user_id} value={member.user_id}>
-                  {member.name}
-                  {member.name !== member.email ? ` · ${member.email}` : ""}
-                  {member.role === "owner" ? " · propietario" : ""}
-                </option>
-              ))}
-            </select>
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => void saveAssignee()}
-              disabled={
-                isWorking ||
-                !isOnline ||
-                !assignableMembers ||
-                selectedAssigneeId === (baseTask.assignee_id ?? "")
-              }
-            >
-              {isAssigning ? "Guardando…" : "Guardar responsable"}
-            </Button>
-          </div>
-          {assigneeNotice ? (
-            <output
-              className="mt-2 block text-text-secondary text-xs"
-              aria-live="polite"
-            >
-              {assigneeNotice}
-            </output>
-          ) : null}
-          {assignableMembers === null ? (
-            <output
-              className="mt-2 block text-priority-medium text-xs"
-              aria-live="polite"
-            >
-              No se pudieron cargar los miembros del tablero.
-            </output>
-          ) : null}
-        </section>
-
-        <section className="border-border border-t pt-3">
-          <button
-            type="button"
-            className="flex w-full items-center justify-between rounded-md py-2 text-left font-medium text-sm text-text-secondary hover:text-text-primary"
-            aria-expanded={showDetails}
-            onClick={() => setShowDetails((shown) => !shown)}
-          >
-            <span>Más detalles</span>
-            <IconChevronDown
-              size={16}
-              className={showDetails ? "rotate-180" : ""}
-              aria-hidden="true"
+              placeholder="¿Qué hay que hacer?"
+              className="w-full rounded-md border border-border bg-transparent px-3 py-3 font-medium text-base text-text-primary outline-none transition-colors placeholder:text-text-muted/60 focus:border-accent focus:ring-1 focus:ring-accent disabled:opacity-60"
             />
-          </button>
-          {showDetails && (
-            <div className="grid grid-cols-1 gap-4 pt-2 sm:grid-cols-2">
-              <div className="flex flex-col gap-2 sm:col-span-2">
-                <label
-                  htmlFor="task-due-on"
-                  className="flex items-center gap-1.5 font-semibold text-text-muted text-xs"
-                >
-                  <IconCalendar size={14} aria-hidden="true" /> Fecha límite
-                  (opcional)
-                </label>
-                <input
-                  id="task-due-on"
-                  type="date"
-                  value={draft.due_on}
-                  disabled={isWorking}
-                  aria-invalid={Boolean(dueOnError)}
-                  aria-describedby={
-                    dueOnError ? "task-due-on-error" : "task-due-on-help"
-                  }
-                  onChange={(event) =>
-                    updateDraft({ ...draft, due_on: event.target.value })
-                  }
-                  className="h-11 w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm text-text-primary outline-none transition-colors focus:border-accent focus:ring-1 focus:ring-accent disabled:opacity-60"
-                />
-                <p id="task-due-on-help" className="text-text-muted text-xs">
-                  Sin hora · Zona del tablero: {boardTimeZone}
-                </p>
-                {dueOnError && (
-                  <p
-                    id="task-due-on-error"
-                    className="text-priority-urgent text-xs"
-                    role="alert"
-                  >
-                    {dueOnError}
-                  </p>
-                )}
-                {draft.due_on && (
-                  <TaskDueDate
-                    dueOn={draft.due_on}
-                    boardToday={boardToday}
-                    isCompleted={baseTask.is_completed}
-                  />
-                )}
-              </div>
-              <div className="flex flex-col gap-2">
-                <label
-                  htmlFor="task-priority"
-                  className="flex items-center gap-1.5 font-semibold text-text-muted text-xs"
-                >
-                  <IconFlag size={14} aria-hidden="true" /> Prioridad
-                </label>
-                <DropdownMenu>
-                  <DropdownMenuTrigger
-                    id="task-priority"
-                    disabled={isWorking}
-                    className="flex h-11 w-full items-center justify-between rounded-md border border-border bg-transparent px-3 py-2 text-left font-medium text-sm text-text-primary outline-none focus:border-accent disabled:opacity-60 data-[status=open]:border-accent"
-                  >
-                    <span>
-                      {
-                        priorityOptions.find(
-                          (option) => option.value === draft.priority,
-                        )?.label
-                      }
-                    </span>
-                    <IconChevronDown
-                      size={16}
-                      className="text-text-muted"
-                      aria-hidden="true"
-                    />
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent
-                    align="start"
-                    className="w-(--anchor-width) border border-border bg-surface-raised"
-                  >
-                    {priorityOptions.map((option) => (
-                      <DropdownMenuItem
-                        key={option.value}
-                        onClick={() =>
-                          updateDraft({ ...draft, priority: option.value })
-                        }
-                        className="flex cursor-pointer items-center justify-between"
-                      >
-                        {option.label}
-                        {draft.priority === option.value && (
-                          <IconCheck size={14} aria-hidden="true" />
-                        )}
-                      </DropdownMenuItem>
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
-              <div className="flex flex-col gap-2">
-                <span className="flex items-center gap-1.5 font-semibold text-text-muted text-xs">
-                  <IconCalendar size={14} aria-hidden="true" /> Creada
-                </span>
-                <div className="flex h-11 items-center px-3 text-sm text-text-secondary">
-                  <time dateTime={task.created_at}>{date}</time>
-                </div>
-              </div>
-            </div>
-          )}
-        </section>
-
-        <section className="flex items-center justify-between gap-3 border-border border-t pt-3">
-          <div>
-            <p className="font-medium text-sm text-text-primary">
-              {baseTask.is_completed ? "Tarea completada" : "Tarea pendiente"}
-            </p>
-            <p className="mt-1 text-text-muted text-xs">
-              El estado no cambia al abrir este detalle.
-            </p>
           </div>
-          <Button
-            variant={baseTask.is_completed ? "ghost" : "primary"}
-            onClick={requestCompletion}
-            disabled={
-              isWorking || !isOnline || hasConflict || reconciliationRequired
-            }
-          >
-            {baseTask.is_completed ? "Reabrir" : "Completar"}
-          </Button>
-        </section>
 
-        {otherColumns.length > 0 && (
-          <section className="border-border border-t pt-3">
-            <DropdownMenu>
-              <DropdownMenuTrigger
+          <section aria-labelledby="task-description-heading">
+            <div className="mb-2 flex items-center justify-between">
+              <h3
+                id="task-description-heading"
+                className="font-semibold text-sm text-text-primary"
+              >
+                Descripción
+              </h3>
+              {!showDescription && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setShowDescription(true)}
+                  aria-expanded={false}
+                >
+                  Añadir descripción
+                </Button>
+              )}
+            </div>
+            {showDescription && (
+              <textarea
+                id="task-description"
+                aria-label="Descripción de la tarea"
+                value={draft.description}
+                disabled={isWorking}
+                onChange={(event) =>
+                  updateDraft({ ...draft, description: event.target.value })
+                }
+                rows={5}
+                placeholder="Añade los detalles necesarios para completar la tarea."
+                className="w-full resize-y rounded-md border border-border bg-transparent px-3 py-2.5 text-sm text-text-primary outline-none transition-colors placeholder:text-text-muted/60 focus:border-accent focus:ring-1 focus:ring-accent disabled:opacity-60"
+              />
+            )}
+          </section>
+
+          <section
+            className="border-border border-t pt-3"
+            aria-labelledby="task-checklist-heading"
+          >
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h3
+                id="task-checklist-heading"
+                className="font-semibold text-sm text-text-primary"
+              >
+                Pasos
+              </h3>
+              <span className="text-text-muted text-xs">
+                {checklistProgress.completedCount}/
+                {checklistProgress.totalCount}
+              </span>
+            </div>
+            {baseTask.steps.length > 0 ? (
+              <ol
+                aria-label="Pasos de checklist"
+                className="divide-y divide-border rounded-md border border-border"
+              >
+                {baseTask.steps.map((step, index) => (
+                  <li
+                    key={step.id}
+                    className="flex flex-wrap items-center gap-2 p-3"
+                  >
+                    <input
+                      id={`task-checklist-step-${step.id}`}
+                      type="checkbox"
+                      checked={step.is_completed}
+                      disabled={!isOnline || isChecklistWorking}
+                      onChange={(event) =>
+                        void mutateChecklist(
+                          {
+                            action: "mark",
+                            step_id: step.id,
+                            is_completed: event.target.checked,
+                            expected_version: step.version,
+                          },
+                          event.target.checked
+                            ? "Paso marcado."
+                            : "Paso desmarcado.",
+                        )
+                      }
+                      aria-label={`${step.is_completed ? "Desmarcar" : "Marcar"} paso: ${step.text}`}
+                      className="h-4 w-4 shrink-0 accent-emerald-400 disabled:opacity-50"
+                    />
+                    {editingChecklistStepId === step.id ? (
+                      <input
+                        value={editingChecklistStepText}
+                        aria-label={`Editar paso: ${step.text}`}
+                        disabled={isChecklistWorking}
+                        onChange={(event) =>
+                          setEditingChecklistStepText(event.target.value)
+                        }
+                        className="min-w-32 flex-1 rounded-md border border-border bg-transparent px-2 py-1 text-sm outline-none focus:border-accent"
+                      />
+                    ) : (
+                      <label
+                        htmlFor={`task-checklist-step-${step.id}`}
+                        className={`min-w-32 flex-1 break-words text-sm ${step.is_completed ? "text-text-muted line-through" : "text-text-primary"}`}
+                      >
+                        {step.text}
+                      </label>
+                    )}
+                    {editingChecklistStepId === step.id ? (
+                      <>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => saveChecklistStep(step.id)}
+                          disabled={
+                            !isOnline ||
+                            isChecklistWorking ||
+                            !editingChecklistStepText.trim()
+                          }
+                        >
+                          Guardar
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            setEditingChecklistStepId(null);
+                            setEditingChecklistStepText("");
+                          }}
+                          disabled={isChecklistWorking}
+                        >
+                          Cancelar
+                        </Button>
+                      </>
+                    ) : (
+                      <>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          aria-label={`Subir paso: ${step.text}`}
+                          onClick={() => moveChecklistStep(step.id, -1)}
+                          disabled={
+                            !isOnline || isChecklistWorking || index === 0
+                          }
+                        >
+                          ↑
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          aria-label={`Bajar paso: ${step.text}`}
+                          onClick={() => moveChecklistStep(step.id, 1)}
+                          disabled={
+                            !isOnline ||
+                            isChecklistWorking ||
+                            index === baseTask.steps.length - 1
+                          }
+                        >
+                          ↓
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            setEditingChecklistStepId(step.id);
+                            setEditingChecklistStepText(step.text);
+                          }}
+                          disabled={isChecklistWorking}
+                        >
+                          Editar
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          aria-label={`Eliminar paso: ${step.text}`}
+                          onClick={() =>
+                            void mutateChecklist(
+                              {
+                                action: "delete",
+                                step_id: step.id,
+                                expected_version: step.version,
+                              },
+                              "Paso eliminado. Puedes recuperarlo durante siete días.",
+                            )
+                          }
+                          disabled={!isOnline || isChecklistWorking}
+                        >
+                          Eliminar
+                        </Button>
+                      </>
+                    )}
+                  </li>
+                ))}
+              </ol>
+            ) : (
+              <p className="mb-3 text-sm text-text-muted">
+                Esta tarea todavía no tiene pasos.
+              </p>
+            )}
+            <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+              <input
+                value={newChecklistStepText}
+                aria-label="Nuevo paso de checklist"
+                placeholder="Agregar un paso"
+                disabled={!isOnline || isChecklistWorking}
+                onChange={(event) =>
+                  setNewChecklistStepText(event.target.value)
+                }
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    addChecklistStep();
+                  }
+                }}
+                className="min-h-10 min-w-0 flex-1 rounded-md border border-border bg-transparent px-3 text-sm outline-none focus:border-accent disabled:opacity-50"
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={addChecklistStep}
+                disabled={
+                  !isOnline ||
+                  isChecklistWorking ||
+                  !newChecklistStepText.trim()
+                }
+              >
+                {isChecklistWorking ? "Guardando…" : "Agregar paso"}
+              </Button>
+            </div>
+            {checklistNotice ? (
+              <output
+                className="mt-2 block text-text-secondary text-xs"
+                aria-live="polite"
+              >
+                {checklistNotice}
+              </output>
+            ) : null}
+          </section>
+
+          <section
+            className="border-border border-t pt-3"
+            aria-labelledby="task-assignee-heading"
+          >
+            <label
+              id="task-assignee-heading"
+              htmlFor="task-assignee"
+              className="mb-2 block font-semibold text-text-muted text-xs"
+            >
+              Responsable actual (opcional)
+            </label>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <select
+                id="task-assignee"
+                value={selectedAssigneeId}
+                disabled={isWorking || !isOnline || !assignableMembers}
+                onChange={(event) => {
+                  setSelectedAssigneeId(event.target.value);
+                  setAssigneeNotice("");
+                }}
+                className="h-11 min-w-0 flex-1 rounded-md border border-border bg-surface-base px-3 text-sm text-text-primary outline-none focus:border-accent disabled:opacity-60"
+              >
+                <option value="">Sin responsable</option>
+                {baseTask.assignee_id &&
+                !assignableMembers?.some(
+                  (member) => member.user_id === baseTask.assignee_id,
+                ) ? (
+                  <option value={baseTask.assignee_id} disabled>
+                    Responsable actual no disponible
+                  </option>
+                ) : null}
+                {assignableMembers?.map((member) => (
+                  <option key={member.user_id} value={member.user_id}>
+                    {member.name}
+                    {member.name !== member.email ? ` · ${member.email}` : ""}
+                    {member.role === "owner" ? " · propietario" : ""}
+                  </option>
+                ))}
+              </select>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => void saveAssignee()}
                 disabled={
                   isWorking ||
                   !isOnline ||
-                  hasConflict ||
-                  reconciliationRequired
+                  !assignableMembers ||
+                  selectedAssigneeId === (baseTask.assignee_id ?? "")
                 }
-                className="flex min-h-10 items-center gap-2 rounded-md border border-border px-3 text-sm text-text-secondary outline-none hover:bg-surface-hover hover:text-text-primary focus-visible:ring-1 focus-visible:ring-accent disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <IconArrowsRightLeft size={16} aria-hidden="true" />
-                Mover a otra columna
-                <IconChevronDown size={14} aria-hidden="true" />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="min-w-56">
-                {otherColumns.map((column) => (
-                  <DropdownMenuItem
-                    key={column.id}
-                    onClick={() => requestMove(column.id)}
-                    className="cursor-pointer"
-                  >
-                    {column.title}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </section>
-        )}
-
-        {moveNotice && (
-          <output
-            aria-live="polite"
-            className="rounded-md border border-priority-medium/30 bg-priority-medium/10 p-3 text-priority-medium text-sm"
-          >
-            {moveNotice}
-          </output>
-        )}
-
-        {completionNotice && (
-          <output
-            aria-live="polite"
-            className="rounded-md border border-priority-medium/30 bg-priority-medium/10 p-3 text-priority-medium text-sm"
-          >
-            {completionNotice}
-          </output>
-        )}
-
-        {!isOnline && (
-          <output
-            aria-live="polite"
-            className="rounded-md border border-priority-medium/30 bg-priority-medium/10 p-3 text-priority-medium text-sm"
-          >
-            Estás sin conexión. El borrador queda solo en esta pantalla y no se
-            enviará automáticamente al reconectar.
-          </output>
-        )}
-
-        {workflow.status === "saving" && (
-          <output aria-live="polite" className="text-sm text-text-secondary">
-            Guardando cambios…
-          </output>
-        )}
-        {workflow.status === "saved" && (
-          <output aria-live="polite" className="text-priority-low text-sm">
-            Cambios guardados.
-          </output>
-        )}
-        {workflow.status === "error" && workflow.error && (
-          <div
-            role="alert"
-            className="rounded-md border border-priority-urgent/30 bg-priority-urgent/10 p-3 text-priority-urgent text-sm"
-          >
-            <p>{workflow.error}</p>
-            {workflow.operation && (
-              <p className="mt-1 text-xs">
-                No habrá otro intento hasta que elijas Guardar de nuevo.
-              </p>
-            )}
-          </div>
-        )}
-
-        {reconciliationRequired && (
-          <section
-            className="rounded-md border border-priority-medium/40 bg-priority-medium/10 p-3"
-            aria-labelledby="task-reconcile-heading"
-          >
-            <h3
-              id="task-reconcile-heading"
-              className="font-semibold text-sm text-text-primary"
-            >
-              Revisa el resultado anterior
-            </h3>
-            <output
-              aria-live="polite"
-              className="mt-1 text-sm text-text-secondary"
-            >
-              {reconciliationError}
-            </output>
-            <Button
-              size="sm"
-              variant="primary"
-              className="mt-3"
-              onClick={() => void reconcileExpiredOperation()}
-              disabled={!isOnline || isWorking || !expiredOperation}
-            >
-              {isReconciling ? "Consultando…" : "Consultar valores actuales"}
-            </Button>
-          </section>
-        )}
-
-        {hasConflict && (
-          <section
-            className="space-y-3 rounded-md border border-priority-medium/40 bg-priority-medium/10 p-3"
-            aria-labelledby="task-conflict-heading"
-          >
-            <h3
-              id="task-conflict-heading"
-              className="font-semibold text-sm text-text-primary"
-            >
-              Hay cambios en conflicto
-            </h3>
-            <p className="text-sm text-text-secondary">
-              Revisa cada campo. Puedes usar el valor actual o conservar tu
-              borrador; no se combinará texto automáticamente.
-            </p>
-            {editableFields.map((field) => {
-              const conflict = conflicts[field];
-              if (!conflict) return null;
-              return (
-                <div
-                  key={field}
-                  className="space-y-2 border-border/70 border-t pt-3"
-                >
-                  <h4 className="font-semibold text-sm text-text-primary">
-                    {fieldLabel(field)}
-                  </h4>
-                  <p className="break-words text-text-secondary text-xs">
-                    Valor actual:{" "}
-                    <span className="whitespace-pre-wrap">
-                      {displayValue(field, conflict.current)}
-                    </span>
-                  </p>
-                  <p className="break-words text-text-secondary text-xs">
-                    Tu borrador:{" "}
-                    <span className="whitespace-pre-wrap">
-                      {displayValue(field, conflict.draft)}
-                    </span>
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => resolveConflict(field, false)}
-                    >
-                      Usar el valor actual
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="primary"
-                      onClick={() => resolveConflict(field, true)}
-                    >
-                      Conservar mi borrador
-                    </Button>
-                  </div>
-                </div>
-              );
-            })}
-          </section>
-        )}
-
-        {showCloseChoices && (
-          <section
-            className="rounded-md border border-border bg-surface-raised p-4"
-            aria-labelledby="task-close-heading"
-          >
-            <h3
-              id="task-close-heading"
-              className="font-semibold text-sm text-text-primary"
-            >
-              {closeAction === "close"
-                ? "¿Qué quieres hacer con los cambios?"
-                : "Hay cambios sin guardar"}
-            </h3>
-            <p className="mt-1 text-sm text-text-secondary">
-              El borrador vive solo en esta sesión y no se recupera si recargas
-              o cierras la página.
-            </p>
-            {closeAction === "delete" && (
-              <p className="mt-1 text-sm text-text-secondary">
-                Si se confirma el guardado, aparecerá la confirmación de
-                eliminación. Si hay un error o conflicto, el borrador seguirá
-                aquí.
-              </p>
-            )}
-            {closeAction === "move" && (
-              <p className="mt-1 text-sm text-text-secondary">
-                La tarea solo se moverá si confirmas el guardado o descartas el
-                borrador. Si guardar falla o hay un conflicto, el movimiento se
-                detiene y podrás revisar el estado actual.
-              </p>
-            )}
-            {closeAction === "complete" && (
-              <p className="mt-1 text-sm text-text-secondary">
-                La tarea solo cambiará de estado si confirmas el guardado o
-                descartas el borrador. Si guardar falla o hay un conflicto, la
-                acción se detiene.
-              </p>
-            )}
-            {closeNotice && (
-              <output
-                aria-live="polite"
-                className="mt-2 text-priority-medium text-sm"
-              >
-                {closeNotice}
-              </output>
-            )}
-            <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
-              {closeAction === "close" && (
-                <Button
-                  variant="primary"
-                  onClick={() => void save("close")}
-                  disabled={
-                    !dirty ||
-                    !normalizedTitle ||
-                    !isOnline ||
-                    hasConflict ||
-                    isWorking ||
-                    reconciliationRequired
-                  }
-                >
-                  Guardar y cerrar
-                </Button>
-              )}
-              {closeAction === "delete" && (
-                <Button
-                  variant="primary"
-                  onClick={() => void save("delete")}
-                  disabled={
-                    !dirty ||
-                    !normalizedTitle ||
-                    !isOnline ||
-                    hasConflict ||
-                    isWorking ||
-                    reconciliationRequired
-                  }
-                >
-                  Guardar y continuar
-                </Button>
-              )}
-              {closeAction === "move" && (
-                <Button
-                  variant="primary"
-                  onClick={() => void save("stay", true)}
-                  disabled={
-                    !dirty ||
-                    !normalizedTitle ||
-                    !isOnline ||
-                    hasConflict ||
-                    isWorking ||
-                    reconciliationRequired ||
-                    !pendingMoveTargetId
-                  }
-                >
-                  Guardar y mover
-                </Button>
-              )}
-              {closeAction === "complete" && (
-                <Button
-                  variant="primary"
-                  onClick={() => void save("stay", false, true)}
-                  disabled={
-                    !dirty ||
-                    !normalizedTitle ||
-                    !isOnline ||
-                    hasConflict ||
-                    isWorking ||
-                    reconciliationRequired
-                  }
-                >
-                  {pendingCompletionTarget
-                    ? "Guardar y completar"
-                    : "Guardar y reabrir"}
-                </Button>
-              )}
-              <Button
-                variant="danger"
-                onClick={discardAndContinue}
-                disabled={isWorking}
-              >
-                {closeAction === "delete"
-                  ? "Descartar y continuar con la eliminación"
-                  : closeAction === "move"
-                    ? "Descartar cambios y mover"
-                    : closeAction === "complete"
-                      ? pendingCompletionTarget
-                        ? "Descartar cambios y completar"
-                        : "Descartar cambios y reabrir"
-                      : "Descartar cambios"}
-              </Button>
-              <Button
-                variant="ghost"
-                onClick={continueEditing}
-                disabled={isWorking}
-              >
-                Seguir editando
+                {isAssigning ? "Guardando…" : "Guardar responsable"}
               </Button>
             </div>
+            {assigneeNotice ? (
+              <output
+                className="mt-2 block text-text-secondary text-xs"
+                aria-live="polite"
+              >
+                {assigneeNotice}
+              </output>
+            ) : null}
+            {assignableMembers === null ? (
+              <output
+                className="mt-2 block text-priority-medium text-xs"
+                aria-live="polite"
+              >
+                No se pudieron cargar los miembros del tablero.
+              </output>
+            ) : null}
           </section>
-        )}
 
-        <div className="mt-auto flex flex-col gap-3 border-border border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
-          <Button
-            variant="danger"
-            size="sm"
-            onClick={requestDelete}
-            disabled={isWorking}
-            className="justify-start"
-          >
-            <IconTrash size={16} aria-hidden="true" /> Eliminar tarea
-          </Button>
-          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={requestClose}
-              disabled={isWorking}
+          <section className="border-border border-t pt-3">
+            <button
+              type="button"
+              className="flex w-full items-center justify-between rounded-md py-2 text-left font-medium text-sm text-text-secondary hover:text-text-primary"
+              aria-expanded={showDetails}
+              onClick={() => setShowDetails((shown) => !shown)}
             >
-              Cerrar
-            </Button>
+              <span>Más detalles</span>
+              <IconChevronDown
+                size={16}
+                className={showDetails ? "rotate-180" : ""}
+                aria-hidden="true"
+              />
+            </button>
+            {showDetails && (
+              <div className="grid grid-cols-1 gap-4 pt-2 sm:grid-cols-2">
+                <div className="flex flex-col gap-2 sm:col-span-2">
+                  <label
+                    htmlFor="task-due-on"
+                    className="flex items-center gap-1.5 font-semibold text-text-muted text-xs"
+                  >
+                    <IconCalendar size={14} aria-hidden="true" /> Fecha límite
+                    (opcional)
+                  </label>
+                  <input
+                    id="task-due-on"
+                    type="date"
+                    value={draft.due_on}
+                    disabled={isWorking}
+                    aria-invalid={Boolean(dueOnError)}
+                    aria-describedby={
+                      dueOnError ? "task-due-on-error" : "task-due-on-help"
+                    }
+                    onChange={(event) =>
+                      updateDraft({ ...draft, due_on: event.target.value })
+                    }
+                    className="h-11 w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm text-text-primary outline-none transition-colors focus:border-accent focus:ring-1 focus:ring-accent disabled:opacity-60"
+                  />
+                  <p id="task-due-on-help" className="text-text-muted text-xs">
+                    Sin hora · Zona del tablero: {boardTimeZone}
+                  </p>
+                  {dueOnError && (
+                    <p
+                      id="task-due-on-error"
+                      className="text-priority-urgent text-xs"
+                      role="alert"
+                    >
+                      {dueOnError}
+                    </p>
+                  )}
+                  {draft.due_on && (
+                    <TaskDueDate
+                      dueOn={draft.due_on}
+                      boardToday={boardToday}
+                      isCompleted={baseTask.is_completed}
+                    />
+                  )}
+                </div>
+                <div className="flex flex-col gap-2">
+                  <label
+                    htmlFor="task-priority"
+                    className="flex items-center gap-1.5 font-semibold text-text-muted text-xs"
+                  >
+                    <IconFlag size={14} aria-hidden="true" /> Prioridad
+                  </label>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      id="task-priority"
+                      disabled={isWorking}
+                      className="flex h-11 w-full items-center justify-between rounded-md border border-border bg-transparent px-3 py-2 text-left font-medium text-sm text-text-primary outline-none focus:border-accent disabled:opacity-60 data-[status=open]:border-accent"
+                    >
+                      <span>
+                        {
+                          priorityOptions.find(
+                            (option) => option.value === draft.priority,
+                          )?.label
+                        }
+                      </span>
+                      <IconChevronDown
+                        size={16}
+                        className="text-text-muted"
+                        aria-hidden="true"
+                      />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent
+                      align="start"
+                      className="w-(--anchor-width) border border-border bg-surface-raised"
+                    >
+                      {priorityOptions.map((option) => (
+                        <DropdownMenuItem
+                          key={option.value}
+                          onClick={() =>
+                            updateDraft({ ...draft, priority: option.value })
+                          }
+                          className="flex cursor-pointer items-center justify-between"
+                        >
+                          {option.label}
+                          {draft.priority === option.value && (
+                            <IconCheck size={14} aria-hidden="true" />
+                          )}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <span className="flex items-center gap-1.5 font-semibold text-text-muted text-xs">
+                    <IconCalendar size={14} aria-hidden="true" /> Creada
+                  </span>
+                  <div className="flex h-11 items-center px-3 text-sm text-text-secondary">
+                    <time dateTime={task.created_at}>{date}</time>
+                  </div>
+                </div>
+              </div>
+            )}
+          </section>
+
+          <section className="flex items-center justify-between gap-3 border-border border-t pt-3">
+            <div>
+              <p className="font-medium text-sm text-text-primary">
+                {baseTask.is_completed ? "Tarea completada" : "Tarea pendiente"}
+              </p>
+              <p className="mt-1 text-text-muted text-xs">
+                El estado no cambia al abrir este detalle.
+              </p>
+            </div>
             <Button
-              variant="primary"
-              size="md"
-              onClick={() => void save()}
+              variant={baseTask.is_completed ? "ghost" : "primary"}
+              onClick={requestCompletion}
               disabled={
-                !dirty ||
-                isWorking ||
-                !isOnline ||
-                hasConflict ||
-                reconciliationRequired ||
-                !normalizedTitle
+                isWorking || !isOnline || hasConflict || reconciliationRequired
               }
-              className="font-semibold sm:px-5"
             >
-              {isSaving ? "Guardando…" : "Guardar campos"}
+              {baseTask.is_completed ? "Reabrir" : "Completar"}
             </Button>
+          </section>
+
+          {otherColumns.length > 0 && (
+            <section className="border-border border-t pt-3">
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  disabled={
+                    isWorking ||
+                    !isOnline ||
+                    hasConflict ||
+                    reconciliationRequired
+                  }
+                  className="flex min-h-10 items-center gap-2 rounded-md border border-border px-3 text-sm text-text-secondary outline-none hover:bg-surface-hover hover:text-text-primary focus-visible:ring-1 focus-visible:ring-accent disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <IconArrowsRightLeft size={16} aria-hidden="true" />
+                  Mover a otra columna
+                  <IconChevronDown size={14} aria-hidden="true" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="min-w-56">
+                  {otherColumns.map((column) => (
+                    <DropdownMenuItem
+                      key={column.id}
+                      onClick={() => requestMove(column.id)}
+                      className="cursor-pointer"
+                    >
+                      {column.title}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </section>
+          )}
+
+          {moveNotice && (
+            <output
+              aria-live="polite"
+              className="rounded-md border border-priority-medium/30 bg-priority-medium/10 p-3 text-priority-medium text-sm"
+            >
+              {moveNotice}
+            </output>
+          )}
+
+          {completionNotice && (
+            <output
+              aria-live="polite"
+              className="rounded-md border border-priority-medium/30 bg-priority-medium/10 p-3 text-priority-medium text-sm"
+            >
+              {completionNotice}
+            </output>
+          )}
+
+          {!isOnline && (
+            <output
+              aria-live="polite"
+              className="rounded-md border border-priority-medium/30 bg-priority-medium/10 p-3 text-priority-medium text-sm"
+            >
+              Estás sin conexión. El borrador queda solo en esta pantalla y no
+              se enviará automáticamente al reconectar.
+            </output>
+          )}
+
+          {workflow.status === "saving" && (
+            <output aria-live="polite" className="text-sm text-text-secondary">
+              Guardando cambios…
+            </output>
+          )}
+          {workflow.status === "saved" && (
+            <output aria-live="polite" className="text-priority-low text-sm">
+              Cambios guardados.
+            </output>
+          )}
+          {workflow.status === "error" && workflow.error && (
+            <div
+              role="alert"
+              className="rounded-md border border-priority-urgent/30 bg-priority-urgent/10 p-3 text-priority-urgent text-sm"
+            >
+              <p>{workflow.error}</p>
+              {workflow.operation && (
+                <p className="mt-1 text-xs">
+                  No habrá otro intento hasta que elijas Guardar de nuevo.
+                </p>
+              )}
+            </div>
+          )}
+
+          {reconciliationRequired && (
+            <section
+              className="rounded-md border border-priority-medium/40 bg-priority-medium/10 p-3"
+              aria-labelledby="task-reconcile-heading"
+            >
+              <h3
+                id="task-reconcile-heading"
+                className="font-semibold text-sm text-text-primary"
+              >
+                Revisa el resultado anterior
+              </h3>
+              <output
+                aria-live="polite"
+                className="mt-1 text-sm text-text-secondary"
+              >
+                {reconciliationError}
+              </output>
+              <Button
+                size="sm"
+                variant="primary"
+                className="mt-3"
+                onClick={() => void reconcileExpiredOperation()}
+                disabled={!isOnline || isWorking || !expiredOperation}
+              >
+                {isReconciling ? "Consultando…" : "Consultar valores actuales"}
+              </Button>
+            </section>
+          )}
+
+          {hasConflict && (
+            <section
+              className="space-y-3 rounded-md border border-priority-medium/40 bg-priority-medium/10 p-3"
+              aria-labelledby="task-conflict-heading"
+            >
+              <h3
+                id="task-conflict-heading"
+                className="font-semibold text-sm text-text-primary"
+              >
+                Hay cambios en conflicto
+              </h3>
+              <p className="text-sm text-text-secondary">
+                Revisa cada campo. Puedes usar el valor actual o conservar tu
+                borrador; no se combinará texto automáticamente.
+              </p>
+              {editableFields.map((field) => {
+                const conflict = conflicts[field];
+                if (!conflict) return null;
+                return (
+                  <div
+                    key={field}
+                    className="space-y-2 border-border/70 border-t pt-3"
+                  >
+                    <h4 className="font-semibold text-sm text-text-primary">
+                      {fieldLabel(field)}
+                    </h4>
+                    <p className="break-words text-text-secondary text-xs">
+                      Valor actual:{" "}
+                      <span className="whitespace-pre-wrap">
+                        {displayValue(field, conflict.current)}
+                      </span>
+                    </p>
+                    <p className="break-words text-text-secondary text-xs">
+                      Tu borrador:{" "}
+                      <span className="whitespace-pre-wrap">
+                        {displayValue(field, conflict.draft)}
+                      </span>
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => resolveConflict(field, false)}
+                      >
+                        Usar el valor actual
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        onClick={() => resolveConflict(field, true)}
+                      >
+                        Conservar mi borrador
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })}
+            </section>
+          )}
+
+          {showCloseChoices && (
+            <section
+              className="rounded-md border border-border bg-surface-raised p-4"
+              aria-labelledby="task-close-heading"
+            >
+              <h3
+                id="task-close-heading"
+                className="font-semibold text-sm text-text-primary"
+              >
+                {closeAction === "close"
+                  ? "¿Qué quieres hacer con los cambios?"
+                  : "Hay cambios sin guardar"}
+              </h3>
+              <p className="mt-1 text-sm text-text-secondary">
+                El borrador vive solo en esta sesión y no se recupera si
+                recargas o cierras la página.
+              </p>
+              {closeAction === "delete" && (
+                <p className="mt-1 text-sm text-text-secondary">
+                  Si se confirma el guardado, aparecerá la confirmación de
+                  eliminación. Si hay un error o conflicto, el borrador seguirá
+                  aquí.
+                </p>
+              )}
+              {closeAction === "move" && (
+                <p className="mt-1 text-sm text-text-secondary">
+                  La tarea solo se moverá si confirmas el guardado o descartas
+                  el borrador. Si guardar falla o hay un conflicto, el
+                  movimiento se detiene y podrás revisar el estado actual.
+                </p>
+              )}
+              {closeAction === "complete" && (
+                <p className="mt-1 text-sm text-text-secondary">
+                  La tarea solo cambiará de estado si confirmas el guardado o
+                  descartas el borrador. Si guardar falla o hay un conflicto, la
+                  acción se detiene.
+                </p>
+              )}
+              {closeNotice && (
+                <output
+                  aria-live="polite"
+                  className="mt-2 text-priority-medium text-sm"
+                >
+                  {closeNotice}
+                </output>
+              )}
+              <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
+                {closeAction === "close" && (
+                  <Button
+                    variant="primary"
+                    onClick={() => void save("close")}
+                    disabled={
+                      !dirty ||
+                      !normalizedTitle ||
+                      !isOnline ||
+                      hasConflict ||
+                      isWorking ||
+                      reconciliationRequired
+                    }
+                  >
+                    Guardar y cerrar
+                  </Button>
+                )}
+                {closeAction === "delete" && (
+                  <Button
+                    variant="primary"
+                    onClick={() => void save("delete")}
+                    disabled={
+                      !dirty ||
+                      !normalizedTitle ||
+                      !isOnline ||
+                      hasConflict ||
+                      isWorking ||
+                      reconciliationRequired
+                    }
+                  >
+                    Guardar y continuar
+                  </Button>
+                )}
+                {closeAction === "move" && (
+                  <Button
+                    variant="primary"
+                    onClick={() => void save("stay", true)}
+                    disabled={
+                      !dirty ||
+                      !normalizedTitle ||
+                      !isOnline ||
+                      hasConflict ||
+                      isWorking ||
+                      reconciliationRequired ||
+                      !pendingMoveTargetId
+                    }
+                  >
+                    Guardar y mover
+                  </Button>
+                )}
+                {closeAction === "complete" && (
+                  <Button
+                    variant="primary"
+                    onClick={() => void save("stay", false, true)}
+                    disabled={
+                      !dirty ||
+                      !normalizedTitle ||
+                      !isOnline ||
+                      hasConflict ||
+                      isWorking ||
+                      reconciliationRequired
+                    }
+                  >
+                    {pendingCompletionTarget
+                      ? "Guardar y completar"
+                      : "Guardar y reabrir"}
+                  </Button>
+                )}
+                <Button
+                  variant="danger"
+                  onClick={discardAndContinue}
+                  disabled={isWorking}
+                >
+                  {closeAction === "delete"
+                    ? "Descartar y continuar con la eliminación"
+                    : closeAction === "move"
+                      ? "Descartar cambios y mover"
+                      : closeAction === "complete"
+                        ? pendingCompletionTarget
+                          ? "Descartar cambios y completar"
+                          : "Descartar cambios y reabrir"
+                        : "Descartar cambios"}
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={continueEditing}
+                  disabled={isWorking}
+                >
+                  Seguir editando
+                </Button>
+              </div>
+            </section>
+          )}
+
+          <div className="mt-auto flex flex-col gap-3 border-border border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
+            <Button
+              variant="danger"
+              size="sm"
+              onClick={requestDelete}
+              disabled={isWorking}
+              className="justify-start"
+            >
+              <IconTrash size={16} aria-hidden="true" /> Eliminar tarea
+            </Button>
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={requestClose}
+                disabled={isWorking}
+              >
+                Cerrar
+              </Button>
+              <Button
+                variant="primary"
+                size="md"
+                onClick={() => void save()}
+                disabled={
+                  !dirty ||
+                  isWorking ||
+                  !isOnline ||
+                  hasConflict ||
+                  reconciliationRequired ||
+                  !normalizedTitle
+                }
+                className="font-semibold sm:px-5"
+              >
+                {isSaving ? "Guardando…" : "Guardar campos"}
+              </Button>
+            </div>
           </div>
+          {closeNotice && !showCloseChoices && (
+            <output aria-live="polite" className="text-priority-medium text-sm">
+              {closeNotice}
+            </output>
+          )}
         </div>
-        {closeNotice && !showCloseChoices && (
-          <output aria-live="polite" className="text-priority-medium text-sm">
-            {closeNotice}
-          </output>
-        )}
-      </div>
-    </Modal>
+      </Modal>
+      <ConfirmDialog
+        open={pendingChecklistReview !== null}
+        onClose={cancelChecklistCompletionReview}
+        onConfirm={acceptChecklistCompletionReview}
+        title="Completar tarea con pasos pendientes"
+        description={
+          pendingChecklistReview
+            ? pendingChecklistReview.pendingStepsCount === 1
+              ? "Queda 1 paso sin marcar. ¿Completar igual?"
+              : `Quedan ${pendingChecklistReview.pendingStepsCount} pasos sin marcar. ¿Completar igual?`
+            : ""
+        }
+        confirmLabel="Completar igual"
+        cancelLabel="Cancelar"
+        loading={isCompleting}
+      />
+    </>
   );
 }

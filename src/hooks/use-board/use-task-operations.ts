@@ -7,9 +7,11 @@ import {
   deleteTask as dbDeleteTask,
   getFullBoard,
   getFullBoardForTaskEdit,
+  mutateTaskChecklistStep,
   reconcileTaskCreation,
   setTaskCompletion,
   TaskCaptureError,
+  TaskChecklistError,
   TaskCompletionError,
   TaskEditError,
   TaskOrderError,
@@ -25,6 +27,8 @@ import type {
   CreateTaskPayload,
   Priority,
   Task,
+  TaskChecklistCommand,
+  TaskChecklistResult,
   TaskCompletionCommand,
   TaskCompletionResult,
   TaskEditCommand,
@@ -335,6 +339,9 @@ export function useTaskOperations({
           is_completed: false,
           completed_at: null,
           completion_version: 1,
+          steps: [],
+          steps_order_version: 1,
+          checklist_version: 1,
         };
 
         ledger.beginTaskCreation(tempTask.id);
@@ -790,6 +797,54 @@ export function useTaskOperations({
     [supabase, slug, setColumns, ledger, onAccessLost],
   );
 
+  const mutateChecklistStep = useCallback(
+    async (command: TaskChecklistCommand): Promise<TaskChecklistResult> => {
+      if (!isPersistedRef.current || command.id.startsWith("local-")) {
+        return { status: "unavailable", operation_id: command.operation_id };
+      }
+      const sessionEpoch = getSessionEpoch();
+      let result: TaskChecklistResult;
+      try {
+        result = await mutateTaskChecklistStep(supabase, slug, command);
+      } catch (error) {
+        if (
+          error instanceof TaskChecklistError &&
+          error.reason === "access_denied"
+        ) {
+          onAccessLost();
+        }
+        throw error;
+      }
+      if (result.status !== "confirmed" && result.status !== "conflict") {
+        return result;
+      }
+      if (sessionEpoch !== getSessionEpoch()) {
+        onAccessLost();
+        throw new TaskChecklistError("access_denied");
+      }
+      const currentColumns = columnsRef.current ?? [];
+      const updatedColumns = currentColumns.map((column) => ({
+        ...column,
+        tasks: column.tasks.map((candidate) =>
+          candidate.id === result.task.id ? result.task : candidate,
+        ),
+      }));
+      setColumns(ledger.sync(updatedColumns));
+      if (result.status === "confirmed") onMutationRef.current?.();
+      return result;
+    },
+    [
+      columnsRef,
+      isPersistedRef,
+      ledger,
+      onAccessLost,
+      onMutationRef,
+      setColumns,
+      slug,
+      supabase,
+    ],
+  );
+
   const removeTask = useCallback(
     (taskId: string) => {
       const pendingCreationDeleteRequested =
@@ -1104,6 +1159,7 @@ export function useTaskOperations({
     addTask,
     editTask,
     completeTask,
+    mutateChecklistStep,
     refreshTaskForEdit,
     removeTask,
     moveTask,

@@ -4,13 +4,25 @@ import { IconCheck } from "@tabler/icons-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useOnlineStatus } from "@/hooks/use-online-status";
 import { setTaskCompletion, TaskCompletionError } from "@/lib/db/tasks";
 import { getMyTaskCompletionControl } from "@/lib/my-task-completion-control";
 import { myTaskBoardHref, myTasksHref } from "@/lib/my-tasks-navigation";
 import { createClient } from "@/lib/supabase/client";
+import { resolveTaskChecklistCompletionReview } from "@/lib/task-checklist-completion";
+import {
+  getTaskChecklistCompletionReview,
+  getTaskChecklistProgress,
+  type TaskChecklistCompletionReview,
+} from "@/lib/task-checklist-state";
 import { formatTaskDueDate, taskDueState } from "@/lib/task-date";
-import type { MyTaskEntry, MyTasksOrder } from "@/lib/types";
+import type {
+  MyTaskEntry,
+  MyTasksOrder,
+  TaskCompletionCommand,
+  TaskCompletionResult,
+} from "@/lib/types";
 import { generateUUID } from "@/lib/utils";
 
 interface MyTasksListProps {
@@ -50,30 +62,93 @@ export function MyTasksList({ entries, order, loadError }: MyTasksListProps) {
   const { isOnline } = useOnlineStatus();
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState("");
+  const [pendingCompletionReview, setPendingCompletionReview] = useState<{
+    entry: MyTaskEntry;
+    command: TaskCompletionCommand;
+    review: TaskChecklistCompletionReview;
+  } | null>(null);
+
+  function reportCompletion(result: TaskCompletionResult) {
+    if (result.status === "confirmed") {
+      router.refresh();
+    } else if (result.status === "conflict") {
+      setActionNotice(
+        "El estado cambió en otro momento. Actualizamos Mis tareas; revisa antes de volver a intentarlo.",
+      );
+      router.refresh();
+    } else {
+      setActionNotice(
+        "No se pudo confirmar el cambio. Actualiza Mis tareas antes de volver a intentarlo.",
+      );
+      router.refresh();
+    }
+  }
 
   async function toggleCompletion(entry: MyTaskEntry) {
     if (entry.task.is_completed || pendingTaskId || !isOnline) return;
     setPendingTaskId(entry.task.id);
     setActionNotice("");
+    const command: TaskCompletionCommand = {
+      id: entry.task.id,
+      operation_id: generateUUID(),
+      is_completed: true,
+      expected_version: entry.task.completion_version,
+    };
     try {
-      const result = await setTaskCompletion(createClient(), entry.board.slug, {
-        id: entry.task.id,
-        operation_id: generateUUID(),
-        is_completed: true,
-        expected_version: entry.task.completion_version,
-      });
-      if (result.status === "confirmed") {
-        router.refresh();
-      } else if (result.status === "conflict") {
-        setActionNotice(
-          "El estado cambió en otro momento. Actualizamos Mis tareas; revisa antes de volver a intentarlo.",
-        );
+      const result = await setTaskCompletion(
+        createClient(),
+        entry.board.slug,
+        command,
+      );
+      const review = getTaskChecklistCompletionReview(result);
+      if (review) {
+        setPendingCompletionReview({ entry, command, review });
+      } else {
+        reportCompletion(result);
+      }
+    } catch (error) {
+      setActionNotice(
+        error instanceof TaskCompletionError && error.reason === "access_denied"
+          ? "Ya no tienes acceso a ese tablero. Actualizamos Mis tareas."
+          : "No se pudo confirmar el cambio. Actualiza Mis tareas antes de volver a intentarlo.",
+      );
+      router.refresh();
+    } finally {
+      setPendingTaskId(null);
+    }
+  }
+
+  async function acceptCompletionReview() {
+    if (!pendingCompletionReview || pendingTaskId || !isOnline) return;
+    const { entry, command: originalCommand, review } = pendingCompletionReview;
+    const command = resolveTaskChecklistCompletionReview(
+      originalCommand,
+      review,
+      "accept",
+    );
+    if (!command) {
+      setPendingCompletionReview(null);
+      return;
+    }
+    setPendingTaskId(entry.task.id);
+    setActionNotice("");
+    try {
+      const result = await setTaskCompletion(
+        createClient(),
+        entry.board.slug,
+        command,
+      );
+      const refreshedReview = getTaskChecklistCompletionReview(result);
+      if (refreshedReview) {
+        setPendingCompletionReview({
+          entry,
+          command,
+          review: refreshedReview,
+        });
         router.refresh();
       } else {
-        setActionNotice(
-          "No se pudo confirmar el cambio. Actualiza Mis tareas antes de volver a intentarlo.",
-        );
-        router.refresh();
+        setPendingCompletionReview(null);
+        reportCompletion(result);
       }
     } catch (error) {
       setActionNotice(
@@ -93,6 +168,7 @@ export function MyTasksList({ entries, order, loadError }: MyTasksListProps) {
   function renderTask(entry: MyTaskEntry) {
     const isPending = pendingTaskId === entry.task.id;
     const titleHref = myTaskBoardHref(entry.board.slug, entry.task.id, order);
+    const checklistProgress = getTaskChecklistProgress(entry.task.steps);
     const completionControl = getMyTaskCompletionControl(
       entry.task.is_completed,
       entry.task.title,
@@ -136,6 +212,9 @@ export function MyTasksList({ entries, order, loadError }: MyTasksListProps) {
           <p className="mt-1 text-neutral-500 text-xs">
             {entry.board.time_zone} · {dueLabel(entry)} · Prioridad:{" "}
             {priorityLabel(entry.task.priority)}
+            {checklistProgress.totalCount > 0
+              ? ` · Pasos ${checklistProgress.completedCount}/${checklistProgress.totalCount}`
+              : ""}
           </p>
         </div>
         {isPending ? (
@@ -151,95 +230,118 @@ export function MyTasksList({ entries, order, loadError }: MyTasksListProps) {
   }
 
   return (
-    <main className="mx-auto min-h-dvh max-w-5xl bg-black px-5 py-8 text-white sm:px-8">
-      <header className="flex items-center justify-between gap-4 border-white/10 border-b pb-6">
-        <div>
-          <Link href="/" className="text-neutral-400 text-sm hover:text-white">
-            Tableros
-          </Link>
-          <h1 className="mt-2 font-bold font-display text-3xl tracking-tight">
-            Mis tareas
-          </h1>
-        </div>
-        <div className="flex items-center gap-2">
-          <Link
-            href={myTasksHref("due")}
-            aria-current={order === "due" ? "page" : undefined}
-            className={`rounded-lg border px-3 py-2 text-sm ${order === "due" ? "border-emerald-400/50 bg-emerald-400/10 text-emerald-200" : "border-white/15 text-neutral-300 hover:bg-white/5"}`}
-          >
-            Por vencimiento
-          </Link>
-          <Link
-            href={myTasksHref("created")}
-            aria-current={order === "created" ? "page" : undefined}
-            className={`rounded-lg border px-3 py-2 text-sm ${order === "created" ? "border-emerald-400/50 bg-emerald-400/10 text-emerald-200" : "border-white/15 text-neutral-300 hover:bg-white/5"}`}
-          >
-            Por creación
-          </Link>
-        </div>
-      </header>
+    <>
+      <main className="mx-auto min-h-dvh max-w-5xl bg-black px-5 py-8 text-white sm:px-8">
+        <header className="flex items-center justify-between gap-4 border-white/10 border-b pb-6">
+          <div>
+            <Link
+              href="/"
+              className="text-neutral-400 text-sm hover:text-white"
+            >
+              Tableros
+            </Link>
+            <h1 className="mt-2 font-bold font-display text-3xl tracking-tight">
+              Mis tareas
+            </h1>
+          </div>
+          <div className="flex items-center gap-2">
+            <Link
+              href={myTasksHref("due")}
+              aria-current={order === "due" ? "page" : undefined}
+              className={`rounded-lg border px-3 py-2 text-sm ${order === "due" ? "border-emerald-400/50 bg-emerald-400/10 text-emerald-200" : "border-white/15 text-neutral-300 hover:bg-white/5"}`}
+            >
+              Por vencimiento
+            </Link>
+            <Link
+              href={myTasksHref("created")}
+              aria-current={order === "created" ? "page" : undefined}
+              className={`rounded-lg border px-3 py-2 text-sm ${order === "created" ? "border-emerald-400/50 bg-emerald-400/10 text-emerald-200" : "border-white/15 text-neutral-300 hover:bg-white/5"}`}
+            >
+              Por creación
+            </Link>
+          </div>
+        </header>
 
-      {!isOnline ? (
-        <output
-          className="mt-5 block rounded-xl border border-amber-300/20 bg-amber-300/5 p-3 text-amber-100 text-sm"
-          aria-live="polite"
-        >
-          Estás sin conexión. Puedes revisar estas tareas; las acciones
-          necesitan conexión.
-        </output>
-      ) : null}
-      {actionNotice ? (
-        <output
-          className="mt-5 block rounded-xl border border-amber-300/20 bg-amber-300/5 p-3 text-amber-100 text-sm"
-          aria-live="polite"
-        >
-          {actionNotice}
-        </output>
-      ) : null}
+        {!isOnline ? (
+          <output
+            className="mt-5 block rounded-xl border border-amber-300/20 bg-amber-300/5 p-3 text-amber-100 text-sm"
+            aria-live="polite"
+          >
+            Estás sin conexión. Puedes revisar estas tareas; las acciones
+            necesitan conexión.
+          </output>
+        ) : null}
+        {actionNotice ? (
+          <output
+            className="mt-5 block rounded-xl border border-amber-300/20 bg-amber-300/5 p-3 text-amber-100 text-sm"
+            aria-live="polite"
+          >
+            {actionNotice}
+          </output>
+        ) : null}
 
-      {loadError ? (
-        <p
-          className="mt-8 rounded-xl border border-red-400/20 bg-red-400/5 p-4 text-red-200 text-sm"
-          role="alert"
-        >
-          No se pudieron cargar tus tareas. Actualiza la página para volver a
-          intentarlo.
-        </p>
-      ) : entries.length === 0 ? (
-        <p className="mt-8 rounded-2xl border border-white/15 border-dashed p-10 text-center text-neutral-400 text-sm">
-          No tenés tareas asignadas.
-        </p>
-      ) : (
-        <div className="mt-8 space-y-8">
-          {activeEntries.length ? (
-            <section aria-labelledby="my-active-tasks-heading">
-              <h2
-                id="my-active-tasks-heading"
-                className="mb-3 font-semibold text-neutral-200 text-sm"
-              >
-                Pendientes
-              </h2>
-              <ul className="space-y-2">{activeEntries.map(renderTask)}</ul>
-            </section>
-          ) : null}
-          {completedEntries.length ? (
-            <section aria-labelledby="my-completed-tasks-heading">
-              <h2
-                id="my-completed-tasks-heading"
-                className="mb-3 font-semibold text-neutral-200 text-sm"
-              >
-                Completadas recientemente
-              </h2>
-              <ul className="space-y-2">{completedEntries.map(renderTask)}</ul>
-            </section>
-          ) : null}
-        </div>
-      )}
-      {pendingTaskId ? (
-        <output className="sr-only" aria-live="polite">
-          Actualizando tarea…
-        </output>
-      ) : null}
-    </main>
+        {loadError ? (
+          <p
+            className="mt-8 rounded-xl border border-red-400/20 bg-red-400/5 p-4 text-red-200 text-sm"
+            role="alert"
+          >
+            No se pudieron cargar tus tareas. Actualiza la página para volver a
+            intentarlo.
+          </p>
+        ) : entries.length === 0 ? (
+          <p className="mt-8 rounded-2xl border border-white/15 border-dashed p-10 text-center text-neutral-400 text-sm">
+            No tenés tareas asignadas.
+          </p>
+        ) : (
+          <div className="mt-8 space-y-8">
+            {activeEntries.length ? (
+              <section aria-labelledby="my-active-tasks-heading">
+                <h2
+                  id="my-active-tasks-heading"
+                  className="mb-3 font-semibold text-neutral-200 text-sm"
+                >
+                  Pendientes
+                </h2>
+                <ul className="space-y-2">{activeEntries.map(renderTask)}</ul>
+              </section>
+            ) : null}
+            {completedEntries.length ? (
+              <section aria-labelledby="my-completed-tasks-heading">
+                <h2
+                  id="my-completed-tasks-heading"
+                  className="mb-3 font-semibold text-neutral-200 text-sm"
+                >
+                  Completadas recientemente
+                </h2>
+                <ul className="space-y-2">
+                  {completedEntries.map(renderTask)}
+                </ul>
+              </section>
+            ) : null}
+          </div>
+        )}
+        {pendingTaskId ? (
+          <output className="sr-only" aria-live="polite">
+            Actualizando tarea…
+          </output>
+        ) : null}
+      </main>
+      <ConfirmDialog
+        open={pendingCompletionReview !== null}
+        onClose={() => setPendingCompletionReview(null)}
+        onConfirm={acceptCompletionReview}
+        title="Completar tarea con pasos pendientes"
+        description={
+          pendingCompletionReview
+            ? pendingCompletionReview.review.pendingStepsCount === 1
+              ? "Queda 1 paso sin marcar. ¿Completar igual?"
+              : `Quedan ${pendingCompletionReview.review.pendingStepsCount} pasos sin marcar. ¿Completar igual?`
+            : ""
+        }
+        confirmLabel="Completar igual"
+        cancelLabel="Cancelar"
+        loading={pendingTaskId !== null}
+      />
+    </>
   );
 }

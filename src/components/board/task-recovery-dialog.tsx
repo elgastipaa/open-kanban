@@ -5,8 +5,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import {
+  listDeletedTaskChecklistSteps,
   listDeletedTasks,
   restoreTask,
+  restoreTaskChecklistStep,
+  TaskChecklistError,
   TaskRecoveryError,
   type TaskRecoveryItem,
 } from "@/lib/db/tasks";
@@ -23,6 +26,7 @@ import {
   taskRecoveryLoadErrorMessage,
   taskRecoveryRestoreErrorMessage,
 } from "@/lib/task-recovery-state";
+import type { TaskChecklistRecoveryItem } from "@/lib/types";
 import { generateUUID } from "@/lib/utils";
 
 interface RecoveryColumn {
@@ -43,6 +47,10 @@ type TimedTaskRecoveryItem = TaskRecoveryItem & {
   eligibilityRequestStartedAtMonotonic: number;
 };
 
+type TimedChecklistRecoveryItem = TaskChecklistRecoveryItem & {
+  eligibilityRequestStartedAtMonotonic: number;
+};
+
 export function TaskRecoveryDialog({
   open,
   onClose,
@@ -52,11 +60,15 @@ export function TaskRecoveryDialog({
   columns,
 }: TaskRecoveryDialogProps) {
   const [items, setItems] = useState<TimedTaskRecoveryItem[]>([]);
+  const [checklistItems, setChecklistItems] = useState<
+    TimedChecklistRecoveryItem[]
+  >([]);
   const [selectedDestinations, setSelectedDestinations] = useState<
     Record<string, string>
   >({});
   const [isLoading, setIsLoading] = useState(false);
   const [restoringTaskId, setRestoringTaskId] = useState<string | null>(null);
+  const [restoringStepId, setRestoringStepId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [monotonicNow, setMonotonicNow] = useState(0);
@@ -66,7 +78,7 @@ export function TaskRecoveryDialog({
   const listViewState = getTaskRecoveryListViewState({
     isLoading,
     hasError: Boolean(error),
-    itemCount: items.length,
+    itemCount: items.length + checklistItems.length,
     hasCurrentEligibility,
   });
 
@@ -79,11 +91,20 @@ export function TaskRecoveryDialog({
     try {
       const client = createClient();
       const eligibilityRequestStartedAtMonotonic = performance.now();
-      const listedItems = await listDeletedTasks(client, slug);
+      const [listedItems, listedChecklistItems] = await Promise.all([
+        listDeletedTasks(client, slug),
+        listDeletedTaskChecklistSteps(client, slug),
+      ]);
       if (refreshId !== latestRefreshId.current) return;
       const eligibilityResponseReceivedAtMonotonic = performance.now();
       setItems(
         listedItems.map((item) => ({
+          ...item,
+          eligibilityRequestStartedAtMonotonic,
+        })),
+      );
+      setChecklistItems(
+        listedChecklistItems.map((item) => ({
           ...item,
           eligibilityRequestStartedAtMonotonic,
         })),
@@ -94,8 +115,14 @@ export function TaskRecoveryDialog({
     } catch (loadError) {
       if (refreshId !== latestRefreshId.current) return;
       const reason =
-        loadError instanceof TaskRecoveryError ? loadError.reason : null;
-      if (shouldClearTaskRecoveryItems(reason)) setItems([]);
+        loadError instanceof TaskRecoveryError ||
+        loadError instanceof TaskChecklistError
+          ? loadError.reason
+          : null;
+      if (shouldClearTaskRecoveryItems(reason)) {
+        setItems([]);
+        setChecklistItems([]);
+      }
       setError(taskRecoveryLoadErrorMessage(reason));
     } finally {
       if (refreshId === latestRefreshId.current) setIsLoading(false);
@@ -105,6 +132,7 @@ export function TaskRecoveryDialog({
   useEffect(() => {
     if (!open) return;
     setItems([]);
+    setChecklistItems([]);
     setSelectedDestinations({});
     setError("");
     setMessage("");
@@ -134,10 +162,10 @@ export function TaskRecoveryDialog({
   }, [open, refresh]);
 
   useEffect(() => {
-    if (!open || items.length === 0) return;
+    if (!open || (items.length === 0 && checklistItems.length === 0)) return;
 
     const currentMonotonicTime = Math.max(performance.now(), monotonicNow);
-    const nextDeadline = items
+    const nextDeadline = [...items, ...checklistItems]
       .filter((item) => item.can_restore)
       .map((item) => {
         return getTaskRecoveryExpiryMonotonicTime(
@@ -160,7 +188,7 @@ export function TaskRecoveryDialog({
       Math.max(0, nextDeadline - currentMonotonicTime),
     );
     return () => window.clearTimeout(timer);
-  }, [items, monotonicNow, open]);
+  }, [checklistItems, items, monotonicNow, open]);
 
   async function restore(item: TimedTaskRecoveryItem) {
     if (!hasCurrentEligibilityRef.current) {
@@ -245,6 +273,70 @@ export function TaskRecoveryDialog({
     }
   }
 
+  async function restoreChecklistStep(item: TimedChecklistRecoveryItem) {
+    if (!hasCurrentEligibilityRef.current) {
+      setError(
+        "Actualizando la lista. Espera a que se confirme la disponibilidad.",
+      );
+      return;
+    }
+    const canRestore = isTaskRecoveryRestorableAtMonotonicTime(
+      item,
+      item.eligibilityRequestStartedAtMonotonic,
+      performance.now(),
+      hasCurrentEligibilityRef.current,
+    );
+    if (!canRestore) {
+      setError(
+        "El plazo de recuperación venció. Este paso ya no se puede recuperar.",
+      );
+      return;
+    }
+    setRestoringStepId(item.step_id);
+    setError("");
+    setMessage("");
+    try {
+      const result = await restoreTaskChecklistStep(
+        createClient(),
+        slug,
+        generateUUID(),
+        item.task_id,
+        item.step_id,
+      );
+      if (result.status === "confirmed") {
+        setMessage("Paso de checklist recuperado en su tarea.");
+        try {
+          await onRestored();
+        } catch {
+          setMessage(
+            "Paso recuperado. No se pudo actualizar el tablero; vuelve a cargarlo.",
+          );
+        }
+        await refresh();
+      } else if (result.status === "expired") {
+        await refresh();
+        setError(
+          "El plazo de recuperación venció. Este paso ya no se puede recuperar.",
+        );
+      } else {
+        await refresh();
+        setError(
+          "El paso ya no está disponible para recuperar. Actualiza la lista.",
+        );
+      }
+    } catch (restoreError) {
+      await refresh();
+      setError(
+        restoreError instanceof TaskChecklistError &&
+          restoreError.reason === "access_denied"
+          ? "Ya no tienes permiso para recuperar pasos de este tablero."
+          : "No se pudo confirmar si el paso se recuperó. Actualiza la lista y revisa la tarea.",
+      );
+    } finally {
+      setRestoringStepId(null);
+    }
+  }
+
   return (
     <Modal
       open={open}
@@ -255,16 +347,18 @@ export function TaskRecoveryDialog({
     >
       <div className="space-y-5 text-text-primary">
         <p className="text-sm text-text-secondary">
-          Las tareas se pueden recuperar durante siete días desde su
+          Las tareas y pasos se pueden recuperar durante siete días desde su
           eliminación. Abrir esta lista no restaura nada automáticamente.
         </p>
 
         <div className="flex items-center justify-between gap-3">
-          <h3 className="font-semibold text-sm">Tareas eliminadas</h3>
+          <h3 className="font-semibold text-sm">Elementos eliminados</h3>
           <Button
             type="button"
             onClick={() => void refresh()}
-            disabled={isLoading || restoringTaskId !== null}
+            disabled={
+              isLoading || restoringTaskId !== null || restoringStepId !== null
+            }
             aria-label="Actualizar recuperación"
             title="Actualizar recuperación"
             className="min-h-10"
@@ -276,9 +370,9 @@ export function TaskRecoveryDialog({
 
         {listViewState === "loading" ? (
           <output className="text-sm text-text-muted" aria-live="polite">
-            Cargando tareas eliminadas…
+            Cargando elementos eliminados…
           </output>
-        ) : listViewState === "ready" ? (
+        ) : listViewState === "ready" && items.length > 0 ? (
           <ul className="divide-y divide-border rounded-lg border border-border">
             {items.map((item) => {
               const selectableColumns = item.original_column_available
@@ -348,7 +442,10 @@ export function TaskRecoveryDialog({
                                 [item.task_id]: event.target.value,
                               }))
                             }
-                            disabled={restoringTaskId !== null}
+                            disabled={
+                              restoringTaskId !== null ||
+                              restoringStepId !== null
+                            }
                             className="min-h-10 w-full rounded-md border border-border bg-surface-base px-3 text-sm focus:border-accent focus:outline-none sm:min-w-64"
                           >
                             <option value="">Elige una columna</option>
@@ -375,6 +472,7 @@ export function TaskRecoveryDialog({
                       onClick={() => void restore(item)}
                       disabled={
                         restoringTaskId !== null ||
+                        restoringStepId !== null ||
                         !action.canRestore ||
                         (requiresDestination && !selectedDestination)
                       }
@@ -394,8 +492,82 @@ export function TaskRecoveryDialog({
           </ul>
         ) : listViewState === "empty" ? (
           <p className="rounded-lg border border-border border-dashed p-4 text-sm text-text-muted">
-            No hay tareas eliminadas para recuperar en este tablero.
+            No hay tareas ni pasos eliminados para recuperar en este tablero.
           </p>
+        ) : null}
+
+        {hasCurrentEligibility && checklistItems.length > 0 ? (
+          <section aria-labelledby="deleted-checklist-steps-heading">
+            <h3
+              id="deleted-checklist-steps-heading"
+              className="mb-2 font-semibold text-sm"
+            >
+              Pasos de checklist eliminados
+            </h3>
+            <ul className="divide-y divide-border rounded-lg border border-border">
+              {checklistItems.map((item) => {
+                const canRestore = isTaskRecoveryRestorableAtMonotonicTime(
+                  item,
+                  item.eligibilityRequestStartedAtMonotonic,
+                  monotonicNow,
+                  hasCurrentEligibility,
+                );
+                const isRestoring = restoringStepId === item.step_id;
+                return (
+                  <li
+                    key={`${item.task_id}:${item.step_id}`}
+                    className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    <div className="min-w-0 space-y-1">
+                      <p className="break-words font-medium text-sm">
+                        {item.text}
+                      </p>
+                      <p className="text-text-muted text-xs">
+                        Tipo: Paso de checklist · Tarea: {item.task_title}
+                      </p>
+                      <p className="text-text-muted text-xs">
+                        Causa: Eliminación solicitada
+                      </p>
+                      <p className="text-text-muted text-xs">
+                        Estado: {item.is_completed ? "Marcado" : "Pendiente"}
+                      </p>
+                      <p className="text-text-muted text-xs">
+                        Eliminado:{" "}
+                        {formatTaskRecoveryTimestamp(item.deleted_at, timeZone)}
+                      </p>
+                      <p className="text-text-muted text-xs">
+                        Vence:{" "}
+                        {formatTaskRecoveryTimestamp(item.expires_at, timeZone)}
+                      </p>
+                      {!canRestore ? (
+                        <p className="text-priority-urgent text-xs">
+                          El plazo venció; no se puede recuperar.
+                        </p>
+                      ) : null}
+                    </div>
+                    {canRestore ? (
+                      <Button
+                        type="button"
+                        variant="primary"
+                        onClick={() => void restoreChecklistStep(item)}
+                        disabled={
+                          restoringTaskId !== null || restoringStepId !== null
+                        }
+                        aria-label={`Recuperar paso: ${item.text}`}
+                        className="min-h-11 shrink-0"
+                      >
+                        {isRestoring ? "Recuperando…" : "Recuperar paso"}
+                      </Button>
+                    ) : (
+                      <span className="shrink-0 text-sm text-text-muted">
+                        No recuperable
+                      </span>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
         ) : null}
 
         {error ? (

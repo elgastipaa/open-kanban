@@ -4,6 +4,11 @@ import type {
   BoardState,
   CreateTaskPayload,
   Task,
+  TaskChecklistCommand,
+  TaskChecklistRecoveryItem,
+  TaskChecklistRecoveryResult,
+  TaskChecklistResult,
+  TaskChecklistStep,
   TaskCompletionCommand,
   TaskCompletionResult,
   TaskEditConflicts,
@@ -77,6 +82,23 @@ export class TaskCompletionError extends Error {
   constructor(readonly reason: TaskCompletionErrorReason) {
     super(reason);
     this.name = "TaskCompletionError";
+  }
+}
+
+export type TaskChecklistErrorReason =
+  | "uncertain"
+  | "retryable"
+  | "expired_unknown"
+  | "expired"
+  | "unavailable"
+  | "rejected"
+  | "conflict"
+  | "access_denied";
+
+export class TaskChecklistError extends Error {
+  constructor(readonly reason: TaskChecklistErrorReason) {
+    super(reason);
+    this.name = "TaskChecklistError";
   }
 }
 
@@ -515,7 +537,11 @@ export async function setTaskCompletion(
     !command.operation_id ||
     typeof command.is_completed !== "boolean" ||
     !Number.isInteger(command.expected_version) ||
-    command.expected_version < 1
+    command.expected_version < 1 ||
+    (command.confirmed_checklist_version !== undefined &&
+      (!Number.isInteger(command.confirmed_checklist_version) ||
+        command.confirmed_checklist_version < 1 ||
+        !command.is_completed))
   ) {
     throw new TaskCompletionError("rejected");
   }
@@ -526,6 +552,7 @@ export async function setTaskCompletion(
     p_id: command.id,
     p_is_completed: command.is_completed,
     p_expected_version: command.expected_version,
+    p_confirmed_checklist_version: command.confirmed_checklist_version ?? null,
   });
 
   if (response.error) {
@@ -549,7 +576,8 @@ export async function setTaskCompletion(
   }
   if (
     (response.data.status === "confirmed" ||
-      response.data.status === "conflict") &&
+      response.data.status === "conflict" ||
+      response.data.status === "confirmation_required") &&
     response.data.task.id !== command.id
   ) {
     throw new TaskCompletionError("conflict");
@@ -574,8 +602,35 @@ function isTaskCompletionResult(value: unknown): value is TaskCompletionResult {
   ) {
     return false;
   }
-  if (value.status === "confirmed" || value.status === "conflict") {
-    return "task" in value && isTaskRecord(value.task);
+  if (
+    value.status === "confirmed" ||
+    value.status === "conflict" ||
+    value.status === "confirmation_required"
+  ) {
+    if (!("task" in value) || !isTaskRecord(value.task)) return false;
+    if (
+      value.status === "confirmation_required" &&
+      (!("pending_steps_count" in value) ||
+        !Number.isInteger(value.pending_steps_count) ||
+        typeof value.pending_steps_count !== "number" ||
+        value.pending_steps_count < 0 ||
+        !("checklist_version" in value) ||
+        !Number.isInteger(value.checklist_version) ||
+        typeof value.checklist_version !== "number" ||
+        value.checklist_version < 1)
+    ) {
+      return false;
+    }
+    if (
+      value.status === "conflict" &&
+      (("pending_steps_count" in value &&
+        typeof value.pending_steps_count !== "number") ||
+        ("checklist_version" in value &&
+          typeof value.checklist_version !== "number"))
+    ) {
+      return false;
+    }
+    return true;
   }
   return ["unavailable", "retryable", "expired_unknown"].includes(
     String(value.status),
@@ -618,6 +673,15 @@ export function isTaskRecord(value: unknown): value is Task {
   }
   const versions = value.field_versions as Record<string, unknown>;
   return (
+    "steps" in value &&
+    Array.isArray(value.steps) &&
+    value.steps.every(isTaskChecklistStepRecord) &&
+    "steps_order_version" in value &&
+    typeof value.steps_order_version === "number" &&
+    value.steps_order_version > 0 &&
+    "checklist_version" in value &&
+    typeof value.checklist_version === "number" &&
+    value.checklist_version > 0 &&
     "assignee_id" in value &&
     (typeof value.assignee_id === "string" || value.assignee_id === null) &&
     "assignee_version" in value &&
@@ -638,6 +702,208 @@ export function isTaskRecord(value: unknown): value is Task {
     typeof value.completion_version === "number" &&
     value.completion_version > 0
   );
+}
+
+function isTaskChecklistStepRecord(value: unknown): value is TaskChecklistStep {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "id" in value &&
+    typeof value.id === "string" &&
+    "text" in value &&
+    typeof value.text === "string" &&
+    value.text.trim().length > 0 &&
+    "is_completed" in value &&
+    typeof value.is_completed === "boolean" &&
+    "position" in value &&
+    typeof value.position === "number" &&
+    Number.isInteger(value.position) &&
+    value.position >= 0 &&
+    "version" in value &&
+    typeof value.version === "number" &&
+    Number.isInteger(value.version) &&
+    value.version > 0
+  );
+}
+
+export async function mutateTaskChecklistStep(
+  supabase: SupabaseClient,
+  slug: string,
+  command: TaskChecklistCommand,
+): Promise<TaskChecklistResult> {
+  if (!slug || !command.id || !command.operation_id) {
+    throw new TaskChecklistError("rejected");
+  }
+  const response = await supabase.rpc("mutate_task_checklist_step_p", {
+    p_operation_id: command.operation_id,
+    p_slug: slug,
+    p_task_id: command.id,
+    p_command: command.command,
+  });
+  if (response.error) {
+    if (response.error.code === "42501") {
+      throw new TaskChecklistError("access_denied");
+    }
+    if (response.error.code === "22023") {
+      throw new TaskChecklistError("rejected");
+    }
+    if (response.error.code === "23514") {
+      throw new TaskChecklistError("conflict");
+    }
+    throw new TaskChecklistError("uncertain");
+  }
+  if (!isTaskChecklistResult(response.data)) {
+    throw new TaskChecklistError("uncertain");
+  }
+  if (response.data.operation_id !== command.operation_id) {
+    throw new TaskChecklistError("conflict");
+  }
+  if (
+    (response.data.status === "confirmed" ||
+      response.data.status === "conflict") &&
+    response.data.task.id !== command.id
+  ) {
+    throw new TaskChecklistError("conflict");
+  }
+  if (
+    response.data.status === "unavailable" ||
+    response.data.status === "retryable" ||
+    response.data.status === "expired_unknown"
+  ) {
+    throw new TaskChecklistError(response.data.status);
+  }
+  return response.data;
+}
+
+function isTaskChecklistResult(value: unknown): value is TaskChecklistResult {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("status" in value) ||
+    !("operation_id" in value) ||
+    typeof value.operation_id !== "string"
+  ) {
+    return false;
+  }
+  if (value.status === "confirmed" || value.status === "conflict") {
+    return "task" in value && isTaskRecord(value.task);
+  }
+  return ["unavailable", "retryable", "expired_unknown"].includes(
+    String(value.status),
+  );
+}
+
+export async function listDeletedTaskChecklistSteps(
+  supabase: SupabaseClient,
+  slug: string,
+): Promise<TaskChecklistRecoveryItem[]> {
+  const response = await supabase.rpc("list_deleted_task_checklist_steps_p", {
+    p_slug: slug,
+  });
+  if (response.error) {
+    throw new TaskChecklistError(
+      response.error.code === "42501" ? "access_denied" : "uncertain",
+    );
+  }
+  if (
+    !Array.isArray(response.data) ||
+    !response.data.every(isTaskChecklistRecoveryItem)
+  ) {
+    throw new TaskChecklistError("uncertain");
+  }
+  return response.data;
+}
+
+function isTaskChecklistRecoveryItem(
+  value: unknown,
+): value is TaskChecklistRecoveryItem {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "task_id" in value &&
+    typeof value.task_id === "string" &&
+    "task_title" in value &&
+    typeof value.task_title === "string" &&
+    "step_id" in value &&
+    typeof value.step_id === "string" &&
+    "cause" in value &&
+    value.cause === "user_requested" &&
+    "text" in value &&
+    typeof value.text === "string" &&
+    "is_completed" in value &&
+    typeof value.is_completed === "boolean" &&
+    "position" in value &&
+    typeof value.position === "number" &&
+    Number.isInteger(value.position) &&
+    value.position >= 0 &&
+    "deleted_at" in value &&
+    typeof value.deleted_at === "string" &&
+    "expires_at" in value &&
+    typeof value.expires_at === "string" &&
+    "can_restore" in value &&
+    typeof value.can_restore === "boolean" &&
+    "eligibility_checked_at" in value &&
+    typeof value.eligibility_checked_at === "string"
+  );
+}
+
+export async function restoreTaskChecklistStep(
+  supabase: SupabaseClient,
+  slug: string,
+  operationId: string,
+  taskId: string,
+  stepId: string,
+): Promise<TaskChecklistRecoveryResult> {
+  if (!slug || !operationId || !taskId || !stepId) {
+    throw new TaskChecklistError("rejected");
+  }
+  const response = await supabase.rpc("restore_task_checklist_step_p", {
+    p_operation_id: operationId,
+    p_slug: slug,
+    p_task_id: taskId,
+    p_step_id: stepId,
+  });
+  if (response.error) {
+    if (response.error.code === "42501") {
+      throw new TaskChecklistError("access_denied");
+    }
+    if (response.error.code === "22023") {
+      throw new TaskChecklistError("rejected");
+    }
+    if (response.error.code === "23514") {
+      throw new TaskChecklistError("conflict");
+    }
+    throw new TaskChecklistError("uncertain");
+  }
+  if (
+    typeof response.data !== "object" ||
+    response.data === null ||
+    !("status" in response.data) ||
+    !("operation_id" in response.data) ||
+    response.data.operation_id !== operationId
+  ) {
+    throw new TaskChecklistError("uncertain");
+  }
+  if (
+    response.data.status === "confirmed" ||
+    response.data.status === "conflict"
+  ) {
+    if (!("task" in response.data) || !isTaskRecord(response.data.task)) {
+      throw new TaskChecklistError("uncertain");
+    }
+    if (response.data.task.id !== taskId)
+      throw new TaskChecklistError("conflict");
+    return response.data as TaskChecklistRecoveryResult;
+  }
+  if (
+    response.data.status === "unavailable" ||
+    response.data.status === "expired" ||
+    response.data.status === "retryable" ||
+    response.data.status === "expired_unknown"
+  ) {
+    return response.data as TaskChecklistRecoveryResult;
+  }
+  throw new TaskChecklistError("uncertain");
 }
 
 function isTaskEditConflicts(value: unknown): value is TaskEditConflicts {

@@ -60,6 +60,82 @@ export interface Task {
   is_completed: boolean;
   completed_at: string | null;
   completion_version: number;
+  steps: TaskChecklistStep[];
+  steps_order_version: number;
+  checklist_version: number;
+}
+
+export interface TaskChecklistStep {
+  id: string;
+  text: string;
+  is_completed: boolean;
+  position: number;
+  version: number;
+}
+
+export type TaskChecklistMutation =
+  | { action: "add"; text: string }
+  | {
+      action: "edit";
+      step_id: string;
+      text: string;
+      expected_version: number;
+    }
+  | {
+      action: "mark";
+      step_id: string;
+      is_completed: boolean;
+      expected_version: number;
+    }
+  | {
+      action: "delete";
+      step_id: string;
+      expected_version: number;
+    }
+  | {
+      action: "reorder";
+      step_ids: string[];
+      expected_order_version: number;
+    };
+
+export interface TaskChecklistCommand {
+  id: string;
+  operation_id: string;
+  command: TaskChecklistMutation;
+}
+
+export type TaskChecklistResult =
+  | { status: "confirmed" | "conflict"; operation_id: string; task: Task }
+  | {
+      status: "unavailable" | "retryable" | "expired_unknown";
+      operation_id: string;
+    };
+
+export interface TaskChecklistRecoveryItem {
+  task_id: string;
+  task_title: string;
+  step_id: string;
+  cause: "user_requested";
+  text: string;
+  is_completed: boolean;
+  position: number;
+  deleted_at: string;
+  expires_at: string;
+  can_restore: boolean;
+  eligibility_checked_at: string;
+}
+
+export type TaskChecklistRecoveryResult =
+  | { status: "confirmed" | "conflict"; operation_id: string; task: Task }
+  | {
+      status: "unavailable" | "expired" | "retryable" | "expired_unknown";
+      operation_id: string;
+    };
+
+export interface TaskChecklistProgress {
+  completedCount: number;
+  totalCount: number;
+  pendingCount: number;
 }
 
 export interface MyTaskEntry {
@@ -127,10 +203,29 @@ export interface TaskCompletionCommand {
   operation_id: string;
   is_completed: boolean;
   expected_version: number;
+  confirmed_checklist_version?: number;
 }
 
 export type TaskCompletionResult =
-  | { status: "confirmed" | "conflict"; operation_id: string; task: Task }
+  | {
+      status: "confirmed";
+      operation_id: string;
+      task: Task;
+    }
+  | {
+      status: "conflict";
+      operation_id: string;
+      task: Task;
+      pending_steps_count?: number;
+      checklist_version?: number;
+    }
+  | {
+      status: "confirmation_required";
+      operation_id: string;
+      task: Task;
+      pending_steps_count: number;
+      checklist_version: number;
+    }
   | {
       status: "unavailable" | "retryable" | "expired_unknown";
       operation_id: string;

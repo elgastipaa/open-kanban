@@ -28,6 +28,7 @@ const willChangeTransform = { willChange: "transform" } as const;
 
 interface ColumnProps {
   column: ColumnWithTasks;
+  boardToday: string;
   canDelete: boolean;
   canShiftLeft?: boolean;
   canShiftRight?: boolean;
@@ -55,6 +56,7 @@ interface ColumnProps {
 
 export function Column({
   column,
+  boardToday,
   canDelete,
   canShiftLeft,
   canShiftRight,
@@ -171,6 +173,7 @@ export function Column({
                   <TaskCard
                     key={task.id}
                     task={task}
+                    boardToday={boardToday}
                     index={index}
                     isCompleted={false}
                     onEdit={onEditTask}
@@ -240,6 +243,7 @@ export function Column({
                         <TaskCard
                           key={task.id}
                           task={task}
+                          boardToday={boardToday}
                           index={pending.length + index}
                           isCompleted
                           onEdit={onEditTask}

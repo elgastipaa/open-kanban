@@ -10,10 +10,12 @@ import {
 } from "@tabler/icons-react";
 import type { MouseEvent } from "react";
 import { createPortal } from "react-dom";
+import { TaskDueDate } from "@/components/board/task-due-date";
 import type { Priority, Task } from "@/lib/types";
 
 interface TaskCardProps {
   task: Task;
+  boardToday: string;
   index: number;
   onEdit: (task: Task, opener: HTMLButtonElement) => void;
   onDelete: (taskId: string) => void;
@@ -40,6 +42,7 @@ const priorityConfig: Record<Priority, { label: string; className: string }> = {
 
 export function TaskCard({
   task,
+  boardToday,
   index,
   onEdit,
   onDelete,
@@ -122,18 +125,27 @@ export function TaskCard({
               </div>
 
               {/* Footer: priority + date */}
-              <div className="mt-2.5 flex items-center justify-between">
+              <div className="mt-2.5 flex items-center justify-between gap-2">
                 <span
                   className={`inline-flex rounded-full px-2 py-0.5 font-semibold text-[10px] uppercase tracking-wider ${priority.className}`}
                 >
                   {priority.label}
                 </span>
-                <span className="text-[10px] text-text-muted">
-                  {new Date(task.created_at).toLocaleDateString("en-US", {
-                    month: "short",
-                    day: "numeric",
-                  })}
-                </span>
+                {task.due_on ? (
+                  <TaskDueDate
+                    dueOn={task.due_on}
+                    boardToday={boardToday}
+                    isCompleted={isCompleted}
+                    compact
+                  />
+                ) : (
+                  <span className="text-[10px] text-text-muted">
+                    {new Date(task.created_at).toLocaleDateString("en-US", {
+                      month: "short",
+                      day: "numeric",
+                    })}
+                  </span>
+                )}
               </div>
             </button>
 

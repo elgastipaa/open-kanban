@@ -6,7 +6,7 @@ export type TShortcut = {
 };
 
 export type Priority = "low" | "medium" | "high" | "urgent";
-export type TaskEditableField = "title" | "description" | "priority";
+export type TaskEditableField = "title" | "description" | "priority" | "due_on";
 export type TaskFieldVersions = Record<TaskEditableField, number>;
 
 export interface Board {
@@ -17,6 +17,19 @@ export interface Board {
   role: "owner" | "collaborator";
   created_at: string;
   updated_at: string;
+  today: string;
+}
+
+export interface BoardTimeZonePreview {
+  time_zone: string;
+  preview_time_zone: string;
+  today_before: string;
+  today_after: string;
+  due_today_before: number;
+  overdue_before: number;
+  due_today_after: number;
+  overdue_after: number;
+  due_dates_unchanged: boolean;
 }
 
 export interface Column {
@@ -36,6 +49,7 @@ export interface Task {
   title: string;
   description: string | null;
   priority: Priority;
+  due_on: string | null;
   position: number;
   created_at: string;
   updated_at: string;

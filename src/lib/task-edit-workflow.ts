@@ -2,6 +2,7 @@ export type TaskEditDraft = {
   title: string;
   description: string;
   priority: "low" | "medium" | "high" | "urgent";
+  due_on: string;
 };
 
 export type TaskEditOperation = {
@@ -11,9 +12,10 @@ export type TaskEditOperation = {
     title: string;
     description: string | null;
     priority: TaskEditDraft["priority"];
+    due_on: string | null;
   }>;
   expected_versions: Partial<
-    Record<"title" | "description" | "priority", number>
+    Record<"title" | "description" | "priority" | "due_on", number>
   >;
 };
 
@@ -73,7 +75,8 @@ export function changeTaskEditDraft(
   if (
     state.draft.title === draft.title &&
     state.draft.description === draft.description &&
-    state.draft.priority === draft.priority
+    state.draft.priority === draft.priority &&
+    state.draft.due_on === draft.due_on
   ) {
     return state;
   }

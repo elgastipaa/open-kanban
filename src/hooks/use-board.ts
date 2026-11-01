@@ -48,16 +48,22 @@ export function useBoard({
 
   const supabase = createClient();
 
-  const { refreshFromDB, persistBoard, removeBoard, replaceState } =
-    useBoardSync({
-      slug,
-      supabase,
-      boardRef,
-      isPersistedRef,
-      setBoard,
-      setColumns,
-      taskMutationLedger,
-    });
+  const {
+    refreshFromDB,
+    refreshBoardFromDB,
+    persistBoard,
+    applyBoardSettings,
+    removeBoard,
+    replaceState,
+  } = useBoardSync({
+    slug,
+    supabase,
+    boardRef,
+    isPersistedRef,
+    setBoard,
+    setColumns,
+    taskMutationLedger,
+  });
 
   const {
     addColumn,
@@ -116,5 +122,7 @@ export function useBoard({
     removeBoard,
     replaceState,
     refreshFromDB,
+    refreshBoardFromDB,
+    applyBoardSettings,
   };
 }

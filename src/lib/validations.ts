@@ -1,4 +1,5 @@
 import { z } from "zod/v4";
+import { isDateOnly } from "@/lib/task-date";
 
 // ---------------------------------------------------------------------------
 // Primitives
@@ -28,6 +29,9 @@ export const taskDescriptionSchema = z
   .max(2000, "Description must be 2000 characters or fewer")
   .nullable()
   .optional();
+const taskDueOnSchema = z
+  .string()
+  .refine(isDateOnly, "Escribe una fecha válida.");
 
 // ---------------------------------------------------------------------------
 // Payload schemas
@@ -70,6 +74,7 @@ export const updateTaskSchema = z
         title: taskTitleSchema.optional(),
         description: taskDescriptionSchema,
         priority: prioritySchema.optional(),
+        due_on: taskDueOnSchema.nullable().optional(),
       })
       .strict(),
     expected_versions: z
@@ -77,6 +82,7 @@ export const updateTaskSchema = z
         title: z.number().int().positive().optional(),
         description: z.number().int().positive().optional(),
         priority: z.number().int().positive().optional(),
+        due_on: z.number().int().positive().optional(),
       })
       .strict(),
   })

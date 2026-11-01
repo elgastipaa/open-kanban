@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { useCallback, useRef } from "react";
-import { deleteBoard as dbDeleteBoard, getFullBoard } from "@/lib/db";
+import { deleteBoard as dbDeleteBoard, getBoard, getFullBoard } from "@/lib/db";
 import { getSessionEpoch } from "@/lib/supabase/client";
 import type { Board, ColumnWithTasks } from "@/lib/types";
 import type { TaskMutationLedger } from "./task-mutation-ledger";
@@ -26,8 +26,10 @@ export function useBoardSync({
   taskMutationLedger,
 }: UseBoardSyncProps) {
   const refreshGenerationRef = useRef(0);
+  const boardRefreshGenerationRef = useRef(0);
 
   const refreshFromDB = useCallback(async () => {
+    boardRefreshGenerationRef.current += 1;
     const generation = ++refreshGenerationRef.current;
     const ledgerRevision = taskMutationLedger.revision;
     const sessionEpoch = getSessionEpoch();
@@ -59,10 +61,34 @@ export function useBoardSync({
     taskMutationLedger,
   ]);
 
+  const refreshBoardFromDB = useCallback(async () => {
+    const generation = ++boardRefreshGenerationRef.current;
+    const sessionEpoch = getSessionEpoch();
+    const latestBoard = await getBoard(supabase, slug);
+    if (
+      sessionEpoch === getSessionEpoch() &&
+      generation === boardRefreshGenerationRef.current &&
+      latestBoard
+    ) {
+      boardRef.current = latestBoard;
+      isPersistedRef.current = true;
+      setBoard(latestBoard);
+    }
+  }, [slug, supabase, boardRef, isPersistedRef, setBoard]);
+
   const persistBoard = useCallback(async (): Promise<Board> => {
     if (boardRef.current) return boardRef.current;
     throw new Error("This board is no longer available.");
   }, [boardRef]);
+
+  const applyBoardSettings = useCallback(
+    (nextBoard: Board) => {
+      boardRef.current = nextBoard;
+      isPersistedRef.current = true;
+      setBoard(nextBoard);
+    },
+    [boardRef, isPersistedRef, setBoard],
+  );
 
   const removeBoard = useCallback(async () => {
     if (boardRef.current && isPersistedRef.current) {
@@ -102,7 +128,9 @@ export function useBoardSync({
 
   return {
     refreshFromDB,
+    refreshBoardFromDB,
     persistBoard,
+    applyBoardSettings,
     removeBoard,
     replaceState,
   };

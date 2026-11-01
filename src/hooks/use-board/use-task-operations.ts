@@ -280,11 +280,12 @@ export function useTaskOperations({
           title,
           description: null,
           priority,
+          due_on: null,
           position,
           created_by: null,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
-          field_versions: { title: 1, description: 1, priority: 1 },
+          field_versions: { title: 1, description: 1, priority: 1, due_on: 1 },
           is_completed: false,
           completed_at: null,
           completion_version: 1,
@@ -519,6 +520,13 @@ export function useTaskOperations({
                 current: latestTask.priority,
                 draft: command.updates.priority,
                 current_version: latestTask.field_versions.priority,
+              };
+            }
+            if (command.updates.due_on !== undefined) {
+              conflicts.due_on = {
+                current: latestTask.due_on,
+                draft: command.updates.due_on,
+                current_version: latestTask.field_versions.due_on,
               };
             }
             return {

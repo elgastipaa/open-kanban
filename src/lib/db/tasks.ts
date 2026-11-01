@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { isDateOnly } from "@/lib/task-date";
 import type {
   BoardState,
   CreateTaskPayload,
@@ -580,9 +581,13 @@ function isTaskRecord(value: unknown): value is Task {
   }
   const versions = value.field_versions as Record<string, unknown>;
   return (
-    ["title", "description", "priority"].every(
+    ["title", "description", "priority", "due_on"].every(
       (field) => typeof versions[field] === "number",
     ) &&
+    "due_on" in value &&
+    (typeof value.due_on === "string"
+      ? isDateOnly(value.due_on)
+      : value.due_on === null) &&
     "is_completed" in value &&
     typeof value.is_completed === "boolean" &&
     "completed_at" in value &&

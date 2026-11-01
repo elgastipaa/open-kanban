@@ -10,14 +10,19 @@ import {
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { BoardSignOutButton } from "@/components/auth/board-sign-out-button";
+import { BoardTimeZoneDialog } from "@/components/board/board-time-zone-dialog";
 import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/ui/logo";
 import { renameBoard } from "@/lib/auth-actions";
+import type { BoardTimeZonePreview } from "@/lib/types";
 
 interface BoardToolbarProps {
   slug: string;
   name: string;
+  timeZone: string;
   canRename: boolean;
+  onPreviewTimeZone: (timeZone: string) => Promise<BoardTimeZonePreview>;
+  onSaveTimeZone: (expectedTimeZone: string, timeZone: string) => Promise<void>;
   viewerCount: number;
   isConnected: boolean;
   onDeleteBoard: () => void;
@@ -28,7 +33,10 @@ interface BoardToolbarProps {
 export function BoardToolbar({
   slug,
   name,
+  timeZone,
   canRename,
+  onPreviewTimeZone,
+  onSaveTimeZone,
   viewerCount,
   isConnected,
   onDeleteBoard,
@@ -185,6 +193,13 @@ export function BoardToolbar({
       </div>
 
       <div className="flex items-center gap-1">
+        {canRename ? (
+          <BoardTimeZoneDialog
+            timeZone={timeZone}
+            onPreview={onPreviewTimeZone}
+            onSave={onSaveTimeZone}
+          />
+        ) : null}
         {canRename ? (
           <Button
             variant="ghost"

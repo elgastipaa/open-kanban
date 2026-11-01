@@ -16,6 +16,7 @@ import type { ColumnWithTasks, Task } from "@/lib/types";
 
 interface MobileBoardProps {
   columns: ColumnWithTasks[];
+  boardToday: string;
   onAddColumn: (title: string) => void;
   onRenameColumn: (columnId: string, title: string) => void;
   onShiftColumn: (fromIndex: number, toIndex: number) => void;
@@ -55,6 +56,7 @@ const slideVariants = {
 
 export function MobileBoard({
   columns,
+  boardToday,
   onAddColumn,
   onRenameColumn,
   onShiftColumn,
@@ -224,6 +226,7 @@ export function MobileBoard({
                     <MobileTaskCard
                       key={task.id}
                       task={task}
+                      boardToday={boardToday}
                       index={index}
                       columns={columns}
                       isCompleted={false}
@@ -290,6 +293,7 @@ export function MobileBoard({
                           <MobileTaskCard
                             key={task.id}
                             task={task}
+                            boardToday={boardToday}
                             index={pending.length + index}
                             columns={columns}
                             isCompleted

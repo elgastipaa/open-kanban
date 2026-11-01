@@ -15,6 +15,7 @@ const initialDraft = {
   title: "Texto inicial",
   description: "",
   priority: "medium",
+  due_on: "",
 };
 
 const pendingOperation = {
@@ -78,6 +79,18 @@ test("changing a draft after an uncertain save starts a new intent", () => {
   assert.equal(changed.operation, null);
   assert.equal(changed.draft.title, "Texto corregido");
   assert.equal(retryTaskEditSave(changed), null);
+});
+
+test("a date-only change is kept as an independent editable field", () => {
+  const editing = changeTaskEditDraft(createTaskEditWorkflow(initialDraft), {
+    ...initialDraft,
+    due_on: "2026-10-31",
+  });
+
+  assert.equal(editing.status, "idle");
+  assert.equal(editing.draft.title, initialDraft.title);
+  assert.equal(editing.draft.due_on, "2026-10-31");
+  assert.equal(editing.operation, null);
 });
 
 test("delete confirmation follows only a confirmed save", () => {

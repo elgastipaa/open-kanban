@@ -492,6 +492,7 @@ fi
 echo 'PASS: two authenticated editors concurrently save different fields using independent versions'
 
 "${psql[@]}" -q -f "$repo_dir/tests/db/task_completion.sql"
+"${psql[@]}" -q -f "$repo_dir/tests/db/task_due_date_and_zone.sql"
 
 # A real opposing completion/reopen race must keep the first confirmed state
 # and return a reviewable conflict to the client that used the stale version.

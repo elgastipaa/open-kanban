@@ -20,6 +20,7 @@ import { useOnlineStatus } from "@/hooks/use-online-status";
 import { usePresence } from "@/hooks/use-presence";
 import { useRealtime } from "@/hooks/use-realtime";
 import { resolveApplicationAccess } from "@/lib/auth";
+import { previewBoardTimeZone, updateBoardTimeZone } from "@/lib/db/boards";
 import { exportBoard } from "@/lib/export";
 import { importBoard } from "@/lib/import";
 import {
@@ -247,6 +248,8 @@ function BoardWorkspace({
     editTask,
     completeTask,
     refreshTaskForEdit,
+    refreshBoardFromDB,
+    applyBoardSettings,
     removeTask,
     moveTask,
     moveColumn,
@@ -264,6 +267,23 @@ function BoardWorkspace({
   // Wire the refs after useBoard returns
   refreshRef.current = refreshFromDB;
   replaceStateRef.current = replaceState;
+
+  useEffect(() => {
+    const refreshBoardDay = () => {
+      if (document.visibilityState === "visible") {
+        void refreshBoardFromDB().catch(() => undefined);
+      }
+    };
+    const onVisibilityChange = () => refreshBoardDay();
+    const interval = window.setInterval(refreshBoardDay, 30_000);
+    window.addEventListener("focus", refreshBoardDay);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", refreshBoardDay);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [refreshBoardFromDB]);
 
   // Keyboard shortcuts (desktop only)
   const hotKeyBindings = useMemo(
@@ -489,6 +509,24 @@ function BoardWorkspace({
     }
   }
 
+  async function handlePreviewTimeZone(timeZone: string) {
+    return previewBoardTimeZone(createClient(), slug, timeZone);
+  }
+
+  async function handleSaveTimeZone(
+    expectedTimeZone: string,
+    timeZone: string,
+  ) {
+    const updatedBoard = await updateBoardTimeZone(
+      createClient(),
+      slug,
+      expectedTimeZone,
+      timeZone,
+    );
+    applyBoardSettings(updatedBoard);
+    broadcastSync();
+  }
+
   // Column delete handler (optimistic: close dialog instantly, removeColumn handles rollback)
   function handleDeleteColumn() {
     if (!deletingColumnId) return;
@@ -603,7 +641,10 @@ function BoardWorkspace({
       <BoardToolbar
         slug={slug}
         name={board?.name ?? initialBoard.name}
-        canRename={initialBoard.role === "owner"}
+        timeZone={board?.time_zone ?? initialBoard.time_zone}
+        canRename={board?.role === "owner"}
+        onPreviewTimeZone={handlePreviewTimeZone}
+        onSaveTimeZone={handleSaveTimeZone}
         viewerCount={viewerCount}
         isConnected={isConnected}
         onDeleteBoard={() => setShowDeleteBoard(true)}
@@ -637,6 +678,7 @@ function BoardWorkspace({
         /* ── Mobile: single-column view ── */
         <MobileBoard
           columns={columns}
+          boardToday={board?.today ?? initialBoard.today}
           onAddColumn={addColumn}
           onRenameColumn={renameColumn}
           onShiftColumn={moveColumn}
@@ -656,6 +698,7 @@ function BoardWorkspace({
                 <Column
                   key={column.id}
                   column={column}
+                  boardToday={board?.today ?? initialBoard.today}
                   canDelete
                   canShiftLeft={index > 0}
                   canShiftRight={index < columns.length - 1}
@@ -682,6 +725,8 @@ function BoardWorkspace({
       <TaskModal
         key={editingTask?.id ?? "closed"}
         task={editingTask}
+        boardTimeZone={board?.time_zone ?? initialBoard.time_zone}
+        boardToday={board?.today ?? initialBoard.today}
         columns={columns}
         contextLabel={`${board?.name ?? initialBoard.name} · ${taskOriginRef.current?.columnTitle ?? "Columna"}`}
         open={editingTaskId !== null && editingTask !== null}

@@ -10,6 +10,7 @@ import {
   IconTypography,
 } from "@tabler/icons-react";
 import { useEffect, useRef, useState } from "react";
+import { TaskDueDate } from "@/components/board/task-due-date";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -20,6 +21,7 @@ import {
 import { Modal } from "@/components/ui/modal";
 import { TaskEditError } from "@/lib/db/tasks";
 import { taskCompletionFollowUp } from "@/lib/task-completion";
+import { formatTaskDueDate, isDateOnly } from "@/lib/task-date";
 import {
   changeTaskEditDraft,
   confirmTaskEditSave,
@@ -51,6 +53,8 @@ import { generateUUID } from "@/lib/utils";
 
 interface TaskModalProps {
   task: Task | null;
+  boardTimeZone: string;
+  boardToday: string;
   columns: ColumnWithTasks[];
   contextLabel: string;
   open: boolean;
@@ -80,6 +84,7 @@ const editableFields: TaskEditableField[] = [
   "title",
   "description",
   "priority",
+  "due_on",
 ];
 
 function draftFor(task: Task): TaskEditDraft {
@@ -87,6 +92,7 @@ function draftFor(task: Task): TaskEditDraft {
     title: task.title,
     description: task.description ?? "",
     priority: task.priority,
+    due_on: task.due_on ?? "",
   };
 }
 
@@ -98,6 +104,8 @@ function fieldLabel(field: TaskEditableField) {
       return "Descripción";
     case "priority":
       return "Prioridad";
+    case "due_on":
+      return "Fecha límite";
   }
 }
 
@@ -108,6 +116,9 @@ function displayValue(field: TaskEditableField, value: string | null) {
       value ??
       "Sin valor"
     );
+  }
+  if (field === "due_on") {
+    return formatTaskDueDate(value) ?? "Sin fecha";
   }
   if (value === null || value === "") return "Sin contenido";
   return value;
@@ -137,6 +148,8 @@ function saveErrorMessage(error: unknown) {
 
 export function TaskModal({
   task,
+  boardTimeZone,
+  boardToday,
   columns,
   contextLabel,
   open,
@@ -154,7 +167,7 @@ export function TaskModal({
     createTaskEditWorkflow(
       task
         ? draftFor(task)
-        : { title: "", description: "", priority: "medium" },
+        : { title: "", description: "", priority: "medium", due_on: "" },
     ),
   );
   const [conflicts, setConflicts] = useState<TaskEditConflicts>({});
@@ -177,6 +190,7 @@ export function TaskModal({
   >(null);
   const [isCompleting, setIsCompleting] = useState(false);
   const [completionNotice, setCompletionNotice] = useState("");
+  const [dueOnError, setDueOnError] = useState("");
   const [expiredOperation, setExpiredOperation] =
     useState<TaskEditCommand | null>(null);
   const [reconciliationRequired, setReconciliationRequired] = useState(false);
@@ -204,6 +218,7 @@ export function TaskModal({
     setPendingCompletionTarget(null);
     setIsCompleting(false);
     setCompletionNotice("");
+    setDueOnError("");
     setExpiredOperation(null);
     setReconciliationRequired(false);
     setReconciliationError("");
@@ -216,7 +231,8 @@ export function TaskModal({
     baseTask !== null &&
     (normalizedTitle !== baseTask.title ||
       normalizedDescription !== baseTask.description ||
-      draft.priority !== baseTask.priority);
+      draft.priority !== baseTask.priority ||
+      (draft.due_on || null) !== baseTask.due_on);
   const hasConflict = Object.keys(conflicts).length > 0;
   const isSaving = workflow.status === "saving";
   const isWorking = isSaving || isReconciling || isMoving || isCompleting;
@@ -233,6 +249,7 @@ export function TaskModal({
 
   function updateDraft(nextDraft: TaskEditDraft) {
     setWorkflow((current) => changeTaskEditDraft(current, nextDraft));
+    setDueOnError("");
     setCloseNotice("");
     setMoveNotice("");
     setCompletionNotice("");
@@ -403,6 +420,11 @@ export function TaskModal({
       updates.priority = draft.priority;
       expectedVersions.priority = baseTask.field_versions.priority;
     }
+    const dueOn = draft.due_on || null;
+    if (dueOn !== baseTask.due_on) {
+      updates.due_on = dueOn;
+      expectedVersions.due_on = baseTask.field_versions.due_on;
+    }
     if (Object.keys(updates).length === 0) return null;
 
     return {
@@ -495,6 +517,11 @@ export function TaskModal({
     )
       return;
 
+    if (draft.due_on && !isDateOnly(draft.due_on)) {
+      setDueOnError("Escribe una fecha válida.");
+      return;
+    }
+
     const retry = retryTaskEditSave(workflow);
     const operation = retry?.operation ?? buildOperation();
     if (!operation) {
@@ -563,6 +590,15 @@ export function TaskModal({
     } catch (error) {
       if (
         error instanceof TaskEditError &&
+        error.reason === "rejected" &&
+        Object.hasOwn(operation.updates, "due_on")
+      ) {
+        setDueOnError(
+          "No se pudo guardar esta fecha. Revísala e inténtalo de nuevo.",
+        );
+      }
+      if (
+        error instanceof TaskEditError &&
         (error.reason === "expired_unknown" || error.reason === "conflict")
       ) {
         const message = saveErrorMessage(error);
@@ -617,6 +653,17 @@ export function TaskModal({
           current_version: latestTask.field_versions.priority,
         };
       }
+      const dueOnDraft = draft.due_on || null;
+      if (
+        Object.hasOwn(expiredOperation.updates, "due_on") ||
+        dueOnDraft !== latestTask.due_on
+      ) {
+        nextConflicts.due_on = {
+          current: latestTask.due_on,
+          draft: dueOnDraft,
+          current_version: latestTask.field_versions.due_on,
+        };
+      }
       setBaseTask(latestTask);
       setConflicts(nextConflicts);
       setWorkflow(reviewTaskEditConflict({ ...workflow, operation: null }));
@@ -650,7 +697,10 @@ export function TaskModal({
       const currentValue = baseTask[field];
       updateDraft({
         ...draft,
-        [field]: field === "description" ? (currentValue ?? "") : currentValue,
+        [field]:
+          field === "description" || field === "due_on"
+            ? (currentValue ?? "")
+            : currentValue,
       });
     }
     if (Object.keys(nextConflicts).length === 0) {
@@ -761,6 +811,48 @@ export function TaskModal({
           </button>
           {showDetails && (
             <div className="grid grid-cols-1 gap-4 pt-2 sm:grid-cols-2">
+              <div className="flex flex-col gap-2 sm:col-span-2">
+                <label
+                  htmlFor="task-due-on"
+                  className="flex items-center gap-1.5 font-semibold text-text-muted text-xs"
+                >
+                  <IconCalendar size={14} aria-hidden="true" /> Fecha límite
+                  (opcional)
+                </label>
+                <input
+                  id="task-due-on"
+                  type="date"
+                  value={draft.due_on}
+                  disabled={isWorking}
+                  aria-invalid={Boolean(dueOnError)}
+                  aria-describedby={
+                    dueOnError ? "task-due-on-error" : "task-due-on-help"
+                  }
+                  onChange={(event) =>
+                    updateDraft({ ...draft, due_on: event.target.value })
+                  }
+                  className="h-11 w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm text-text-primary outline-none transition-colors focus:border-accent focus:ring-1 focus:ring-accent disabled:opacity-60"
+                />
+                <p id="task-due-on-help" className="text-text-muted text-xs">
+                  Sin hora · Zona del tablero: {boardTimeZone}
+                </p>
+                {dueOnError && (
+                  <p
+                    id="task-due-on-error"
+                    className="text-priority-urgent text-xs"
+                    role="alert"
+                  >
+                    {dueOnError}
+                  </p>
+                )}
+                {draft.due_on && (
+                  <TaskDueDate
+                    dueOn={draft.due_on}
+                    boardToday={boardToday}
+                    isCompleted={baseTask.is_completed}
+                  />
+                )}
+              </div>
               <div className="flex flex-col gap-2">
                 <label
                   htmlFor="task-priority"

@@ -9,6 +9,7 @@ import {
 } from "@tabler/icons-react";
 import { motion } from "motion/react";
 import { type MouseEvent, useState } from "react";
+import { TaskDueDate } from "@/components/board/task-due-date";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -19,6 +20,7 @@ import type { ColumnWithTasks, Priority, Task } from "@/lib/types";
 
 interface MobileTaskCardProps {
   task: Task;
+  boardToday: string;
   index: number;
   columns: ColumnWithTasks[];
   isFirst: boolean;
@@ -50,6 +52,7 @@ const priorityConfig: Record<Priority, { label: string; className: string }> = {
 
 export function MobileTaskCard({
   task,
+  boardToday,
   index,
   columns,
   isFirst,
@@ -107,18 +110,27 @@ export function MobileTaskCard({
         )}
 
         {/* Footer: priority + date */}
-        <div className="mt-2.5 flex items-center justify-between">
+        <div className="mt-2.5 flex items-center justify-between gap-2">
           <span
             className={`inline-flex rounded-full px-2 py-0.5 font-semibold text-[10px] uppercase tracking-wider ${priority.className}`}
           >
             {priority.label}
           </span>
-          <span className="text-[10px] text-text-muted">
-            {new Date(task.created_at).toLocaleDateString("en-US", {
-              month: "short",
-              day: "numeric",
-            })}
-          </span>
+          {task.due_on ? (
+            <TaskDueDate
+              dueOn={task.due_on}
+              boardToday={boardToday}
+              isCompleted={isCompleted}
+              compact
+            />
+          ) : (
+            <span className="text-[10px] text-text-muted">
+              {new Date(task.created_at).toLocaleDateString("en-US", {
+                month: "short",
+                day: "numeric",
+              })}
+            </span>
+          )}
         </div>
       </button>
 

@@ -297,3 +297,113 @@ $$;
 
 SELECT 'PASS: column preview, explicit same-board destination, atomic task transfer, and restore without reversing moves'
   AS result;
+
+CREATE TEMP TABLE issue18_column_collaborator_restore_fixture (
+  board_id uuid NOT NULL,
+  board_slug text NOT NULL,
+  column_id uuid NOT NULL
+);
+GRANT SELECT, INSERT ON issue18_column_collaborator_restore_fixture TO authenticated;
+
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);
+DO $$
+DECLARE
+  v_board record;
+  v_column record;
+  v_destination record;
+  v_preview jsonb;
+  v_deleted jsonb;
+BEGIN
+  SELECT * INTO STRICT v_board
+  FROM public.create_board_p(
+    'Recuperación de columna por colaborador #18',
+    'UTC',
+    '18000000-0000-4000-8000-000000000201'
+  );
+  SELECT * INTO STRICT v_column
+  FROM public.create_column_p(v_board.slug, v_board.id, 'Columna recuperable', 0);
+  SELECT * INTO STRICT v_destination
+  FROM public.create_column_p(v_board.slug, v_board.id, 'Columna vigente', 1);
+  v_preview := public.preview_delete_column_p(v_board.slug, v_column.id);
+  v_deleted := public.delete_column_p(
+    '18000000-0000-4000-8000-000000000202', v_board.slug, v_column.id,
+    NULL, (v_preview->>'task_order_version')::bigint
+  );
+  IF v_deleted->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'The collaborator recovery fixture could not be deleted: %', v_deleted;
+  END IF;
+  INSERT INTO pg_temp.issue18_column_collaborator_restore_fixture (
+    board_id, board_slug, column_id
+  ) VALUES (v_board.id, v_board.slug, v_column.id);
+END;
+$$;
+COMMIT;
+
+INSERT INTO public.board_memberships (board_id, user_id, role)
+SELECT fixture.board_id, '40000000-0000-4000-8000-000000000005', 'collaborator'
+FROM pg_temp.issue18_column_collaborator_restore_fixture AS fixture;
+INSERT INTO public.board_memberships (board_id, user_id, role)
+SELECT fixture.board_id, '40000000-0000-4000-8000-000000000006', 'collaborator'
+FROM pg_temp.issue18_column_collaborator_restore_fixture AS fixture;
+UPDATE public.board_memberships AS membership
+SET revoked_at = clock_timestamp()
+FROM pg_temp.issue18_column_collaborator_restore_fixture AS fixture
+WHERE membership.board_id = fixture.board_id
+  AND membership.user_id = '40000000-0000-4000-8000-000000000006'
+  AND membership.revoked_at IS NULL;
+
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000006', true);
+DO $$
+DECLARE
+  v_fixture record;
+  v_result jsonb;
+BEGIN
+  SELECT * INTO STRICT v_fixture
+  FROM pg_temp.issue18_column_collaborator_restore_fixture;
+  v_result := public.restore_column_p(
+    '18000000-0000-4000-8000-000000000203',
+    v_fixture.board_slug,
+    v_fixture.column_id
+  );
+  IF v_result->>'status' IS DISTINCT FROM 'unavailable'
+    OR EXISTS (
+      SELECT 1 FROM public.columns AS column_row
+      WHERE column_row.id = v_fixture.column_id
+    ) THEN
+    RAISE EXCEPTION 'A withdrawn collaborator must not restore a deleted column: %', v_result;
+  END IF;
+END;
+$$;
+COMMIT;
+
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000005', true);
+DO $$
+DECLARE
+  v_fixture record;
+  v_result jsonb;
+BEGIN
+  SELECT * INTO STRICT v_fixture
+  FROM pg_temp.issue18_column_collaborator_restore_fixture;
+  v_result := public.restore_column_p(
+    '18000000-0000-4000-8000-000000000204',
+    v_fixture.board_slug,
+    v_fixture.column_id
+  );
+  IF v_result->>'status' IS DISTINCT FROM 'confirmed'
+    OR NOT EXISTS (
+      SELECT 1 FROM public.columns AS column_row
+      WHERE column_row.id = v_fixture.column_id
+    ) THEN
+    RAISE EXCEPTION 'A current collaborator with edit access must restore a column: %', v_result;
+  END IF;
+END;
+$$;
+COMMIT;
+
+\echo 'PASS: a current collaborator can restore a column while a withdrawn collaborator cannot'

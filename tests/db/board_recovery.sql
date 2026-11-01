@@ -1,5 +1,5 @@
 \set ON_ERROR_STOP on
-\echo 'Issue #18 RED: board deletion must retain a hidden board for recovery'
+\echo 'Issue #18: board deletion must retain a hidden board for recovery'
 
 CREATE TEMP TABLE issue18_board_recovery_fixture (
   board_id uuid NOT NULL,

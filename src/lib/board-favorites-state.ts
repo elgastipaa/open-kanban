@@ -40,6 +40,19 @@ export function focusFavoriteBoardButton(
   return true;
 }
 
+export function shouldRestoreFavoriteButtonFocus(
+  originalButton: object,
+  activeElement: object | null,
+  body: object,
+  documentElement: object,
+): boolean {
+  return (
+    activeElement === originalButton ||
+    activeElement === body ||
+    activeElement === documentElement
+  );
+}
+
 export function boardFavoriteFailureMessage(error: unknown): string {
   if (
     error instanceof Error &&

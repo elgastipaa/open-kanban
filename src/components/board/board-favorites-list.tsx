@@ -7,6 +7,7 @@ import {
   boardFavoriteFailureMessage,
   focusFavoriteBoardButton,
   groupFavoriteBoards,
+  shouldRestoreFavoriteButtonFocus,
   updateFavoriteIds,
   updatePendingFavoriteIds,
 } from "@/lib/board-favorites-state";
@@ -32,6 +33,7 @@ export function BoardFavoritesList({
   const focusAfterFavoriteMove = useRef<{
     boardId: string;
     desiredFavorite: boolean | null;
+    originalButton: HTMLButtonElement;
   } | null>(null);
   const pendingBoardIdsRef = useRef(new Set<string>());
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(
@@ -50,9 +52,21 @@ export function BoardFavoritesList({
     const request = focusAfterFavoriteMove.current;
     if (!request) return;
     if (
+      !shouldRestoreFavoriteButtonFocus(
+        request.originalButton,
+        document.activeElement,
+        document.body,
+        document.documentElement,
+      )
+    ) {
+      focusAfterFavoriteMove.current = null;
+      return;
+    }
+    if (
       request.desiredFavorite !== null &&
       favoriteIds.has(request.boardId) !== request.desiredFavorite
     ) {
+      focusAfterFavoriteMove.current = null;
       return;
     }
     focusFavoriteBoardButton(favoriteButtonRefs.current, request.boardId);
@@ -77,16 +91,16 @@ export function BoardFavoritesList({
     try {
       await setBoardFavorite(createClient(), boardId, nextValue);
       focusAfterFavoriteMove.current =
-        hadFocus && document.activeElement === button
-          ? { boardId, desiredFavorite: nextValue }
+        hadFocus && button && document.activeElement === button
+          ? { boardId, desiredFavorite: nextValue, originalButton: button }
           : null;
       setFavoriteIds((current) =>
         updateFavoriteIds(current, boardId, nextValue),
       );
     } catch (error) {
       focusAfterFavoriteMove.current =
-        hadFocus && document.activeElement === button
-          ? { boardId, desiredFavorite: null }
+        hadFocus && button && document.activeElement === button
+          ? { boardId, desiredFavorite: null, originalButton: button }
           : null;
       setMutationError(boardFavoriteFailureMessage(error));
       router.refresh();

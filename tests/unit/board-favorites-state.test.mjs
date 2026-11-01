@@ -4,6 +4,7 @@ import {
   boardFavoriteFailureMessage,
   focusFavoriteBoardButton,
   groupFavoriteBoards,
+  shouldRestoreFavoriteButtonFocus,
   updateFavoriteIds,
   updatePendingFavoriteIds,
 } from "../../src/lib/board-favorites-state.ts";
@@ -61,6 +62,41 @@ test("favorite focus can be restored after its card moves between sections", () 
   );
   assert.equal(focusFavoriteBoardButton(new Map(), "board-a"), false);
   assert.equal(focusCalls, 1);
+});
+
+test("favorite focus restoration does not steal focus from another control", () => {
+  const originalButton = {};
+  const anotherControl = {};
+  const body = {};
+  const documentElement = {};
+
+  assert.equal(
+    shouldRestoreFavoriteButtonFocus(
+      originalButton,
+      originalButton,
+      body,
+      documentElement,
+    ),
+    true,
+  );
+  assert.equal(
+    shouldRestoreFavoriteButtonFocus(
+      originalButton,
+      body,
+      body,
+      documentElement,
+    ),
+    true,
+  );
+  assert.equal(
+    shouldRestoreFavoriteButtonFocus(
+      originalButton,
+      anotherControl,
+      body,
+      documentElement,
+    ),
+    false,
+  );
 });
 
 test("favorite failures stay clear and do not reveal revoked board names", () => {

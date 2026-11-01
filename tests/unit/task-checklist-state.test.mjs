@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  getOrCreateTaskChecklistAddCommand,
   getTaskChecklistCompletionReview,
   getTaskChecklistProgress,
   moveTaskChecklistStep,
+  settleTaskChecklistAddCommand,
+  settleTaskChecklistAddOperation,
+  shouldClearTaskChecklistAddText,
+  TaskChecklistAddOperationStore,
 } from "../../src/lib/task-checklist-state.ts";
 
 const steps = [
@@ -56,6 +61,117 @@ test("accessible step movement updates positions and preserves each step state",
   );
   assert.deepEqual(moveTaskChecklistStep(steps, "step-a", -1), steps);
   assert.deepEqual(moveTaskChecklistStep(steps, "missing", 1), steps);
+});
+
+test("an uncertain add replays the same command before accepting another step", async () => {
+  const steps = [];
+  const receipts = new Map();
+  const pendingOperations = new TaskChecklistAddOperationStore(
+    "actor-1",
+    "board-1",
+  );
+  let loseFirstResponse = true;
+
+  async function mutateChecklist(command) {
+    const existing = receipts.get(command.operation_id);
+    if (existing) return existing;
+
+    const receipt = {
+      status: "confirmed",
+      operation_id: command.operation_id,
+      step_id: `step-${steps.length + 1}`,
+    };
+    receipts.set(command.operation_id, receipt);
+    steps.push(command.command.text);
+    if (loseFirstResponse) {
+      loseFirstResponse = false;
+      throw new Error("committed, but the response was lost");
+    }
+    return receipt;
+  }
+
+  let pending = getOrCreateTaskChecklistAddCommand(
+    pendingOperations.get("task-1"),
+    "task-1",
+    "Preparar publicación",
+    "operation-1",
+  );
+  pendingOperations.set(pending);
+  await assert.rejects(mutateChecklist(pending));
+  pending = settleTaskChecklistAddCommand(pending, "unresolved");
+  if (pending) pendingOperations.set(pending);
+
+  // The BoardWorkspace store survives the TaskModal closing and reopening.
+  const reopenedCommand = pendingOperations.get("task-1");
+  assert.deepEqual(reopenedCommand, pending);
+  const attemptedNewAdd = getOrCreateTaskChecklistAddCommand(
+    reopenedCommand,
+    "task-1",
+    "Enviar publicación",
+    "operation-2",
+  );
+  assert.deepEqual(attemptedNewAdd, {
+    id: "task-1",
+    operation_id: "operation-1",
+    command: { action: "add", text: "Preparar publicación" },
+  });
+
+  const replayReceipt = await mutateChecklist(attemptedNewAdd);
+  assert.equal(replayReceipt.operation_id, "operation-1");
+  assert.equal(replayReceipt.step_id, "step-1");
+  pending = settleTaskChecklistAddOperation(
+    pendingOperations,
+    pending,
+    replayReceipt.status,
+  );
+  assert.equal(pending, null);
+  assert.equal(pendingOperations.get("task-1"), null);
+  assert.deepEqual(steps, ["Preparar publicación"]);
+});
+
+test("pending adds stay scoped to an actor and are cleared on access loss", () => {
+  const operations = new TaskChecklistAddOperationStore("actor-1", "board-1");
+  const firstTask = getOrCreateTaskChecklistAddCommand(
+    null,
+    "task-1",
+    "Paso privado uno",
+    "operation-1",
+  );
+  const secondTask = getOrCreateTaskChecklistAddCommand(
+    null,
+    "task-2",
+    "Paso privado dos",
+    "operation-2",
+  );
+  operations.set(firstTask);
+  operations.set(secondTask);
+
+  assert.deepEqual(operations.get("task-1"), firstTask);
+  assert.deepEqual(operations.get("task-2"), secondTask);
+  assert.equal(
+    new TaskChecklistAddOperationStore("actor-2", "board-1").get("task-1"),
+    null,
+  );
+  assert.equal(
+    new TaskChecklistAddOperationStore("actor-1", "board-2").get("task-1"),
+    null,
+  );
+  assert.equal(
+    new TaskChecklistAddOperationStore("actor-1", "board-1").get("task-1"),
+    null,
+    "a new workspace starts without the previous session's command",
+  );
+
+  const afterAccessLost = settleTaskChecklistAddOperation(
+    operations,
+    firstTask,
+    "access_lost",
+  );
+  assert.equal(afterAccessLost, null);
+  assert.equal(operations.get("task-1"), null);
+  assert.equal(operations.get("task-2"), null);
+  assert.equal(shouldClearTaskChecklistAddText("access_lost"), true);
+  assert.equal(shouldClearTaskChecklistAddText("unresolved"), false);
 });
 
 test("completion confirmation uses the server's current count and checklist revision", () => {

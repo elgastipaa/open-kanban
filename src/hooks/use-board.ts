@@ -10,6 +10,7 @@ import { useColumnOperations } from "./use-board/use-column-operations";
 import { useTaskOperations } from "./use-board/use-task-operations";
 
 export function useBoard({
+  actorId,
   slug,
   initialBoard,
   initialColumns,
@@ -89,10 +90,12 @@ export function useBoard({
     editTask,
     completeTask,
     mutateChecklistStep,
+    checklistAddOperations,
     refreshTaskForEdit,
     removeTask,
     moveTask,
   } = useTaskOperations({
+    actorId,
     slug,
     supabase,
     columnsRef,
@@ -117,6 +120,7 @@ export function useBoard({
     editTask,
     completeTask,
     mutateChecklistStep,
+    checklistAddOperations,
     refreshTaskForEdit,
     removeTask,
     moveTask,

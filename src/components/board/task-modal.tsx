@@ -23,10 +23,15 @@ import { Modal } from "@/components/ui/modal";
 import { TaskChecklistError, TaskEditError } from "@/lib/db/tasks";
 import { resolveTaskChecklistCompletionReview } from "@/lib/task-checklist-completion";
 import {
+  getOrCreateTaskChecklistAddCommand,
   getTaskChecklistCompletionReview,
   getTaskChecklistProgress,
   moveTaskChecklistStep,
+  settleTaskChecklistAddOperation,
+  shouldClearTaskChecklistAddText,
+  type TaskChecklistAddOperationStore,
   type TaskChecklistCompletionReview,
+  type TaskChecklistMutationOutcome,
 } from "@/lib/task-checklist-state";
 import { taskCompletionFollowUp } from "@/lib/task-completion";
 import { formatTaskDueDate, isDateOnly } from "@/lib/task-date";
@@ -83,6 +88,7 @@ interface TaskModalProps {
   onSetTaskCompletion: (
     command: TaskCompletionCommand,
   ) => Promise<TaskCompletionResult>;
+  checklistAddOperations: TaskChecklistAddOperationStore;
   onMutateChecklist: (
     command: TaskChecklistCommand,
   ) => Promise<TaskChecklistResult>;
@@ -181,6 +187,7 @@ export function TaskModal({
   assignableMembers,
   onSetTaskAssignee,
   onSetTaskCompletion,
+  checklistAddOperations,
   onMutateChecklist,
   onMoveTask,
   onDelete,
@@ -221,6 +228,11 @@ export function TaskModal({
   ] = useState<TaskCompletionCommand | null>(null);
   const [isChecklistWorking, setIsChecklistWorking] = useState(false);
   const [checklistNotice, setChecklistNotice] = useState("");
+  const [pendingChecklistAddCommand, setPendingChecklistAddCommand] =
+    useState<TaskChecklistCommand | null>(() =>
+      task ? checklistAddOperations.get(task.id) : null,
+    );
+  const pendingChecklistAddCommandRef = useRef(pendingChecklistAddCommand);
   const [newChecklistStepText, setNewChecklistStepText] = useState("");
   const [editingChecklistStepId, setEditingChecklistStepId] = useState<
     string | null
@@ -262,8 +274,19 @@ export function TaskModal({
     setPendingChecklistReview(null);
     setPendingChecklistCompletionCommand(null);
     setIsChecklistWorking(false);
-    setChecklistNotice("");
-    setNewChecklistStepText("");
+    const pendingAddCommand = checklistAddOperations.get(task.id);
+    pendingChecklistAddCommandRef.current = pendingAddCommand;
+    setPendingChecklistAddCommand(pendingAddCommand);
+    setChecklistNotice(
+      pendingAddCommand
+        ? "No se pudo confirmar el paso. Reintenta esta misma alta antes de agregar otro."
+        : "",
+    );
+    setNewChecklistStepText(
+      pendingAddCommand?.command.action === "add"
+        ? pendingAddCommand.command.text
+        : "",
+    );
     setEditingChecklistStepId(null);
     setEditingChecklistStepText("");
     setSelectedAssigneeId(task.assignee_id ?? "");
@@ -561,14 +584,17 @@ export function TaskModal({
   async function mutateChecklist(
     mutation: TaskChecklistCommand["command"],
     successMessage: string,
-  ): Promise<boolean> {
-    if (!task || !baseTask || isChecklistWorking || !isOnline) return false;
+    operationId = generateUUID(),
+  ): Promise<TaskChecklistMutationOutcome> {
+    if (!task || !baseTask || isChecklistWorking || !isOnline) {
+      return "unresolved";
+    }
     setIsChecklistWorking(true);
     setChecklistNotice("");
     try {
       const result = await onMutateChecklist({
         id: task.id,
-        operation_id: generateUUID(),
+        operation_id: operationId,
         command: mutation,
       });
       if (result.status === "confirmed" || result.status === "conflict") {
@@ -584,18 +610,18 @@ export function TaskModal({
         );
         if (result.status === "confirmed") {
           setChecklistNotice(successMessage);
-          return true;
+          return "confirmed";
         } else {
           setChecklistNotice(
             "La checklist cambió en otro momento. Actualizamos sus pasos; revisa antes de volver a intentar.",
           );
-          return false;
+          return "resolved";
         }
       } else {
         setChecklistNotice(
           "No se pudo confirmar el cambio de checklist. Actualiza la tarea antes de volver a intentarlo.",
         );
-        return false;
+        return "unresolved";
       }
     } catch (error) {
       setChecklistNotice(
@@ -603,20 +629,52 @@ export function TaskModal({
           ? "Tu acceso al tablero cambió. Actualiza la página antes de continuar."
           : "No se pudo confirmar el cambio de checklist. Actualiza la tarea antes de volver a intentarlo.",
       );
-      return false;
+      if (error instanceof TaskChecklistError) {
+        if (error.reason === "rejected") return "resolved";
+        if (error.reason === "access_denied") return "access_lost";
+      }
+      return "unresolved";
     } finally {
       setIsChecklistWorking(false);
     }
   }
 
   function addChecklistStep() {
+    if (!task) return;
     const text = newChecklistStepText.trim();
-    if (!text) return;
-    void mutateChecklist({ action: "add", text }, "Paso agregado.").then(
-      (confirmed) => {
-        if (confirmed) setNewChecklistStepText("");
-      },
+    const existingCommand =
+      pendingChecklistAddCommandRef.current ??
+      checklistAddOperations.get(task.id);
+    if (!text && !existingCommand) return;
+    const command = getOrCreateTaskChecklistAddCommand(
+      existingCommand,
+      task.id,
+      text,
+      generateUUID(),
     );
+    pendingChecklistAddCommandRef.current = command;
+    checklistAddOperations.set(command);
+    setPendingChecklistAddCommand(command);
+    void mutateChecklist(
+      command.command,
+      "Paso agregado.",
+      command.operation_id,
+    ).then((outcome) => {
+      const settledCommand = settleTaskChecklistAddOperation(
+        checklistAddOperations,
+        pendingChecklistAddCommandRef.current,
+        outcome,
+      );
+      pendingChecklistAddCommandRef.current = settledCommand;
+      setPendingChecklistAddCommand(settledCommand);
+      if (shouldClearTaskChecklistAddText(outcome)) {
+        setNewChecklistStepText("");
+      } else if (outcome === "unresolved") {
+        setChecklistNotice(
+          "No se pudo confirmar el paso. Reintenta esta misma alta antes de agregar otro.",
+        );
+      }
+    });
   }
 
   function saveChecklistStep(stepId: string) {
@@ -631,8 +689,8 @@ export function TaskModal({
         expected_version: step.version,
       },
       "Paso actualizado.",
-    ).then((confirmed) => {
-      if (!confirmed) return;
+    ).then((outcome) => {
+      if (outcome !== "confirmed") return;
       setEditingChecklistStepId(null);
       setEditingChecklistStepText("");
     });
@@ -1244,7 +1302,11 @@ export function TaskModal({
                 value={newChecklistStepText}
                 aria-label="Nuevo paso de checklist"
                 placeholder="Agregar un paso"
-                disabled={!isOnline || isChecklistWorking}
+                disabled={
+                  !isOnline ||
+                  isChecklistWorking ||
+                  pendingChecklistAddCommand !== null
+                }
                 onChange={(event) =>
                   setNewChecklistStepText(event.target.value)
                 }
@@ -1263,10 +1325,14 @@ export function TaskModal({
                 disabled={
                   !isOnline ||
                   isChecklistWorking ||
-                  !newChecklistStepText.trim()
+                  (!pendingChecklistAddCommand && !newChecklistStepText.trim())
                 }
               >
-                {isChecklistWorking ? "Guardando…" : "Agregar paso"}
+                {isChecklistWorking
+                  ? "Guardando…"
+                  : pendingChecklistAddCommand
+                    ? "Reintentar alta"
+                    : "Agregar paso"}
               </Button>
             </div>
             {checklistNotice ? (

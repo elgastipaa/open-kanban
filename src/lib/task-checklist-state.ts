@@ -1,9 +1,97 @@
+import type { TaskChecklistCommand } from "./types";
+
 interface ChecklistProgressStep {
   id: string;
   text: string;
   is_completed: boolean;
   position: number;
   version: number;
+}
+
+export type TaskChecklistMutationOutcome =
+  | "confirmed"
+  | "resolved"
+  | "unresolved"
+  | "access_lost";
+
+/** Lives for one authorized board workspace, so pending payloads stay in memory. */
+export class TaskChecklistAddOperationStore {
+  private readonly commands = new Map<string, TaskChecklistCommand>();
+  private readonly actorId: string;
+  private readonly boardSlug: string;
+
+  constructor(actorId: string, boardSlug: string) {
+    this.actorId = actorId;
+    this.boardSlug = boardSlug;
+  }
+
+  private key(taskId: string): string {
+    return `${this.actorId}:${this.boardSlug}:${taskId}`;
+  }
+
+  get(taskId: string): TaskChecklistCommand | null {
+    return this.commands.get(this.key(taskId)) ?? null;
+  }
+
+  set(command: TaskChecklistCommand): void {
+    this.commands.set(this.key(command.id), command);
+  }
+
+  clear(taskId: string): void {
+    this.commands.delete(this.key(taskId));
+  }
+
+  clearAll(): void {
+    this.commands.clear();
+  }
+}
+
+export function getOrCreateTaskChecklistAddCommand(
+  pending: TaskChecklistCommand | null,
+  taskId: string,
+  text: string,
+  operationId: string,
+): TaskChecklistCommand {
+  return (
+    pending ?? {
+      id: taskId,
+      operation_id: operationId,
+      command: { action: "add", text },
+    }
+  );
+}
+
+export function settleTaskChecklistAddCommand(
+  pending: TaskChecklistCommand | null,
+  outcome: TaskChecklistMutationOutcome,
+): TaskChecklistCommand | null {
+  return outcome === "confirmed" ||
+    outcome === "resolved" ||
+    outcome === "access_lost"
+    ? null
+    : pending;
+}
+
+export function settleTaskChecklistAddOperation(
+  operations: TaskChecklistAddOperationStore,
+  pending: TaskChecklistCommand | null,
+  outcome: TaskChecklistMutationOutcome,
+): TaskChecklistCommand | null {
+  const settled = settleTaskChecklistAddCommand(pending, outcome);
+  if (outcome === "access_lost") {
+    operations.clearAll();
+  } else if (settled) {
+    operations.set(settled);
+  } else if (pending) {
+    operations.clear(pending.id);
+  }
+  return settled;
+}
+
+export function shouldClearTaskChecklistAddText(
+  outcome: TaskChecklistMutationOutcome,
+): boolean {
+  return outcome === "confirmed" || outcome === "access_lost";
 }
 
 interface ChecklistCompletionResult {

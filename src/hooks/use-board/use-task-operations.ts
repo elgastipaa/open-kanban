@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import {
   createColumn,
@@ -20,6 +20,7 @@ import {
   updateTaskPositions,
 } from "@/lib/db";
 import { getSessionEpoch } from "@/lib/supabase/client";
+import { TaskChecklistAddOperationStore } from "@/lib/task-checklist-state";
 import { prepareTaskOrderMove } from "@/lib/task-order";
 import type {
   Board,
@@ -45,6 +46,7 @@ import { reconcileAuthorizedTaskOrder } from "./task-order-reconciliation";
 import { showMutationError, showTaskVerificationError } from "./utils";
 
 interface UseTaskOperationsProps {
+  actorId: string;
   slug: string;
   supabase: SupabaseClient;
   columnsRef: React.RefObject<ColumnWithTasks[]>;
@@ -82,6 +84,7 @@ function includeTaskColumn(
 }
 
 export function useTaskOperations({
+  actorId,
   slug,
   supabase,
   columnsRef,
@@ -95,6 +98,27 @@ export function useTaskOperations({
 }: UseTaskOperationsProps) {
   const localColumnIds = useRef(new Map<string, string>());
   const orderReconciliationRequiredRef = useRef(false);
+  const checklistAddOperationsRef = useRef<{
+    actorId: string;
+    slug: string;
+    store: TaskChecklistAddOperationStore;
+  } | null>(null);
+  if (
+    !checklistAddOperationsRef.current ||
+    checklistAddOperationsRef.current.actorId !== actorId ||
+    checklistAddOperationsRef.current.slug !== slug
+  ) {
+    checklistAddOperationsRef.current = {
+      actorId,
+      slug,
+      store: new TaskChecklistAddOperationStore(actorId, slug),
+    };
+  }
+  const checklistAddOperations = checklistAddOperationsRef.current.store;
+  useEffect(
+    () => () => checklistAddOperations.clearAll(),
+    [checklistAddOperations],
+  );
 
   const reconcileCurrentTaskOrder = useCallback(
     async (
@@ -1160,6 +1184,7 @@ export function useTaskOperations({
     editTask,
     completeTask,
     mutateChecklistStep,
+    checklistAddOperations,
     refreshTaskForEdit,
     removeTask,
     moveTask,

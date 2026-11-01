@@ -1,6 +1,8 @@
 import type { Board, ColumnWithTasks } from "@/lib/types";
 
 export interface UseBoardOptions {
+  /** Authenticated actor for in-memory, actor-scoped command reconciliation. */
+  actorId: string;
   slug: string;
   initialBoard: Board;
   initialColumns: ColumnWithTasks[];

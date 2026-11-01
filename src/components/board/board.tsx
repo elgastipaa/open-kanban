@@ -74,6 +74,7 @@ interface BoardProps {
 }
 
 type BoardWorkspaceProps = Omit<BoardProps, "ownerAuthUserId"> & {
+  actorId: string;
   isSessionStale: boolean;
   onAccessLost: () => void;
 };
@@ -212,6 +213,7 @@ export function Board({
   return (
     <BoardWorkspace
       slug={slug}
+      actorId={ownerAuthUserId}
       initialBoard={initialBoard}
       initialColumns={initialColumns}
       assignableMembers={assignableMembers}
@@ -225,6 +227,7 @@ export function Board({
 
 function BoardWorkspace({
   slug,
+  actorId,
   initialBoard,
   initialColumns,
   assignableMembers,
@@ -282,6 +285,7 @@ function BoardWorkspace({
     editTask,
     completeTask,
     mutateChecklistStep,
+    checklistAddOperations,
     refreshTaskForEdit,
     refreshBoardFromDB,
     applyBoardSettings,
@@ -292,6 +296,7 @@ function BoardWorkspace({
     replaceState,
     refreshFromDB,
   } = useBoard({
+    actorId,
     slug,
     initialBoard,
     initialColumns,
@@ -875,6 +880,7 @@ function BoardWorkspace({
         onReconcileTask={refreshTaskForEdit}
         onSave={editTask}
         onSetTaskCompletion={completeTask}
+        checklistAddOperations={checklistAddOperations}
         onMutateChecklist={mutateChecklistStep}
         assignableMembers={assignableMembers}
         onSetTaskAssignee={assignTask}

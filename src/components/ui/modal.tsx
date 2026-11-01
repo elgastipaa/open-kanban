@@ -9,8 +9,9 @@ import {
   useRef,
 } from "react";
 import { createPortal } from "react-dom";
+import { getModalFocusReturnTarget, ModalStack } from "@/lib/modal-stack";
 
-const activeModals: symbol[] = [];
+const activeModals = new ModalStack();
 
 interface ModalProps {
   open: boolean;
@@ -20,6 +21,7 @@ interface ModalProps {
   fullScreenMobile?: boolean;
   closeLabel?: string;
   onAfterClose?: () => void;
+  returnFocusTo?: () => HTMLElement | null;
 }
 
 export function Modal({
@@ -30,6 +32,7 @@ export function Modal({
   fullScreenMobile = false,
   closeLabel = "Cerrar ventana",
   onAfterClose,
+  returnFocusTo,
 }: ModalProps) {
   const overlayRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -37,9 +40,11 @@ export function Modal({
   const modalTokenRef = useRef(Symbol("modal"));
   const onCloseRef = useRef(onClose);
   const onAfterCloseRef = useRef(onAfterClose);
+  const returnFocusToRef = useRef(returnFocusTo);
   const titleId = useId();
   onCloseRef.current = onClose;
   onAfterCloseRef.current = onAfterClose;
+  returnFocusToRef.current = returnFocusTo;
 
   // Keep keyboard focus in the dialog and return it to the opener on close.
   useEffect(() => {
@@ -48,7 +53,7 @@ export function Modal({
     returnFocusRef.current =
       activeElement instanceof HTMLElement ? activeElement : null;
     const previousOverflow = document.body.style.overflow;
-    activeModals.push(modalTokenRef.current);
+    const deactivateModal = activeModals.activate(modalTokenRef.current);
     document.body.style.overflow = "hidden";
 
     const focusFrame = window.requestAnimationFrame(() => {
@@ -63,7 +68,7 @@ export function Modal({
     });
 
     function handleKeyDown(event: KeyboardEvent) {
-      if (activeModals.at(-1) !== modalTokenRef.current) return;
+      if (!activeModals.isTop(modalTokenRef.current)) return;
       if (event.key === "Escape") {
         event.preventDefault();
         onCloseRef.current();
@@ -93,10 +98,12 @@ export function Modal({
     return () => {
       window.cancelAnimationFrame(focusFrame);
       document.removeEventListener("keydown", handleKeyDown);
-      const modalIndex = activeModals.lastIndexOf(modalTokenRef.current);
-      if (modalIndex !== -1) activeModals.splice(modalIndex, 1);
+      deactivateModal();
       document.body.style.overflow = previousOverflow;
-      const returnTarget = returnFocusRef.current;
+      const returnTarget = getModalFocusReturnTarget(
+        returnFocusToRef.current?.(),
+        returnFocusRef.current,
+      );
       if (returnTarget?.isConnected) {
         window.requestAnimationFrame(() =>
           returnTarget.focus({ preventScroll: true }),

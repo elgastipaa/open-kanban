@@ -1,6 +1,6 @@
 # Validación de Issue #14: eliminar y recuperar tareas durante siete días
 
-Estado de evidencia: migración/RPC y regresiones DB/unit completadas; build y typecheck pasan. La revisión visual de eliminación, recuperación y accesibilidad en escritorio/móvil queda pendiente. #14 sigue abierto; el bloqueo #8 permanece abierto/ready-for-human.
+Estado de evidencia: migración/RPC y regresiones DB/unit completadas; build y typecheck pasan. Código integrado por fast-forward y push ordinario a `codex/openkanban-1-0` en `09c175468a5d317ad644f33b21b771f2f25d5184`. La revisión visual de eliminación, recuperación y accesibilidad en escritorio/móvil queda pendiente. #14 sigue OPEN/ready-for-human; el bloqueo #8 permanece abierto/ready-for-human.
 
 Checkout: rama `codex/issue-14`; base y merge-base exactos `5214358ad20274074e9344aaae7992907ef0729e`.
 
@@ -34,10 +34,10 @@ Entorno: Windows con Bash/WSL para el runner PostgreSQL; Node `v24.14.1`, pnpm `
 - RED/GREEN de estado de lista: antes de crear el helper, el test focal falló por módulo `task-recovery-state` ausente; el mapper posterior cubre carga, error, vacío y entradas conservadas durante refresh fallido.
 - `pnpm build`: exit 0 con Next.js 16.4.2; completa compilación, generación de páginas y enumera tablero dinámico y `/my-tasks` existente.
 - `pnpm typecheck`: exit 0 (`tsc --noEmit`), corrido después del build final.
-- `pnpm exec biome check` dirigido a los cuatro archivos TS/TSX/MJS de esta corrección: exit 0, `No fixes applied`.
+- `pnpm exec biome check` dirigido a los tres archivos TS/TSX/MJS modificados en la corrección final: exit 0, `No fixes applied`.
 - `bash -n scripts/test-db.sh` y `git diff --check`: exit 0.
 
-La migración conserva una tumba sin snapshot de contenido tras restaurar o purgar. La purga exacta se implementa como RPC acotada invocable por `service_role`; el worker persistente no pertenece a #14 y queda en #23. No se implementaron recuperación de series/ocurrencias, pasos, columnas, archivos ni tableros. La asignación/kickoff del issue precedieron esta implementación; no hubo modificaciones del tracker durante este trabajo. No se cerró el issue, no se integró la rama y no se hizo push.
+La migración conserva una tumba sin snapshot de contenido tras restaurar o purgar. La purga exacta se implementa como RPC acotada invocable por `service_role`; el worker persistente no pertenece a #14 y queda en #23. No se implementaron recuperación de series/ocurrencias, pasos, columnas, archivos ni tableros. La asignación/kickoff precedieron esta implementación; tras revisar e integrar el candidato se publicó evidencia en https://github.com/elgastipaa/open-kanban/issues/14#issuecomment-6553720479 y se dejó el issue abierto/ready-for-human con `Blocked by #8` intacto. La PR acumulada #54 sigue OPEN/draft, ahora titulada #3–#14. No se cerró el issue ni se tocó `main` o producción.
 
 ## Verificación manual pendiente
 

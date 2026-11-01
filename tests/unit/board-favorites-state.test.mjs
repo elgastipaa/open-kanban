@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   boardFavoriteFailureMessage,
+  focusFavoriteBoardButton,
   groupFavoriteBoards,
   updateFavoriteIds,
   updatePendingFavoriteIds,
@@ -48,6 +49,18 @@ test("one pending favorite blocks only the same board and preserves other operat
   assert.deepEqual([...both].sort(), ["board-a", "board-b"]);
   assert.deepEqual([...afterFirstCompletes], ["board-b"]);
   assert.deepEqual([...first], ["board-a"]);
+});
+
+test("favorite focus can be restored after its card moves between sections", () => {
+  let focusCalls = 0;
+  const button = { focus: () => focusCalls++ };
+
+  assert.equal(
+    focusFavoriteBoardButton(new Map([["board-a", button]]), "board-a"),
+    true,
+  );
+  assert.equal(focusFavoriteBoardButton(new Map(), "board-a"), false);
+  assert.equal(focusCalls, 1);
 });
 
 test("favorite failures stay clear and do not reveal revoked board names", () => {

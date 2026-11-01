@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   boardFavoriteFailureMessage,
+  focusFavoriteBoardButton,
   groupFavoriteBoards,
   updateFavoriteIds,
   updatePendingFavoriteIds,
@@ -27,6 +28,11 @@ export function BoardFavoritesList({
   favoritesLoadError,
 }: BoardFavoritesListProps) {
   const router = useRouter();
+  const favoriteButtonRefs = useRef(new Map<string, HTMLButtonElement>());
+  const focusAfterFavoriteMove = useRef<{
+    boardId: string;
+    desiredFavorite: boolean | null;
+  } | null>(null);
   const pendingBoardIdsRef = useRef(new Set<string>());
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(
     () => new Set(favoriteBoardIds),
@@ -40,9 +46,24 @@ export function BoardFavoritesList({
     setFavoriteIds(new Set(favoriteBoardIds));
   }, [favoriteBoardIds]);
 
+  useLayoutEffect(() => {
+    const request = focusAfterFavoriteMove.current;
+    if (!request) return;
+    if (
+      request.desiredFavorite !== null &&
+      favoriteIds.has(request.boardId) !== request.desiredFavorite
+    ) {
+      return;
+    }
+    focusFavoriteBoardButton(favoriteButtonRefs.current, request.boardId);
+    focusAfterFavoriteMove.current = null;
+  }, [favoriteIds]);
+
   async function toggleFavorite(boardId: string) {
     if (pendingBoardIdsRef.current.has(boardId) || favoritesLoadError) return;
 
+    const button = favoriteButtonRefs.current.get(boardId);
+    const hadFocus = document.activeElement === button;
     const nextValue = !favoriteIds.has(boardId);
     const pending = updatePendingFavoriteIds(
       pendingBoardIdsRef.current,
@@ -55,10 +76,18 @@ export function BoardFavoritesList({
 
     try {
       await setBoardFavorite(createClient(), boardId, nextValue);
+      focusAfterFavoriteMove.current =
+        hadFocus && document.activeElement === button
+          ? { boardId, desiredFavorite: nextValue }
+          : null;
       setFavoriteIds((current) =>
         updateFavoriteIds(current, boardId, nextValue),
       );
     } catch (error) {
+      focusAfterFavoriteMove.current =
+        hadFocus && document.activeElement === button
+          ? { boardId, desiredFavorite: null }
+          : null;
       setMutationError(boardFavoriteFailureMessage(error));
       router.refresh();
     } finally {
@@ -129,6 +158,10 @@ export function BoardFavoritesList({
               aria-pressed={isFavorite}
               className="grid size-11 shrink-0 place-items-center rounded-full text-2xl text-amber-300 transition hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-amber-300 focus-visible:outline-offset-2 aria-disabled:cursor-wait aria-disabled:opacity-60"
               onClick={() => void toggleFavorite(board.id)}
+              ref={(button) => {
+                if (button) favoriteButtonRefs.current.set(board.id, button);
+                else favoriteButtonRefs.current.delete(board.id);
+              }}
               type="button"
             >
               <span aria-hidden="true">{isFavorite ? "★" : "☆"}</span>

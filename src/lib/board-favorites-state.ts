@@ -30,6 +30,16 @@ export function updatePendingFavoriteIds(
   return updated;
 }
 
+export function focusFavoriteBoardButton(
+  buttons: ReadonlyMap<string, { focus: () => void }>,
+  boardId: string,
+): boolean {
+  const button = buttons.get(boardId);
+  if (!button) return false;
+  button.focus();
+  return true;
+}
+
 export function boardFavoriteFailureMessage(error: unknown): string {
   if (
     error instanceof Error &&

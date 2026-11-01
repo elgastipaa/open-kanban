@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
-import { createHmac, randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { createHmac } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { createClient } from "@supabase/supabase-js";
 
 const requiredEnvironment = [
   "ISSUE20_SUPABASE_URL",
   "ISSUE20_PUBLISHABLE_KEY",
   "ISSUE20_JWT_SECRET",
+  "ISSUE20_SUPABASE_PROJECT_ID",
 ];
 for (const name of requiredEnvironment) {
   if (!process.env[name]) throw new Error(`Missing local test setting ${name}`);
@@ -107,9 +110,15 @@ try {
 
   const events = [];
   const ownerEvents = [];
+  const openEvents = [];
+  let revocationTransactionCommitted = false;
   let resolveInvalidation;
   const invalidation = new Promise((resolve) => {
     resolveInvalidation = resolve;
+  });
+  let resolveLateSignal;
+  const lateSignal = new Promise((resolve) => {
+    resolveLateSignal = resolve;
   });
   memberChannel = await subscribed(
     member,
@@ -121,7 +130,12 @@ try {
         resolveInvalidation();
       });
       channel.on("broadcast", { event: "sync" }, (message) => {
-        events.push({ event: "sync", payload: message.payload ?? message });
+        events.push({
+          event: "sync",
+          payload: message.payload ?? message,
+          afterRevocationCommit: revocationTransactionCommitted,
+        });
+        resolveLateSignal();
       });
     },
   );
@@ -137,9 +151,11 @@ try {
   openChannel = anonymous.channel(oldContext.sync_topic, {
     config: { private: false },
   });
-  const openEvents = [];
+  openChannel.on("broadcast", { event: "sync" }, (message) => {
+    openEvents.push({ event: "sync", payload: message.payload ?? message });
+  });
   openChannel.on("broadcast", { event: "revalidate" }, (message) => {
-    openEvents.push(message);
+    openEvents.push({ event: "revalidate", payload: message.payload ?? message });
   });
   const openJoinStatus = await new Promise((resolve) => {
     const timeout = setTimeout(() => resolve("timeout"), 2000);
@@ -167,19 +183,38 @@ try {
     `a signed client published a broadcast (transport result: ${directSend})`,
   );
 
-  const membersResult = await owner.rpc("list_board_members_p", { p_slug: slug });
-  assert.equal(membersResult.error, null);
-  const membership = membersResult.data.find((row) => row.user_id === memberId);
-  assert.ok(membership?.membership_id);
+  // This local-only SQL transaction publishes a data signal, then performs
+  // the normal authorized removal RPC before committing. The sync row is
+  // therefore committed and delivered only after the revocation transaction
+  // has completed; the event loop remains blocked until that commit returns.
+  const lateRevocationSql = readFileSync(
+    new URL("./late-revocation.sql", import.meta.url),
+    "utf8",
+  );
+  execFileSync(
+    "docker",
+    [
+      "exec",
+      "-i",
+      `supabase_db_${process.env.ISSUE20_SUPABASE_PROJECT_ID}`,
+      "psql",
+      "-U",
+      "postgres",
+      "-d",
+      "postgres",
+      "-v",
+      "ON_ERROR_STOP=1",
+    ],
+    { encoding: "utf8", input: lateRevocationSql },
+  );
+  revocationTransactionCommitted = true;
 
-  const removeResult = await owner.rpc("remove_board_collaborator_p", {
-    p_operation_id: randomUUID(),
-    p_board_id: oldContext.id,
-    p_membership_id: membership.membership_id,
-  });
-  assert.equal(removeResult.error, null);
-  assert.equal(removeResult.data.status, "confirmed");
-
+  await Promise.race([
+    lateSignal,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("the pre-revocation sync signal did not arrive late")), 5000),
+    ),
+  ]);
   await Promise.race([
     invalidation,
     new Promise((_, reject) =>
@@ -209,13 +244,17 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 1500));
   assert.deepEqual(
     events.map((entry) => entry.event),
-    ["revalidate"],
-    "a server write after revocation published to the previous topic",
+    ["sync", "revalidate"],
+    "the pre-revocation data signal and the revocation signal must remain distinguishable",
+  );
+  assert.ok(
+    events.find((entry) => entry.event === "sync")?.afterRevocationCommit,
+    "the pre-revocation sync callback was not processed after the revocation committed",
   );
   assert.deepEqual(
     ownerEvents.map((entry) => entry.event),
-    ["revalidate"],
-    "a post-revocation server write reached the owner's old topic",
+    ["sync", "revalidate"],
+    "the old topic must receive only the pre-revocation sync and its invalidation",
   );
   assert.equal(openEvents.length, 0, "an open channel received a private signal");
   for (const entry of events) {
@@ -231,11 +270,11 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 1000));
   assert.deepEqual(
     ownerEvents.map((entry) => entry.event),
-    ["revalidate"],
+    ["sync", "revalidate"],
     `a revoked signed client published a broadcast (transport result: ${revokedDirectSend})`,
   );
   console.log(
-    "PASS: local Realtime denies open/client broadcasts; old-topic revalidation arrives once, refetch is denied, and later writes use the rotated topic.",
+    "PASS: local Realtime delivered a pre-revocation sync after commit; its refetch was denied, open/client broadcasts were blocked, and later writes used the rotated topic.",
   );
 } finally {
   if (memberChannel) await member.removeChannel(memberChannel);

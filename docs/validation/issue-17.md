@@ -53,3 +53,11 @@ Fecha de verificación: `2026-11-01`.
 | `git diff --check` | Exit 0 | Sin errores de whitespace en los cambios de código/documentación. |
 
 La interacción visual, Auth real, operación administrativa global y la restauración completa del tablero no se afirman como verificadas aquí.
+
+## Revisión final
+
+Código revisado: `de55379e2f0e88db7131c1226b88977a34d6d3f6`, con base fija y merge-base `120f1ab6f017f856e0934837235a72f734d849ca`.
+
+- **Spec:** sin scope creep. La retirada de colaboradores por el propietario cubre UI-12. Siguen parciales la gestión administrativa de propiedad (issue #19), avisos y asignaciones predeterminadas de series cuando existan, y la aceptación visual/accesible/Auth manual; por ello #17 queda abierto.
+- **Standards:** sin infracciones hard. Se aceptan dos observaciones heurísticas de bajo impacto: los wrappers `createBoardDepartureSubmissionGate` y `createBoardMemberRemovalSubmissionGate` conservan una API de dominio para cada flujo sobre el guard genérico compartido; los dos bloques de carrera DB mantienen setup, sincronización y limpieza explícitos porque sus actores, interleavings y aserciones difieren. La duplicación de render del diálogo se corrigió antes de la revisión final.
+- El commit que registra esta sección es solo documentación: no altera el código ni los resultados de prueba del HEAD revisado.

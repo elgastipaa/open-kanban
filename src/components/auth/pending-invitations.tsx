@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import type { PendingBoardInvitation } from "@/lib/db/invitations";
+import { getPendingDirectInvitationAcceptanceOutcome } from "@/lib/invitation-acceptance-state";
 import {
   acceptDirectInvitation,
   rejectInvitation,
@@ -24,6 +25,9 @@ export function PendingInvitations({
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [reconciliationRequiredIds, setReconciliationRequiredIds] = useState<
+    Set<string>
+  >(() => new Set());
 
   async function accept(id: string) {
     const scope = `accept-direct:${id}`;
@@ -42,10 +46,18 @@ export function PendingInvitations({
         result.data.status === "expired_unknown"
       ) {
         completeInvitationOperation(scope);
-        setError("Esta invitación ya no está disponible. Actualiza la lista.");
-        setPending((current) =>
-          current.filter((invitation) => invitation.id !== id),
+        const outcome = getPendingDirectInvitationAcceptanceOutcome(
+          result.data.status,
         );
+        setError(outcome.message);
+        if (outcome.requiresReconciliation) {
+          setReconciliationRequiredIds((current) => new Set(current).add(id));
+        }
+        if (outcome.removeInvitation) {
+          setPending((current) =>
+            current.filter((invitation) => invitation.id !== id),
+          );
+        }
         return;
       }
       completeInvitationOperation(scope);
@@ -121,15 +133,25 @@ export function PendingInvitations({
                 <button
                   type="button"
                   onClick={() => void accept(invitation.id)}
-                  disabled={busyId !== null}
+                  disabled={
+                    busyId !== null ||
+                    reconciliationRequiredIds.has(invitation.id)
+                  }
                   className="rounded-lg bg-white px-4 py-2 font-semibold text-neutral-950 text-sm disabled:opacity-50"
                 >
-                  {busyId === invitation.id ? "Aceptando…" : "Aceptar"}
+                  {busyId === invitation.id
+                    ? "Aceptando…"
+                    : reconciliationRequiredIds.has(invitation.id)
+                      ? "Aceptación pendiente de verificar"
+                      : "Aceptar"}
                 </button>
                 <button
                   type="button"
                   onClick={() => void reject(invitation.id)}
-                  disabled={busyId !== null}
+                  disabled={
+                    busyId !== null ||
+                    reconciliationRequiredIds.has(invitation.id)
+                  }
                   className="rounded-lg border border-white/15 px-4 py-2 text-neutral-300 text-sm hover:bg-white/5 disabled:opacity-50"
                 >
                   Rechazar
@@ -151,6 +173,15 @@ export function PendingInvitations({
         >
           {error}
         </p>
+      ) : null}
+      {reconciliationRequiredIds.size > 0 ? (
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="mt-3 min-h-11 rounded-xl border border-white/15 px-5 py-3 text-neutral-200 text-sm transition hover:bg-white/5"
+        >
+          Actualizar Tableros y verificar acceso
+        </button>
       ) : null}
       {message ? (
         <output className="mt-3 text-neutral-300 text-sm" aria-live="polite">

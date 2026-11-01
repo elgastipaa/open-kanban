@@ -23,3 +23,12 @@ export function getInvitationAcceptanceResolution(
     requiresReconciliation: false,
   };
 }
+
+export function getPendingDirectInvitationAcceptanceOutcome(
+  status: InvitationAcceptanceFailureStatus,
+) {
+  return {
+    ...getInvitationAcceptanceResolution(status),
+    removeInvitation: status === "unavailable",
+  };
+}

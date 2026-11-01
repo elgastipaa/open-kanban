@@ -230,8 +230,11 @@ export function columnDeletionNoDestinationMessage(taskCount: number): string {
 
 export function columnDeletionSuccessMessage(
   movedTaskCount: number | undefined,
-  recoverableUntil: string,
+  recoverableUntil: string | null,
 ): string {
+  if (recoverableUntil === null) {
+    return "Revisa la sección Recuperación del tablero para consultar esta eliminación.";
+  }
   const recoveryMessage = `La estructura se podrá recuperar hasta ${recoverableUntil}.`;
   if (movedTaskCount === undefined) return recoveryMessage;
   if (movedTaskCount <= 0) {

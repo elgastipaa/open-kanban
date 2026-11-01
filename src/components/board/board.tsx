@@ -1009,13 +1009,15 @@ function BoardWorkspace({
         onClose={() => setDeletingColumnId(null)}
         onDelete={handleDeleteColumn}
         onDeleted={(result) => {
+          const recoverableUntil = result.expires_at
+            ? new Date(result.expires_at).toLocaleString("es-AR", {
+                timeZone: board?.time_zone ?? initialBoard.time_zone,
+              })
+            : null;
           toast.success("Columna eliminada", {
             description: columnDeletionSuccessMessage(
               result.moved_task_count,
-              new Date(result.expires_at ?? Date.now()).toLocaleString(
-                "es-AR",
-                { timeZone: board?.time_zone ?? initialBoard.time_zone },
-              ),
+              recoverableUntil,
             ),
           });
         }}

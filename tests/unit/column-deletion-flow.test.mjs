@@ -88,6 +88,13 @@ test("successful deletion toast distinguishes no transfer, singular, and plural 
   );
 });
 
+test("a legacy deletion receipt without expiry asks the user to check recovery", () => {
+  assert.equal(
+    columnDeletionSuccessMessage(undefined, null),
+    "Revisa la sección Recuperación del tablero para consultar esta eliminación.",
+  );
+});
+
 test("a deletion command carries the preview version and selected destination", () => {
   assert.deepEqual(
     createColumnDeletionCommand(preview, "destination", "operation-1"),

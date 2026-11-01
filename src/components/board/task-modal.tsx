@@ -906,7 +906,8 @@ export function TaskModal({
               ) : null}
               {assignableMembers?.map((member) => (
                 <option key={member.user_id} value={member.user_id}>
-                  {member.email}
+                  {member.name}
+                  {member.name !== member.email ? ` · ${member.email}` : ""}
                   {member.role === "owner" ? " · propietario" : ""}
                 </option>
               ))}

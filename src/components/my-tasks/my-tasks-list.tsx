@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useOnlineStatus } from "@/hooks/use-online-status";
 import { setTaskCompletion, TaskCompletionError } from "@/lib/db/tasks";
+import { getMyTaskCompletionControl } from "@/lib/my-task-completion-control";
 import { myTaskBoardHref, myTasksHref } from "@/lib/my-tasks-navigation";
 import { createClient } from "@/lib/supabase/client";
 import { formatTaskDueDate, taskDueState } from "@/lib/task-date";
@@ -51,14 +52,14 @@ export function MyTasksList({ entries, order, loadError }: MyTasksListProps) {
   const [actionNotice, setActionNotice] = useState("");
 
   async function toggleCompletion(entry: MyTaskEntry) {
-    if (pendingTaskId || !isOnline) return;
+    if (entry.task.is_completed || pendingTaskId || !isOnline) return;
     setPendingTaskId(entry.task.id);
     setActionNotice("");
     try {
       const result = await setTaskCompletion(createClient(), entry.board.slug, {
         id: entry.task.id,
         operation_id: generateUUID(),
-        is_completed: !entry.task.is_completed,
+        is_completed: true,
         expected_version: entry.task.completion_version,
       });
       if (result.status === "confirmed") {
@@ -92,25 +93,36 @@ export function MyTasksList({ entries, order, loadError }: MyTasksListProps) {
   function renderTask(entry: MyTaskEntry) {
     const isPending = pendingTaskId === entry.task.id;
     const titleHref = myTaskBoardHref(entry.board.slug, entry.task.id, order);
+    const completionControl = getMyTaskCompletionControl(
+      entry.task.is_completed,
+      entry.task.title,
+    );
     return (
       <li
         key={`${entry.board.id}:${entry.task.id}`}
         className="flex items-start gap-3 rounded-2xl border border-white/10 bg-neutral-950 p-4 sm:items-center"
       >
-        <button
-          type="button"
-          onClick={() => void toggleCompletion(entry)}
-          aria-label={
-            entry.task.is_completed
-              ? `Reabrir ${entry.task.title}`
-              : `Completar ${entry.task.title}`
-          }
-          title={entry.task.is_completed ? "Reabrir tarea" : "Completar tarea"}
-          disabled={!isOnline || Boolean(pendingTaskId)}
-          className={`mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border transition disabled:cursor-not-allowed disabled:opacity-50 ${entry.task.is_completed ? "border-emerald-400 bg-emerald-500/20 text-emerald-300" : "border-white/30 text-transparent hover:border-emerald-400"}`}
-        >
-          <IconCheck size={14} aria-hidden="true" />
-        </button>
+        {completionControl.kind === "action" ? (
+          <button
+            type="button"
+            onClick={() => void toggleCompletion(entry)}
+            aria-label={completionControl.accessibleLabel}
+            title={completionControl.label}
+            disabled={!isOnline || Boolean(pendingTaskId)}
+            className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-white/30 text-transparent transition hover:border-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <IconCheck size={14} aria-hidden="true" />
+          </button>
+        ) : (
+          <span
+            role="img"
+            aria-label={completionControl.accessibleLabel}
+            title={completionControl.label}
+            className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-emerald-400 bg-emerald-500/20 text-emerald-300"
+          >
+            <IconCheck size={14} aria-hidden="true" />
+          </span>
+        )}
         <div className="min-w-0 flex-1">
           <Link
             href={titleHref}

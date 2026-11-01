@@ -70,6 +70,7 @@ export interface MyTaskEntry {
 
 export interface AssignableBoardMember {
   user_id: string;
+  name: string;
   email: string;
   role: "owner" | "collaborator";
 }

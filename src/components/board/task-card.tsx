@@ -15,6 +15,7 @@ import type { Priority, Task } from "@/lib/types";
 
 interface TaskCardProps {
   task: Task;
+  assigneeName: string | null;
   boardToday: string;
   index: number;
   onEdit: (task: Task, opener: HTMLButtonElement) => void;
@@ -42,6 +43,7 @@ const priorityConfig: Record<Priority, { label: string; className: string }> = {
 
 export function TaskCard({
   task,
+  assigneeName,
   boardToday,
   index,
   onEdit,
@@ -121,6 +123,11 @@ export function TaskCard({
                       {task.description}
                     </p>
                   )}
+                  {task.assignee_id ? (
+                    <p className="mt-1 truncate text-text-muted text-xs">
+                      Responsable: {assigneeName ?? "Responsable no disponible"}
+                    </p>
+                  ) : null}
                 </div>
               </div>
 

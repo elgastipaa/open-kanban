@@ -228,6 +228,16 @@ function BoardWorkspace({
   const router = useRouter();
   const { isMobile, isReady } = useDevice();
   const [openColumnFormSignal, setOpenColumnFormSignal] = useState(0);
+  const currentMemberNames = useMemo(
+    () =>
+      Object.fromEntries(
+        (assignableMembers ?? []).map((member) => [
+          member.user_id,
+          member.name,
+        ]),
+      ),
+    [assignableMembers],
+  );
 
   // Ref to hold refreshFromDB - avoids circular dependency between hooks
   const refreshRef = useRef<(() => Promise<void>) | undefined>(undefined);
@@ -739,6 +749,7 @@ function BoardWorkspace({
         <MobileBoard
           columns={columns}
           boardToday={board?.today ?? initialBoard.today}
+          currentMemberNames={currentMemberNames}
           onAddColumn={addColumn}
           onRenameColumn={renameColumn}
           onShiftColumn={moveColumn}
@@ -759,6 +770,7 @@ function BoardWorkspace({
                   key={column.id}
                   column={column}
                   boardToday={board?.today ?? initialBoard.today}
+                  currentMemberNames={currentMemberNames}
                   canDelete
                   canShiftLeft={index > 0}
                   canShiftRight={index < columns.length - 1}

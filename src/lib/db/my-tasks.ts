@@ -49,6 +49,7 @@ function isAssignableBoardMember(
   return (
     isObject(value) &&
     typeof value.user_id === "string" &&
+    typeof value.name === "string" &&
     typeof value.email === "string" &&
     (value.role === "owner" || value.role === "collaborator")
   );

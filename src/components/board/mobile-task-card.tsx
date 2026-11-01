@@ -20,6 +20,7 @@ import type { ColumnWithTasks, Priority, Task } from "@/lib/types";
 
 interface MobileTaskCardProps {
   task: Task;
+  assigneeName: string | null;
   boardToday: string;
   index: number;
   columns: ColumnWithTasks[];
@@ -52,6 +53,7 @@ const priorityConfig: Record<Priority, { label: string; className: string }> = {
 
 export function MobileTaskCard({
   task,
+  assigneeName,
   boardToday,
   index,
   columns,
@@ -108,6 +110,11 @@ export function MobileTaskCard({
             {task.description}
           </p>
         )}
+        {task.assignee_id ? (
+          <p className="mt-1 truncate text-text-muted text-xs">
+            Responsable: {assigneeName ?? "Responsable no disponible"}
+          </p>
+        ) : null}
 
         {/* Footer: priority + date */}
         <div className="mt-2.5 flex items-center justify-between gap-2">

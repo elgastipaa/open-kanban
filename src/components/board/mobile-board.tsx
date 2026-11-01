@@ -7,6 +7,7 @@ import { AddTask } from "@/components/board/add-task";
 import { MobileColumnControls } from "@/components/board/mobile-column-controls";
 import { MobileTaskCard } from "@/components/board/mobile-task-card";
 import { useColumnSwipe } from "@/hooks/use-column-swipe";
+import { getTaskAssigneeLabel } from "@/lib/task-assignee-label";
 import {
   orderTasksByCompletion,
   pendingTaskInsertionIndex,
@@ -17,6 +18,7 @@ import type { ColumnWithTasks, Task } from "@/lib/types";
 interface MobileBoardProps {
   columns: ColumnWithTasks[];
   boardToday: string;
+  currentMemberNames: Readonly<Record<string, string>>;
   onAddColumn: (title: string) => void;
   onRenameColumn: (columnId: string, title: string) => void;
   onShiftColumn: (fromIndex: number, toIndex: number) => void;
@@ -57,6 +59,7 @@ const slideVariants = {
 export function MobileBoard({
   columns,
   boardToday,
+  currentMemberNames,
   onAddColumn,
   onRenameColumn,
   onShiftColumn,
@@ -226,6 +229,10 @@ export function MobileBoard({
                     <MobileTaskCard
                       key={task.id}
                       task={task}
+                      assigneeName={getTaskAssigneeLabel(
+                        task.assignee_id,
+                        currentMemberNames,
+                      )}
                       boardToday={boardToday}
                       index={index}
                       columns={columns}
@@ -293,6 +300,10 @@ export function MobileBoard({
                           <MobileTaskCard
                             key={task.id}
                             task={task}
+                            assigneeName={getTaskAssigneeLabel(
+                              task.assignee_id,
+                              currentMemberNames,
+                            )}
                             boardToday={boardToday}
                             index={pending.length + index}
                             columns={columns}

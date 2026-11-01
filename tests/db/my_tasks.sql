@@ -1,5 +1,12 @@
 \set ON_ERROR_STOP on
 
+UPDATE auth.identities
+SET identity_data = identity_data || jsonb_build_object('name', 'Colaborador habilitado')
+WHERE user_id = '40000000-0000-4000-8000-000000000001';
+UPDATE auth.identities
+SET identity_data = identity_data || jsonb_build_object('name', 'Propietario del tablero')
+WHERE user_id = '40000000-0000-4000-8000-000000000002';
+
 CREATE TEMP TABLE issue13_task_fixture (
   purpose text PRIMARY KEY,
   board_id uuid NOT NULL,
@@ -151,6 +158,7 @@ DECLARE
   v_expected_created_ids uuid[];
   v_entry jsonb;
   v_assignable_ids uuid[];
+  v_assignable_names text[];
   v_assignment jsonb;
   v_conflict jsonb;
   v_edit jsonb;
@@ -222,6 +230,17 @@ BEGIN
     '40000000-0000-4000-8000-000000000002'::uuid
   ] THEN
     RAISE EXCEPTION 'Assignable users included a disabled account or omitted a current enabled member: %', v_assignable_ids;
+  END IF;
+  SELECT array_agg(to_jsonb(member)->>'name' ORDER BY member.user_id)
+  INTO v_assignable_names
+  FROM public.list_assignable_board_members_p(
+    (SELECT slug FROM pg_temp.issue13_task_fixture WHERE purpose = 'board_a')
+  ) AS member;
+  IF v_assignable_names IS DISTINCT FROM ARRAY[
+    'Colaborador habilitado', 'Propietario del tablero'
+  ] THEN
+    RAISE EXCEPTION 'Assignable names did not come from the authorized current board members: %',
+      v_assignable_names;
   END IF;
 
   v_assignment := public.set_task_assignee_p(

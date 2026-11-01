@@ -11,6 +11,7 @@ import { AddTask } from "@/components/board/add-task";
 import { ColumnHeader } from "@/components/board/column-header";
 import { TaskCard } from "@/components/board/task-card";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { getTaskAssigneeLabel } from "@/lib/task-assignee-label";
 import {
   orderTasksByCompletion,
   pendingTaskMoveIndices,
@@ -29,6 +30,7 @@ const willChangeTransform = { willChange: "transform" } as const;
 interface ColumnProps {
   column: ColumnWithTasks;
   boardToday: string;
+  currentMemberNames: Readonly<Record<string, string>>;
   canDelete: boolean;
   canShiftLeft?: boolean;
   canShiftRight?: boolean;
@@ -57,6 +59,7 @@ interface ColumnProps {
 export function Column({
   column,
   boardToday,
+  currentMemberNames,
   canDelete,
   canShiftLeft,
   canShiftRight,
@@ -173,6 +176,10 @@ export function Column({
                   <TaskCard
                     key={task.id}
                     task={task}
+                    assigneeName={getTaskAssigneeLabel(
+                      task.assignee_id,
+                      currentMemberNames,
+                    )}
                     boardToday={boardToday}
                     index={index}
                     isCompleted={false}
@@ -243,6 +250,10 @@ export function Column({
                         <TaskCard
                           key={task.id}
                           task={task}
+                          assigneeName={getTaskAssigneeLabel(
+                            task.assignee_id,
+                            currentMemberNames,
+                          )}
                           boardToday={boardToday}
                           index={pending.length + index}
                           isCompleted

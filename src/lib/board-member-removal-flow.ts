@@ -1,4 +1,5 @@
 import type { CurrentBoardMember } from "@/lib/types";
+import { createSubmissionGate } from "./submission-gate.mjs";
 
 export type { CurrentBoardMember } from "@/lib/types";
 
@@ -204,16 +205,5 @@ export async function confirmBoardMemberRemoval<Result>(
 }
 
 export function createBoardMemberRemovalSubmissionGate() {
-  let isSubmitting = false;
-  return async function run<Result>(
-    submit: () => Promise<Result>,
-  ): Promise<Result | { status: "already_submitting" }> {
-    if (isSubmitting) return { status: "already_submitting" };
-    isSubmitting = true;
-    try {
-      return await submit();
-    } finally {
-      isSubmitting = false;
-    }
-  };
+  return createSubmissionGate();
 }

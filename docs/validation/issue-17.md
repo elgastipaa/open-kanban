@@ -38,16 +38,17 @@ Fecha de verificación: `2026-11-01`.
 
 - RED inicial de transferencia: `pnpm test:db` falló porque `public.leave_board_p(uuid,uuid,uuid)` no existía; luego el mismo slice pasó tras añadir RPC y migración. RED de salida UI: `node --experimental-strip-types --test tests/unit/board-departure-flow.test.mjs` exit 1 con `ERR_MODULE_NOT_FOUND` de `src/lib/board-departure-flow.ts`; el helper/wiring dieron GREEN en la suite completa. RED de retiro por owner: la prueba DB falló antes de la migración 031 porque faltaba la RPC de retiro; RED de flujo unitario falló antes de crear `src/lib/board-member-removal-flow.ts`. El slice quedó verde tras migración, action, roster y diálogo.
 - La instalación inicial fue offline (`pnpm install --offline --ignore-scripts`, exit 0); no descargó paquetes ni cambió `package.json`/`pnpm-lock.yaml` salvo la entrada del runner unitario incorporada después.
+- En la revisión Standards se eliminó la duplicación de los dos guards de submit. `createBoardDepartureSubmissionGate` y `createBoardMemberRemovalSubmissionGate` conservan su API y delegan en `src/lib/submission-gate.mjs`; `tests/unit/submission-gate.test.mjs` comprueba que el mismo guard impide duplicados, se libera al concluir y no bloquea otra operación independiente.
 - Entorno de verificación: Node `v24.14.1`, pnpm `11.3.0`, Next.js `16.4.2`, Biome `2.2.0`, PostgreSQL local desechable. `pnpm test:db` usa `scripts/test-db.sh`, no consume `DATABASE_URL` ni `PGHOST`; fixtures, usuarios y claims son sintéticos. No se usaron OAuth, cuentas/datos reales, secretos, `.env`, browser runner, CUA/IAB, producción, SQL remoto, main ni #53.
 
 | Comando | Resultado | Evidencia |
 | --- | --- | --- |
 | `pnpm test:db` | Exit 0 | `issue17-member-removal-db-final.log`; regresión completa con migraciones 001–031 y PostgreSQL desechable. Resultado: `Database regression tests passed (disposable PostgreSQL).` |
-| `pnpm test:unit` | Exit 0, 104/104 | `issue17-member-removal-unit-final.log`; incluye salida/transferencia y retiro del owner con cancelación, roster, confirmación, retry, bloqueo de doble submit, errores/conflicto y `expired_unknown`. |
-| `pnpm exec node --experimental-strip-types --test tests/unit/board-member-removal-flow.test.mjs` | Exit 0, 6/6 | `issue17-member-removal-flow-unit-final.log`; suite focal del flujo de retiro del owner. |
-| `pnpm typecheck` | Exit 0 | `issue17-member-removal-typecheck-final.log`, ejecutado tras los cambios de estilo finales. |
-| `pnpm build` | Exit 0 | `issue17-member-removal-build-final.log`; Next 16.4.2 compiló y generó las rutas estáticas/dinámicas. |
-| Biome dirigido | Exit 0 | `issue17-member-removal-biome-final.log`; `pnpm exec biome check` sobre los diez archivos fuente/test/config cambiados. |
+| `pnpm test:unit` | Exit 0, 105/105 | `issue17-submission-gate-unit-final.log`; incluye salida/transferencia y retiro del owner con cancelación, confirmación, retry, conflictos, doble submit y el guard genérico compartido. |
+| `pnpm exec node --experimental-strip-types --test tests/unit/submission-gate.test.mjs tests/unit/board-departure-flow.test.mjs tests/unit/board-member-removal-flow.test.mjs` | Exit 0, 17/17 | `issue17-submission-gate-focused.log`; prueba focal de ambos wrappers y del helper compartido. |
+| `pnpm typecheck` | Exit 0 | `issue17-submission-gate-typecheck-final.log`; ejecutado después de conectar ambos flujos con el helper compartido. |
+| `pnpm build` | Exit 0 | `issue17-submission-gate-build.log`; Next 16.4.2 compiló y generó las rutas estáticas/dinámicas después del refactor. |
+| Biome dirigido | Exit 0 | `issue17-submission-gate-biome.log`; `pnpm exec biome check` sobre ambos flujos, el helper, su test y `package.json`. |
 | `pnpm lint` | Exit 1 | Check global reportó 154 diagnósticos repo-wide, mayormente formato/line endings en archivos fuera del slice. No se aplicó formato global; el linter dirigido sobre el slice queda verde. |
 | `git diff --check` | Exit 0 | Sin errores de whitespace en los cambios de código/documentación. |
 

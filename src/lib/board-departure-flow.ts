@@ -1,4 +1,5 @@
 import type { AssignableBoardMember } from "@/lib/types";
+import { createSubmissionGate } from "./submission-gate.mjs";
 
 export interface BoardDepartureOptions {
   role: "owner" | "collaborator";
@@ -212,16 +213,5 @@ export async function confirmBoardDeparture<Result>(
 }
 
 export function createBoardDepartureSubmissionGate() {
-  let isSubmitting = false;
-  return async function run<Result>(
-    submit: () => Promise<Result>,
-  ): Promise<Result | { status: "already_submitting" }> {
-    if (isSubmitting) return { status: "already_submitting" };
-    isSubmitting = true;
-    try {
-      return await submit();
-    } finally {
-      isSubmitting = false;
-    }
-  };
+  return createSubmissionGate();
 }

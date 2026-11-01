@@ -22,7 +22,7 @@ export function OfflineBanner() {
           role="alert"
           aria-live="assertive"
         >
-          <div className="flex items-center justify-center gap-2 bg-accent px-4 py-2 font-medium text-sm text-text-inverse">
+          <div className="flex items-center justify-center gap-2 bg-accent px-4 py-2 font-medium text-accent-foreground text-sm">
             <IconWifiOff size={16} />
             <span>
               Sin conexión. Los cambios no se guardarán automáticamente.

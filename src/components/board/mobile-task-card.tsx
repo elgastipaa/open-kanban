@@ -98,7 +98,7 @@ export function MobileTaskCard({
         {/* Title */}
         <div className="flex items-start gap-2">
           <span
-            className={`mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-[3px] border ${isCompleted ? "border-accent bg-accent text-text-inverse" : "border-text-muted text-transparent"}`}
+            className={`mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-[3px] border ${isCompleted ? "border-accent bg-accent text-accent-foreground" : "border-text-muted text-transparent"}`}
             aria-hidden="true"
           >
             {isCompleted && <IconCheck size={12} />}

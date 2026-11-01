@@ -95,7 +95,7 @@ export function AddColumnForm({
         ) : null}
         <button
           type="submit"
-          className="min-h-10 rounded-lg bg-accent px-4 py-2 font-semibold text-sm text-text-primary hover:brightness-110"
+          className="min-h-10 rounded-lg bg-accent px-4 py-2 font-semibold text-accent-foreground text-sm hover:brightness-110"
         >
           Crear columna
         </button>

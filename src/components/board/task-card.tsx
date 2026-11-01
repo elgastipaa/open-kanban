@@ -110,7 +110,7 @@ export function TaskCard({
               {/* Header / Text */}
               <div className="flex items-start gap-2 pr-6">
                 <span
-                  className={`mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-[3px] border ${isCompleted ? "border-accent bg-accent text-text-inverse" : "border-text-muted text-transparent"}`}
+                  className={`mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-[3px] border ${isCompleted ? "border-accent bg-accent text-accent-foreground" : "border-text-muted text-transparent"}`}
                   aria-hidden="true"
                   title={isCompleted ? "Completada" : "Pendiente"}
                 >

@@ -149,7 +149,7 @@ export function AddTask({ columnId, onAdd }: AddTaskProps) {
         onClick={() => setIsOpen(true)}
         className={cn(
           "flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl px-4 py-2.5 font-bold text-sm shadow-sm transition-all hover:opacity-90 active:scale-[0.98]",
-          isMobile ? "bg-accent text-surface-overlay" : "text-text-muted",
+          isMobile ? "bg-accent text-accent-foreground" : "text-text-muted",
         )}
       >
         <IconPlus size={18} stroke={2.5} />
@@ -195,7 +195,7 @@ export function AddTask({ columnId, onAdd }: AddTaskProps) {
             void submit();
           }}
           disabled={pending || (!title.trim() && !payloadConflict)}
-          className="shrink-0 rounded-md bg-accent px-3 py-1.5 font-semibold text-sm text-surface-overlay disabled:cursor-not-allowed disabled:opacity-50"
+          className="shrink-0 rounded-md bg-accent px-3 py-1.5 font-semibold text-accent-foreground text-sm disabled:cursor-not-allowed disabled:opacity-50"
         >
           {pending
             ? "Guardando…"

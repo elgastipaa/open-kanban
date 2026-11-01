@@ -272,7 +272,7 @@ export function BoardInvitationsDialog({
             <button
               type="submit"
               disabled={isSaving}
-              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-accent px-4 font-semibold text-sm text-text-inverse disabled:opacity-50"
+              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-accent px-4 font-semibold text-accent-foreground text-sm disabled:opacity-50"
             >
               <IconUserPlus size={16} aria-hidden="true" />
               Invitar

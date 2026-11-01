@@ -4,14 +4,16 @@ import { IconX } from "@tabler/icons-react";
 import {
   type MouseEvent,
   type ReactNode,
-  useEffect,
   useId,
+  useLayoutEffect,
   useRef,
 } from "react";
 import { createPortal } from "react-dom";
 import { getModalFocusReturnTarget, ModalStack } from "@/lib/modal-stack";
 
 const activeModals = new ModalStack();
+const focusableSelector =
+  'button:not([disabled]):not([tabindex="-1"]), input:not([disabled]):not([tabindex="-1"]), textarea:not([disabled]):not([tabindex="-1"]), select:not([disabled]):not([tabindex="-1"]), a[href]:not([tabindex="-1"]), [tabindex]:not([tabindex="-1"])';
 
 interface ModalProps {
   open: boolean;
@@ -47,25 +49,23 @@ export function Modal({
   returnFocusToRef.current = returnFocusTo;
 
   // Keep keyboard focus in the dialog and return it to the opener on close.
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open) return;
     const activeElement = document.activeElement;
     returnFocusRef.current =
       activeElement instanceof HTMLElement ? activeElement : null;
-    const previousOverflow = document.body.style.overflow;
-    const deactivateModal = activeModals.activate(modalTokenRef.current);
-    document.body.style.overflow = "hidden";
+    const deactivateModal = activeModals.activate(
+      modalTokenRef.current,
+      document.body,
+    );
 
-    const focusFrame = window.requestAnimationFrame(() => {
-      const dialog = dialogRef.current;
-      const requested = dialog?.querySelector<HTMLElement>(
-        "[data-modal-autofocus]",
-      );
-      const firstFocusable = dialog?.querySelector<HTMLElement>(
-        'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
-      );
-      (requested ?? firstFocusable ?? dialog)?.focus({ preventScroll: true });
-    });
+    const dialog = dialogRef.current;
+    const requested = dialog?.querySelector<HTMLElement>(
+      "[data-modal-autofocus]",
+    );
+    const firstFocusable =
+      dialog?.querySelector<HTMLElement>(focusableSelector);
+    (requested ?? firstFocusable ?? dialog)?.focus({ preventScroll: true });
 
     function handleKeyDown(event: KeyboardEvent) {
       if (!activeModals.isTop(modalTokenRef.current)) return;
@@ -77,9 +77,8 @@ export function Modal({
       if (event.key !== "Tab") return;
 
       const focusable = Array.from(
-        dialogRef.current?.querySelectorAll<HTMLElement>(
-          'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
-        ) ?? [],
+        dialogRef.current?.querySelectorAll<HTMLElement>(focusableSelector) ??
+          [],
       ).filter((element) => element.getClientRects().length > 0);
       const first = focusable[0];
       const last = focusable.at(-1);
@@ -96,18 +95,14 @@ export function Modal({
     }
     document.addEventListener("keydown", handleKeyDown);
     return () => {
-      window.cancelAnimationFrame(focusFrame);
       document.removeEventListener("keydown", handleKeyDown);
       deactivateModal();
-      document.body.style.overflow = previousOverflow;
       const returnTarget = getModalFocusReturnTarget(
         returnFocusToRef.current?.(),
         returnFocusRef.current,
       );
       if (returnTarget?.isConnected) {
-        window.requestAnimationFrame(() =>
-          returnTarget.focus({ preventScroll: true }),
-        );
+        returnTarget.focus({ preventScroll: true });
       }
       onAfterCloseRef.current?.();
     };
@@ -130,6 +125,7 @@ export function Modal({
         type="button"
         aria-label={closeLabel}
         onClick={handleOverlayClick}
+        tabIndex={-1}
         className="absolute inset-0 cursor-default bg-black/60"
       />
 

@@ -4,7 +4,7 @@ import {
   formatTaskRecoveryTimestamp,
   getTaskRecoveryListViewState,
   getTaskRecoveryRestoreAction,
-  isTaskRecoveryRestorableAtElapsedTime,
+  isTaskRecoveryRestorableAtMonotonicTime,
   shouldClearTaskRecoveryItems,
   taskRecoveryCauseLabel,
   taskRecoveryDestinationFieldIds,
@@ -12,18 +12,47 @@ import {
   taskRecoveryRestoreErrorMessage,
 } from "../../src/lib/task-recovery-state.ts";
 
-test("restore stops being offered at the exact database deadline using monotonic elapsed time", () => {
+test("response latency does not consume the database recovery deadline", () => {
+  const deadline = {
+    can_restore: true,
+    expires_at: "2026-11-01T00:00:00.000Z",
+    eligibility_checked_at: "2026-10-31T23:59:00.000Z",
+  };
+  const requestStartedAt = 1_000;
+  const eligibilityResponseReceivedAt = 5_000;
+
+  assert.ok(eligibilityResponseReceivedAt > requestStartedAt);
+  assert.equal(
+    isTaskRecoveryRestorableAtMonotonicTime(
+      deadline,
+      eligibilityResponseReceivedAt,
+      eligibilityResponseReceivedAt + 59_999,
+      true,
+    ),
+    true,
+  );
+  assert.equal(
+    isTaskRecoveryRestorableAtMonotonicTime(
+      deadline,
+      eligibilityResponseReceivedAt,
+      eligibilityResponseReceivedAt + 60_000,
+      true,
+    ),
+    false,
+    "the UI must stop offering restore at the exact response-anchored deadline",
+  );
+});
+
+test("stale eligibility cannot authorize recovery while a refresh is pending", () => {
   const deadline = {
     can_restore: true,
     expires_at: "2026-11-01T00:00:00.000Z",
     eligibility_checked_at: "2026-10-31T23:59:00.000Z",
   };
 
-  assert.equal(isTaskRecoveryRestorableAtElapsedTime(deadline, 59_999), true);
   assert.equal(
-    isTaskRecoveryRestorableAtElapsedTime(deadline, 60_000),
+    isTaskRecoveryRestorableAtMonotonicTime(deadline, 5_000, 5_100, false),
     false,
-    "the UI must not offer restore when monotonic elapsed time reaches the DB deadline",
   );
 });
 
@@ -40,6 +69,7 @@ test("recovery list maps loading, failure, empty, and ready states distinctly", 
       isLoading: true,
       hasError: false,
       itemCount: 0,
+      hasCurrentEligibility: false,
     }),
     "loading",
   );
@@ -48,6 +78,7 @@ test("recovery list maps loading, failure, empty, and ready states distinctly", 
       isLoading: false,
       hasError: true,
       itemCount: 0,
+      hasCurrentEligibility: false,
     }),
     "error",
   );
@@ -56,6 +87,7 @@ test("recovery list maps loading, failure, empty, and ready states distinctly", 
       isLoading: false,
       hasError: false,
       itemCount: 0,
+      hasCurrentEligibility: true,
     }),
     "empty",
   );
@@ -64,9 +96,40 @@ test("recovery list maps loading, failure, empty, and ready states distinctly", 
       isLoading: false,
       hasError: true,
       itemCount: 1,
+      hasCurrentEligibility: false,
+    }),
+    "error",
+    "stale entries are hidden when a refresh fails",
+  );
+});
+
+test("a resumed recovery list hides stale entries until current server eligibility returns", () => {
+  assert.equal(
+    getTaskRecoveryListViewState({
+      isLoading: true,
+      hasError: false,
+      itemCount: 1,
+      hasCurrentEligibility: false,
+    }),
+    "loading",
+  );
+  assert.equal(
+    getTaskRecoveryListViewState({
+      isLoading: false,
+      hasError: true,
+      itemCount: 1,
+      hasCurrentEligibility: false,
+    }),
+    "error",
+  );
+  assert.equal(
+    getTaskRecoveryListViewState({
+      isLoading: false,
+      hasError: false,
+      itemCount: 1,
+      hasCurrentEligibility: true,
     }),
     "ready",
-    "existing entries stay visible if a refresh fails",
   );
 });
 

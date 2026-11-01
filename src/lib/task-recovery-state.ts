@@ -9,7 +9,13 @@ export function getTaskRecoveryListViewState(input: {
   isLoading: boolean;
   hasError: boolean;
   itemCount: number;
+  hasCurrentEligibility: boolean;
 }): TaskRecoveryListViewState {
+  if (!input.hasCurrentEligibility) {
+    if (input.isLoading) return "loading";
+    if (input.hasError) return "error";
+    return "loading";
+  }
   if (input.itemCount > 0) return "ready";
   if (input.isLoading) return "loading";
   if (input.hasError) return "error";
@@ -94,21 +100,34 @@ export function getTaskRecoveryRestoreAction(
   };
 }
 
-export function isTaskRecoveryRestorableAtElapsedTime(
+export function isTaskRecoveryRestorableAtMonotonicTime(
   item: {
     can_restore: boolean;
     expires_at: string;
     eligibility_checked_at: string;
   },
-  elapsedMilliseconds: number,
+  eligibilityReceivedAtMonotonic: number,
+  currentMonotonicTime: number,
+  hasCurrentEligibility: boolean,
 ): boolean {
-  if (!item.can_restore || !Number.isFinite(elapsedMilliseconds)) return false;
+  if (
+    !item.can_restore ||
+    !hasCurrentEligibility ||
+    !Number.isFinite(eligibilityReceivedAtMonotonic) ||
+    !Number.isFinite(currentMonotonicTime)
+  ) {
+    return false;
+  }
 
   const expiresAt = Date.parse(item.expires_at);
   const checkedAt = Date.parse(item.eligibility_checked_at);
   if (!Number.isFinite(expiresAt) || !Number.isFinite(checkedAt)) return false;
 
-  return expiresAt - checkedAt > Math.max(0, elapsedMilliseconds);
+  const elapsedSinceResponse = Math.max(
+    0,
+    currentMonotonicTime - eligibilityReceivedAtMonotonic,
+  );
+  return expiresAt - checkedAt > elapsedSinceResponse;
 }
 
 export function taskRecoveryDestinationFieldIds(taskId: string): {

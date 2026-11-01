@@ -15,7 +15,7 @@ import {
   formatTaskRecoveryTimestamp,
   getTaskRecoveryListViewState,
   getTaskRecoveryRestoreAction,
-  isTaskRecoveryRestorableAtElapsedTime,
+  isTaskRecoveryRestorableAtMonotonicTime,
   shouldClearTaskRecoveryItems,
   taskRecoveryCauseLabel,
   taskRecoveryDestinationFieldIds,
@@ -39,7 +39,7 @@ interface TaskRecoveryDialogProps {
 }
 
 type TimedTaskRecoveryItem = TaskRecoveryItem & {
-  requestStartedAtMonotonic: number;
+  eligibilityReceivedAtMonotonic: number;
 };
 
 export function TaskRecoveryDialog({
@@ -59,28 +59,35 @@ export function TaskRecoveryDialog({
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [monotonicNow, setMonotonicNow] = useState(0);
+  const [hasCurrentEligibility, setHasCurrentEligibility] = useState(false);
+  const hasCurrentEligibilityRef = useRef(false);
   const latestRefreshId = useRef(0);
   const listViewState = getTaskRecoveryListViewState({
     isLoading,
     hasError: Boolean(error),
     itemCount: items.length,
+    hasCurrentEligibility,
   });
 
   const refresh = useCallback(async () => {
     const refreshId = ++latestRefreshId.current;
-    const requestStartedAtMonotonic = performance.now();
     setIsLoading(true);
+    hasCurrentEligibilityRef.current = false;
+    setHasCurrentEligibility(false);
     setError("");
     try {
       const listedItems = await listDeletedTasks(createClient(), slug);
       if (refreshId !== latestRefreshId.current) return;
+      const eligibilityReceivedAtMonotonic = performance.now();
       setItems(
         listedItems.map((item) => ({
           ...item,
-          requestStartedAtMonotonic,
+          eligibilityReceivedAtMonotonic,
         })),
       );
-      setMonotonicNow(performance.now());
+      setMonotonicNow(eligibilityReceivedAtMonotonic);
+      hasCurrentEligibilityRef.current = true;
+      setHasCurrentEligibility(true);
     } catch (loadError) {
       if (refreshId !== latestRefreshId.current) return;
       const reason =
@@ -98,6 +105,8 @@ export function TaskRecoveryDialog({
     setSelectedDestinations({});
     setError("");
     setMessage("");
+    hasCurrentEligibilityRef.current = false;
+    setHasCurrentEligibility(false);
     void refresh();
   }, [open, refresh]);
 
@@ -130,7 +139,7 @@ export function TaskRecoveryDialog({
       .map((item) => {
         const remainingMilliseconds =
           Date.parse(item.expires_at) - Date.parse(item.eligibility_checked_at);
-        return item.requestStartedAtMonotonic + remainingMilliseconds;
+        return item.eligibilityReceivedAtMonotonic + remainingMilliseconds;
       })
       .filter((deadline) => deadline > currentMonotonicTime)
       .sort((left, right) => left - right)[0];
@@ -147,9 +156,17 @@ export function TaskRecoveryDialog({
   }, [items, monotonicNow, open]);
 
   async function restore(item: TimedTaskRecoveryItem) {
-    const canRestore = isTaskRecoveryRestorableAtElapsedTime(
+    if (!hasCurrentEligibilityRef.current) {
+      setError(
+        "Actualizando la lista. Espera a que se confirme la disponibilidad.",
+      );
+      return;
+    }
+    const canRestore = isTaskRecoveryRestorableAtMonotonicTime(
       item,
-      performance.now() - item.requestStartedAtMonotonic,
+      item.eligibilityReceivedAtMonotonic,
+      performance.now(),
+      hasCurrentEligibilityRef.current,
     );
     const selectableColumns = item.original_column_available
       ? columns
@@ -264,9 +281,11 @@ export function TaskRecoveryDialog({
                   );
               const selectedDestination =
                 selectedDestinations[item.task_id] ?? null;
-              const canRestore = isTaskRecoveryRestorableAtElapsedTime(
+              const canRestore = isTaskRecoveryRestorableAtMonotonicTime(
                 item,
-                monotonicNow - item.requestStartedAtMonotonic,
+                item.eligibilityReceivedAtMonotonic,
+                monotonicNow,
+                hasCurrentEligibility,
               );
               const action = getTaskRecoveryRestoreAction(
                 { ...item, can_restore: canRestore },

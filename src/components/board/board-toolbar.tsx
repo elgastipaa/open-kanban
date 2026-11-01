@@ -12,6 +12,7 @@ import {
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { BoardSignOutButton } from "@/components/auth/board-sign-out-button";
+import { BoardInvitationsDialog } from "@/components/board/board-invitations-dialog";
 import { BoardTimeZoneDialog } from "@/components/board/board-time-zone-dialog";
 import { Button } from "@/components/ui/button";
 import {
@@ -56,6 +57,7 @@ export function BoardToolbar({
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isTimeZoneDialogOpen, setIsTimeZoneDialogOpen] = useState(false);
+  const [isInvitationsDialogOpen, setIsInvitationsDialogOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const isSavingRef = useRef(false);
@@ -220,6 +222,13 @@ export function BoardToolbar({
                   <IconWorld size={16} aria-hidden="true" />
                   Zona horaria del tablero
                 </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => setIsInvitationsDialogOpen(true)}
+                  className="cursor-pointer"
+                >
+                  <IconUsers size={16} aria-hidden="true" />
+                  Invitaciones
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
             <BoardTimeZoneDialog
@@ -228,6 +237,11 @@ export function BoardToolbar({
               timeZone={timeZone}
               onPreview={onPreviewTimeZone}
               onSave={onSaveTimeZone}
+            />
+            <BoardInvitationsDialog
+              open={isInvitationsDialogOpen}
+              onClose={() => setIsInvitationsDialogOpen(false)}
+              slug={slug}
             />
           </>
         ) : null}

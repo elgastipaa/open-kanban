@@ -1,10 +1,13 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { PendingInvitations } from "@/components/auth/pending-invitations";
 import { SignInButton } from "@/components/auth/sign-in-button";
 import { SignOutButton } from "@/components/auth/sign-out-button";
 import { CreateBoardForm } from "@/components/board/create-board-form";
 import { Logo } from "@/components/ui/logo";
 import { resolveApplicationAccess } from "@/lib/auth";
+import type { PendingBoardInvitation } from "@/lib/db/invitations";
+import { listMyPendingBoardInvitations } from "@/lib/db/invitations";
 import { createClient } from "@/lib/supabase/server";
 import type { Board } from "@/lib/types";
 
@@ -75,6 +78,13 @@ export default async function HomePage() {
   const { data: boardsData, error: boardsError } =
     await supabase.rpc("list_my_boards");
   const boards = (boardsData ?? []) as Board[];
+  let invitations: PendingBoardInvitation[] = [];
+  let invitationsLoadError = false;
+  try {
+    invitations = await listMyPendingBoardInvitations(supabase);
+  } catch {
+    invitationsLoadError = true;
+  }
 
   return (
     <main className="mx-auto min-h-dvh max-w-5xl bg-black px-5 py-8 text-white sm:px-8">
@@ -103,6 +113,13 @@ export default async function HomePage() {
         <CreateBoardForm principalId={authData.user.id} />
       </section>
 
+      {invitations.length > 0 || invitationsLoadError ? (
+        <PendingInvitations
+          invitations={invitations}
+          loadError={invitationsLoadError}
+        />
+      ) : null}
+
       {boardsError ? (
         <p
           className="mt-8 rounded-xl border border-red-400/20 bg-red-400/5 p-4 text-red-200 text-sm"
@@ -112,7 +129,8 @@ export default async function HomePage() {
         </p>
       ) : boards.length === 0 ? (
         <p className="mt-8 rounded-2xl border border-white/15 border-dashed p-10 text-center text-neutral-400 text-sm">
-          Todavía no tienes tableros. Crea uno para empezar.
+          Todavía no tienes tableros. Acepta una invitación o crea uno para
+          empezar.
         </p>
       ) : (
         <ul className="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">

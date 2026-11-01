@@ -1,0 +1,36 @@
+# Validación de Issue #12: invitar y aceptar colaboración
+
+Estado de la evidencia: validación local de servidor/base y unitarias completada; recorrido visual con sesión Auth real pendiente. El issue sigue abierto y conserva sus bloqueos #5 y #6. Esta entrega no modifica esos issues ni afirma aceptación manual.
+
+## Matriz de criterios
+
+| Criterio | Evidencia | Estado |
+| --- | --- | --- |
+| El propietario puede invitar por correo a una identidad ya habilitada; existe como máximo una invitación directa pendiente por persona y tablero, y una repetición muestra la existente sin renovarla silenciosamente. | `create_direct_board_invitation_p` normaliza el correo, comprueba habilitación/membresía y serializa la invitación. `tests/db/board_invitations.sql` prueba creación, destinatario no habilitado, repetición, privacidad de la lista y rechazo de creación por colaborador. `BoardInvitationsDialog` presenta el campo y los estados en español. | Automático servidor/DB: pasa. Recorrido visual/Auth: pendiente manual. |
+| La invitación directa aparece a su destinatario en Tableros y se puede aceptar o rechazar; después de vencer solo se renueva por acción explícita del propietario. | Los RPC comprueban identidad y acceso actuales, y el componente `PendingInvitations` ofrece aceptar/rechazar. La prueba SQL valida destinatario, aceptación, rechazo, liberación del cupo para una nueva invitación, no renovación al repetir y renovación explícita de 72 horas. | Automático servidor/DB: pasa. Flujo visual entre cuentas: pendiente manual. |
+| El propietario puede crear una invitación genérica transferible; dura 72 horas, se acepta una sola vez y puede revocarse. | La migración 023 genera un token aleatorio, persiste su hash, expira a las 72 horas y serializa el consumo. Las pruebas SQL validan duración, hash almacenado, revocación, expiración, rotación al renovar y rechazo del token anterior. El arnés ejecuta dos sesiones autenticadas concurrentes: una acepta y crea una membresía, la otra obtiene `unavailable` sin contenido. | Automático DB, incluidas dos sesiones concurrentes: pasa. Copia/transferencia de URL en UI: pendiente manual. |
+| El preview requiere sesión habilitada y muestra solamente nombre del tablero, invitador y rol; no concede membresía hasta aceptar explícitamente. | `preview_board_invitation_p` permite únicamente `status`, `board_name`, `inviter` y `role`; el adaptador descarta cualquier forma adicional. SQL y `tests/unit/invitation-contract.test.mjs` rechazan campos extra. La página valida sesión y habilitación antes del preview; `InvitationAcceptance` ejecuta el RPC solo al confirmar. | Automático de contrato/DB: pasa. Auth HTTP y confirmación visual: pendiente manual. |
+| Una cuenta no habilitada o una persona que ya es miembro no consume el enlace. | El SQL prueba preview/aceptación genérica no habilitada con resultado genérico y sin consumo; también prueba que una membresía obtenida por invitación directa devuelve `already_member` sin consumir el enlace. | Automático DB: pasa. |
+| Una invitación queda inválida si se retira a quien la creó o se elimina el tablero. | Los RPC revalidan la membresía/estado del emisor y el tablero en preview/aceptación. La regresión SQL retira al emisor y elimina otro tablero en el clúster desechable, y verifica que ambos enlaces solo devuelvan estado no disponible. | Automático DB: pasa. |
+| Una invitación vencida, revocada, usada o en conflicto no revela contenido privado. | Preview/aceptación usa una respuesta `unavailable` sin título ni invitador para estados no disponibles; unitarias rechazan metadatos adicionales y SQL compara respuestas sin contenido para token usado, vencido, revocado, emisor retirado, tablero eliminado y destinatarios no elegibles. | Automático contrato/DB: pasa. Comprobación de respuesta HTTP y DOM real: pendiente manual. |
+| Las pantallas y mensajes de invitación están en español y no se envía correo automático. | Acciones, invitaciones pendientes, administración y preview presentan textos en español. No se agregó un proveedor ni envío de correo; la UI indica que la invitación directa aparece en Tableros. | Código/typecheck: pasa. Recorrido visual y revisión con lector de pantalla: pendiente manual. |
+
+## Ejecución reproducible
+
+Entorno: Node `v24.14.1`, pnpm `11.25.0`, Next.js `16.4.2`, Biome `2.2.0` y PostgreSQL `16.15` en el clúster desechable local creado por `scripts/test-db.sh`. Las fixtures usan IDs de Auth sintéticos (propietario `40000000-0000-4000-8000-000000000002`, colaboradores `...0001` y `...0005`, identidad no habilitada `...0003`) y direcciones reservadas `example.test`. No se usaron OAuth, cuentas ni datos reales, `.env`, Auth/DB remotos, navegador, CUA/IAB o producción.
+
+Resultados en el candidato local:
+
+- `pnpm test:unit`: 37/37 pasan; incluye preview mínimo, rechazo de payload sobredimensionado y retorno seguro a `/invite/<token>` después del login.
+- `pnpm test:db`: pasa en PostgreSQL desechable; aplica migraciones 001–023 y prueba ambos tipos de invitación, permisos, elegibilidad, preview, aceptación/rechazo, expiración, revocación, renovación explícita, hash del token, retiro del emisor, eliminación de tablero y carrera concurrente de dos sesiones.
+- `pnpm typecheck`: pasa.
+- `pnpm build`: pasa; Next.js 16.4.2 incluye la ruta dinámica `/invite/[token]`.
+- `pnpm exec biome check` sobre los 13 archivos de código/configuración compatibles del diff: pasa. `bash -n scripts/test-db.sh`: pasa. El SQL se valida al ejecutarse en `pnpm test:db`.
+- `git diff --check`: pasa.
+- `pnpm lint` global: falla con 102 diagnósticos en 115 archivos del árbol, en su mayoría formato CRLF/preexistente. El chequeo Biome dirigido de los archivos cambiados sí pasa; no se reformatearon archivos ajenos para alterar ese baseline.
+
+## Recorrido manual pendiente
+
+Con dos cuentas de prueba habilitadas en un entorno local autorizado, verificar visualmente que el propietario encuentra «Invitaciones» en el menú del tablero; crear una directa, verla en Tableros solo con el destinatario, aceptar y rechazar en dos ejecuciones separadas, y revisar estados/renovación explícita. Crear un enlace genérico, copiarlo y abrirlo con otra cuenta habilitada; comprobar que el preview solo muestra tablero, invitador y rol, que cancelar no crea membresía y que aceptar abre el tablero. Repetir con sesión ausente/no habilitada, enlace vencido/usado/revocado y una persona ya miembro; verificar mensajes genéricos y ausencia de contenido. Revisar teclado, móvil, lector de pantalla y que no se envíe correo. Esta evidencia automatizada no sustituye ese recorrido Auth/UI.
+
+No se instalaron runners de navegador ni se usaron CUA/IAB. #12 permanece abierto; no se cerró ni aceptó #5/#6, no se editó GitHub desde esta entrega, no se integró la rama y no se hizo push.

@@ -243,6 +243,123 @@ done
 "${psql[@]}" -f "$repo_dir/tests/db/authentication.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/admin_authorization.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/private_boards.sql"
+"${psql[@]}" -q -f "$repo_dir/tests/db/board_invitations.sql"
+
+# Two enabled synthetic users race to consume the same transferable link.
+# The first transaction holds the board/invitation locks after acceptance;
+# the second waits, then must receive the same generic unavailable result.
+invitation_race_dir="$test_dir/board-invitation-race"
+mkdir -- "$invitation_race_dir"
+invitation_race_first_log="$invitation_race_dir/actor-a.log"
+invitation_race_second_log="$invitation_race_dir/actor-b.log"
+invitation_race_board_id=$(
+  "${psql[@]}" -At -c "SELECT board_id FROM public.issue12_invitation_race_fixture"
+)
+invitation_race_slug=$(
+  "${psql[@]}" -At -c "SELECT board_slug FROM public.issue12_invitation_race_fixture"
+)
+invitation_race_token=$(
+  "${psql[@]}" -At -c "SELECT token FROM public.issue12_invitation_race_fixture"
+)
+
+PGAPPNAME=openkanban_invitation_actor_a "${psql[@]}" -qAt \
+  -v invitation_token="$invitation_race_token" \
+  > "$invitation_race_first_log" 2>&1 <<'SQL' &
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000001', true);
+SELECT public.accept_board_invitation_link_p(:'invitation_token')->>'status';
+SELECT pg_sleep(4);
+COMMIT;
+SQL
+invitation_race_first_pid=$!
+
+invitation_race_first_holds_lock=false
+for _ in $(seq 1 100); do
+  invitation_race_state=$(
+    "${psql[@]}" -At -c "SELECT state FROM pg_stat_activity WHERE application_name = 'openkanban_invitation_actor_a' AND state = 'active' AND query LIKE '%pg_sleep(4)%'"
+  )
+  if [[ "$invitation_race_state" == active ]]; then
+    invitation_race_first_holds_lock=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$invitation_race_first_holds_lock" != true ]]; then
+  cat -- "$invitation_race_first_log" >&2
+  echo 'The first invitation acceptance did not hold its transaction.' >&2
+  exit 1
+fi
+
+PGAPPNAME=openkanban_invitation_actor_b "${psql[@]}" -qAt \
+  -v invitation_token="$invitation_race_token" \
+  > "$invitation_race_second_log" 2>&1 <<'SQL' &
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000005', true);
+SELECT public.accept_board_invitation_link_p(:'invitation_token')->>'status';
+COMMIT;
+SQL
+invitation_race_second_pid=$!
+
+invitation_race_second_waits=false
+for _ in $(seq 1 100); do
+  invitation_race_waiters=$(
+    "${psql[@]}" -At -c "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'openkanban_invitation_actor_b' AND wait_event_type = 'Lock'"
+  )
+  if [[ "$invitation_race_waiters" == 1 ]]; then
+    invitation_race_second_waits=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$invitation_race_second_waits" != true ]]; then
+  cat -- "$invitation_race_second_log" >&2
+  echo 'The second invitation acceptance did not wait on the serialized board lock.' >&2
+  "${psql[@]}" -q -c "SELECT pg_cancel_backend(pid) FROM pg_stat_activity WHERE application_name = 'openkanban_invitation_actor_a'" >/dev/null
+  wait "$invitation_race_first_pid" || true
+  wait "$invitation_race_second_pid" || true
+  exit 1
+fi
+
+wait "$invitation_race_first_pid" || { cat -- "$invitation_race_first_log" >&2; exit 1; }
+wait "$invitation_race_second_pid" || { cat -- "$invitation_race_second_log" >&2; exit 1; }
+if ! grep -Fxq 'accepted' "$invitation_race_first_log" \
+  || ! grep -Fxq 'unavailable' "$invitation_race_second_log"; then
+  echo 'Concurrent invitation acceptance did not return one success and one generic denial.' >&2
+  cat -- "$invitation_race_first_log" "$invitation_race_second_log" >&2
+  exit 1
+fi
+invitation_race_memberships=$(
+  "${psql[@]}" -At -v board_id="$invitation_race_board_id" \
+    <<'SQL'
+SELECT count(*)
+FROM public.board_memberships
+WHERE board_id = :'board_id'::uuid
+  AND user_id IN (
+    '40000000-0000-4000-8000-000000000001',
+    '40000000-0000-4000-8000-000000000005'
+  )
+  AND role = 'collaborator'
+  AND revoked_at IS NULL;
+SQL
+)
+if [[ "$invitation_race_memberships" != 1 ]]; then
+  echo "Concurrent invitation acceptance created $invitation_race_memberships memberships; expected one." >&2
+  exit 1
+fi
+"${psql[@]}" -q \
+  -v board_id="$invitation_race_board_id" \
+  -v board_slug="$invitation_race_slug" <<'SQL'
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);
+SELECT public.delete_board_p(:'board_slug', :'board_id'::uuid);
+COMMIT;
+DROP TABLE public.issue12_invitation_race_fixture;
+SQL
+echo 'PASS: two enabled recipients race for one generic link; one membership is created and the loser sees no invitation content.'
+
 "${psql[@]}" -f "$repo_dir/tests/db/task_capture.sql"
 "${psql[@]}" -q -f "$repo_dir/tests/db/task_field_versions.sql"
 

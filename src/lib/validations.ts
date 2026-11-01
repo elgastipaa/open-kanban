@@ -44,6 +44,14 @@ export const createBoardSchema = z.object({
   operation_id: z.uuid(),
 });
 export const renameBoardSchema = z.object({ name: boardNameSchema });
+export const invitationEmailSchema = z
+  .string()
+  .trim()
+  .min(3)
+  .max(254)
+  .regex(/^[^\s@]+@[^\s@]+\.[^\s@]+$/);
+export const invitationIdSchema = z.uuid();
+export const invitationTokenSchema = z.string().regex(/^[0-9a-f]{64}$/);
 
 export const createColumnSchema = z.object({
   board_id: z.string().uuid(),

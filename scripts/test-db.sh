@@ -239,6 +239,11 @@ for migration in "$repo_dir"/supabase/migrations/*.sql; do
   fi
 done
 "${psql[@]}" -f "$repo_dir/tests/fixtures/google-access.sql"
+if [[ "${TEST_DB_FOCUS:-}" == 'issue23' ]]; then
+  "${psql[@]}" -f "$repo_dir/tests/db/daily_repetition.sql"
+  printf 'Issue #23 database regression tests passed (disposable PostgreSQL).\n'
+  exit 0
+fi
 "${psql[@]}" -f "$repo_dir/tests/db/closed_access.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/authentication.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/realtime_epoch.sql"

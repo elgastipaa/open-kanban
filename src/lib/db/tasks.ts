@@ -58,12 +58,16 @@ export type TaskEditErrorReason =
   | "expired_unknown"
   | "unavailable"
   | "rejected"
+  | "daily_exception"
   | "conflict"
   | "access_denied"
   | "stale_session";
 
 export class TaskEditError extends Error {
-  constructor(readonly reason: TaskEditErrorReason) {
+  constructor(
+    readonly reason: TaskEditErrorReason,
+    readonly nextDueOn?: string,
+  ) {
     super(reason);
     this.name = "TaskEditError";
   }
@@ -496,6 +500,13 @@ export async function updateTask(
     }
     if (response.error.code === "22023") {
       throw new TaskEditError("rejected");
+    }
+    if (response.error.code === "P2301") {
+      const detail = response.error.details?.trim();
+      const nextDueOn = /^\d{4}-\d{2}-\d{2}$/.test(detail ?? "")
+        ? detail
+        : undefined;
+      throw new TaskEditError("daily_exception", nextDueOn);
     }
     if (response.error.code === "23514") {
       throw new TaskEditError("conflict");

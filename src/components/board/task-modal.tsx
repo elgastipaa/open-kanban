@@ -11,6 +11,7 @@ import {
 } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { TaskConversation } from "@/components/board/task-conversation";
+import { TaskDailyRepetition } from "@/components/board/task-daily-repetition";
 import { TaskDueDate } from "@/components/board/task-due-date";
 import { ThemePreferenceControl } from "@/components/theme/theme-preference-provider";
 import { Button } from "@/components/ui/button";
@@ -22,6 +23,13 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Modal } from "@/components/ui/modal";
+import type { DailyRepetitionOperationStore } from "@/lib/daily-repetition-state";
+import type {
+  DailyRepetitionCreateCommand,
+  DailyRepetitionCreateResult,
+  DailyRepetitionPreview,
+  DailyRepetitionStatus,
+} from "@/lib/db/daily-repetition";
 import { TaskChecklistError, TaskEditError } from "@/lib/db/tasks";
 import { resolveTaskChecklistCompletionReview } from "@/lib/task-checklist-completion";
 import {
@@ -108,6 +116,17 @@ interface TaskModalProps {
   onSetTaskAssignee: (
     command: TaskAssigneeCommand,
   ) => Promise<TaskAssigneeResult>;
+  onGetDailyRepetition: (taskId: string) => Promise<DailyRepetitionStatus>;
+  onPreviewDailyRepetition: (
+    taskId: string,
+    startOn: string,
+    endOn: string | null,
+    occurrenceLimit: number | null,
+  ) => Promise<DailyRepetitionPreview>;
+  onCreateDailyRepetition: (
+    command: DailyRepetitionCreateCommand,
+  ) => Promise<DailyRepetitionCreateResult>;
+  dailyRepetitionOperations: DailyRepetitionOperationStore;
   onSetTaskCompletion: (
     command: TaskCompletionCommand,
   ) => Promise<TaskCompletionResult>;
@@ -215,6 +234,10 @@ function saveErrorMessage(error: unknown) {
       return "Tu acceso cambió. Se cerrará este detalle para proteger la información.";
     case "rejected":
       return "No se guardaron los cambios. Revisa los campos e inténtalo de nuevo.";
+    case "daily_exception":
+      return error.nextDueOn
+        ? `La fecha excepcional debe ser anterior a la próxima ocurrencia (${formatTaskDueDate(error.nextDueOn)}).`
+        : "La fecha excepcional debe ser anterior a la próxima ocurrencia.";
     case "conflict":
       return "No se pudo confirmar esta operación. Vuelve a guardar para revisar los cambios actuales.";
     case "expired_unknown":
@@ -251,6 +274,10 @@ export function TaskModal({
   onSave,
   assignableMembers,
   onSetTaskAssignee,
+  onGetDailyRepetition,
+  onPreviewDailyRepetition,
+  onCreateDailyRepetition,
+  dailyRepetitionOperations,
   onSetTaskCompletion,
   checklistAddOperations,
   onMutateChecklist,
@@ -1047,11 +1074,13 @@ export function TaskModal({
     } catch (error) {
       if (
         error instanceof TaskEditError &&
-        error.reason === "rejected" &&
+        (error.reason === "rejected" || error.reason === "daily_exception") &&
         Object.hasOwn(operation.updates, "due_on")
       ) {
         setDueOnError(
-          "No se pudo guardar esta fecha. Revísala e inténtalo de nuevo.",
+          error.reason === "daily_exception"
+            ? saveErrorMessage(error)
+            : "No se pudo guardar esta fecha. Revísala e inténtalo de nuevo.",
         );
       }
       if (
@@ -1618,6 +1647,21 @@ export function TaskModal({
                     />
                   )}
                 </div>
+                {task && baseTask ? (
+                  <TaskDailyRepetition
+                    task={baseTask}
+                    slug={slug}
+                    boardToday={boardToday}
+                    boardTimeZone={boardTimeZone}
+                    isOnline={isOnline}
+                    isDisabled={isWorking || isSessionStale}
+                    hasUnsavedChanges={dirty}
+                    operations={dailyRepetitionOperations}
+                    onLoad={onGetDailyRepetition}
+                    onPreview={onPreviewDailyRepetition}
+                    onCreate={onCreateDailyRepetition}
+                  />
+                ) : null}
                 <div className="flex flex-col gap-2">
                   <label
                     htmlFor="task-priority"

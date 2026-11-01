@@ -1,13 +1,18 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { useCallback, useEffect, useRef } from "react";
 import { toast } from "sonner";
+import { DailyRepetitionOperationStore } from "@/lib/daily-repetition-state";
 import {
   createColumn,
+  createDailyRepetition,
   createTask,
+  DailyRepetitionError,
   deleteTask as dbDeleteTask,
+  getDailyRepetition,
   getFullBoard,
   getFullBoardForTaskEdit,
   mutateTaskChecklistStep,
+  previewDailyRepetition,
   reconcileTaskCreation,
   setTaskCompletion,
   TaskCaptureError,
@@ -19,6 +24,12 @@ import {
   updateTask,
   updateTaskPositions,
 } from "@/lib/db";
+import type {
+  DailyRepetitionCreateCommand,
+  DailyRepetitionCreateResult,
+  DailyRepetitionPreview,
+  DailyRepetitionStatus,
+} from "@/lib/db/daily-repetition";
 import { getSessionEpoch } from "@/lib/supabase/client";
 import { TaskChecklistAddOperationStore } from "@/lib/task-checklist-state";
 import { prepareTaskOrderMove } from "@/lib/task-order";
@@ -118,6 +129,27 @@ export function useTaskOperations({
   useEffect(
     () => () => checklistAddOperations.clearAll(),
     [checklistAddOperations],
+  );
+  const dailyRepetitionOperationsRef = useRef<{
+    actorId: string;
+    slug: string;
+    store: DailyRepetitionOperationStore;
+  } | null>(null);
+  if (
+    !dailyRepetitionOperationsRef.current ||
+    dailyRepetitionOperationsRef.current.actorId !== actorId ||
+    dailyRepetitionOperationsRef.current.slug !== slug
+  ) {
+    dailyRepetitionOperationsRef.current = {
+      actorId,
+      slug,
+      store: new DailyRepetitionOperationStore(actorId, slug),
+    };
+  }
+  const dailyRepetitionOperations = dailyRepetitionOperationsRef.current.store;
+  useEffect(
+    () => () => dailyRepetitionOperations.clearAll(),
+    [dailyRepetitionOperations],
   );
 
   const reconcileCurrentTaskOrder = useCallback(
@@ -642,6 +674,124 @@ export function useTaskOperations({
       ledger,
       onMutationRef,
       onAccessLost,
+    ],
+  );
+
+  const getTaskDailyRepetition = useCallback(
+    async (taskId: string): Promise<DailyRepetitionStatus> => {
+      const sessionEpoch = getSessionEpoch();
+      try {
+        const result = await getDailyRepetition(supabase, slug, taskId);
+        if (sessionEpoch !== getSessionEpoch()) {
+          throw new Error(
+            "The session changed while loading daily repetition.",
+          );
+        }
+        return result;
+      } catch (error) {
+        if (
+          sessionEpoch !== getSessionEpoch() ||
+          (error instanceof DailyRepetitionError &&
+            error.reason === "access_denied")
+        ) {
+          onAccessLost();
+        }
+        throw error;
+      }
+    },
+    [supabase, slug, onAccessLost],
+  );
+
+  const previewTaskDailyRepetition = useCallback(
+    async (
+      taskId: string,
+      startOn: string,
+      endOn: string | null,
+      occurrenceLimit: number | null,
+    ): Promise<DailyRepetitionPreview> => {
+      if (!isPersistedRef.current || taskId.startsWith("local-")) {
+        return { status: "unavailable" };
+      }
+      const sessionEpoch = getSessionEpoch();
+      try {
+        const result = await previewDailyRepetition(
+          supabase,
+          slug,
+          taskId,
+          startOn,
+          endOn,
+          occurrenceLimit,
+        );
+        if (sessionEpoch !== getSessionEpoch()) {
+          throw new Error(
+            "The session changed while previewing daily repetition.",
+          );
+        }
+        return result;
+      } catch (error) {
+        if (
+          sessionEpoch !== getSessionEpoch() ||
+          (error instanceof DailyRepetitionError &&
+            error.reason === "access_denied")
+        ) {
+          onAccessLost();
+        }
+        throw error;
+      }
+    },
+    [supabase, slug, isPersistedRef, onAccessLost],
+  );
+
+  const createTaskDailyRepetition = useCallback(
+    async (
+      command: DailyRepetitionCreateCommand,
+    ): Promise<DailyRepetitionCreateResult> => {
+      if (!isPersistedRef.current || command.task_id.startsWith("local-")) {
+        return { status: "unavailable", operation_id: command.operation_id };
+      }
+      const sessionEpoch = getSessionEpoch();
+      try {
+        const result = await createDailyRepetition(supabase, command);
+        if (sessionEpoch !== getSessionEpoch()) {
+          throw new Error(
+            "The session changed while creating daily repetition.",
+          );
+        }
+        if (result.status === "confirmed") {
+          dailyRepetitionOperations.clear(command.task_id);
+          if (result.task && result.task.id === command.task_id) {
+            const savedTask = result.task as unknown as Task;
+            const nextColumns = (columnsRef.current ?? []).map((column) => ({
+              ...column,
+              tasks: column.tasks.map((task) =>
+                task.id === savedTask.id ? savedTask : task,
+              ),
+            }));
+            setColumns(ledger.sync(nextColumns));
+          }
+          onMutationRef.current?.();
+        }
+        return result;
+      } catch (error) {
+        if (
+          sessionEpoch !== getSessionEpoch() ||
+          (error instanceof DailyRepetitionError &&
+            error.reason === "access_denied")
+        ) {
+          onAccessLost();
+        }
+        throw error;
+      }
+    },
+    [
+      supabase,
+      isPersistedRef,
+      columnsRef,
+      setColumns,
+      ledger,
+      onMutationRef,
+      onAccessLost,
+      dailyRepetitionOperations,
     ],
   );
 
@@ -1188,5 +1338,9 @@ export function useTaskOperations({
     refreshTaskForEdit,
     removeTask,
     moveTask,
+    getTaskDailyRepetition,
+    previewTaskDailyRepetition,
+    createTaskDailyRepetition,
+    dailyRepetitionOperations,
   };
 }

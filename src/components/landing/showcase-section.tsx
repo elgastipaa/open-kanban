@@ -1,4 +1,9 @@
-import { motion, useScroll, useTransform } from "motion/react";
+import {
+  motion,
+  useReducedMotion,
+  useScroll,
+  useTransform,
+} from "motion/react";
 import { useRef } from "react";
 
 function MockCard({
@@ -36,6 +41,7 @@ function MockCard({
 
 export function ShowcaseSection() {
   const ref = useRef(null);
+  const shouldReduceMotion = useReducedMotion();
   const { scrollYProgress } = useScroll({
     target: ref,
     offset: ["start end", "end start"],
@@ -56,7 +62,7 @@ export function ShowcaseSection() {
       <div className="z-0 mt-18 flex w-full max-w-6xl items-start justify-center gap-4 px-4 sm:gap-6 md:gap-8">
         {/* Column 1 */}
         <motion.div
-          style={{ y: y1 }}
+          style={shouldReduceMotion ? undefined : { y: y1 }}
           className="flex w-1/3 max-w-[280px] flex-col gap-4 opacity-60"
         >
           <div className="mb-2 flex items-center justify-between px-1">
@@ -73,7 +79,7 @@ export function ShowcaseSection() {
 
         {/* Column 2 (Accent / In Focus) */}
         <motion.div
-          style={{ y: y2 }}
+          style={shouldReduceMotion ? undefined : { y: y2 }}
           className="z-20 mt-12 flex w-1/3 max-w-[280px] scale-105 flex-col gap-4 sm:scale-110"
         >
           <div className="mb-2 flex items-center justify-between px-1">
@@ -111,7 +117,7 @@ export function ShowcaseSection() {
 
         {/* Column 3 */}
         <motion.div
-          style={{ y: y3 }}
+          style={shouldReduceMotion ? undefined : { y: y3 }}
           className="mt-[-50px] flex w-1/3 max-w-[280px] flex-col gap-4 opacity-40"
         >
           <div className="mb-2 flex items-center justify-between px-1">

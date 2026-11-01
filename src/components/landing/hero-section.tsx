@@ -3,6 +3,7 @@ import {
   AnimatePresence,
   type MotionValue,
   motion,
+  useReducedMotion,
   useTransform,
 } from "motion/react";
 import dynamic from "next/dynamic";
@@ -27,6 +28,7 @@ export const HeroSection = ({
 }) => {
   const [slug, setSlug] = useState("");
   const [isNavigating, setIsNavigating] = useState(false);
+  const shouldReduceMotion = useReducedMotion();
   const router = useRouter();
 
   const heroY = useTransform(scrollYProgress, [0, 0.2], [0, 200]);
@@ -45,7 +47,11 @@ export const HeroSection = ({
     <div className="pointer-events-auto sticky top-0 z-10 flex h-[80vh] flex-col items-center justify-center overflow-hidden px-6 lg:h-[90dvh]">
       <BackgroundLayer />
       <motion.div
-        style={{ y: heroY, opacity: heroOpacity, scale: heroScale }}
+        style={
+          shouldReduceMotion
+            ? undefined
+            : { y: heroY, opacity: heroOpacity, scale: heroScale }
+        }
         className="relative flex w-full max-w-5xl flex-col items-center text-center"
       >
         <div className="mb-8 inline-flex items-center gap-2 rounded-full border border-border bg-surface-overlay/50 px-3 py-1 shadow-xl backdrop-blur-sm">
@@ -116,7 +122,7 @@ export const HeroSection = ({
                 onChange={(e) => setSlug(e.target.value)}
                 placeholder="super-secret-board"
                 disabled={isNavigating}
-                className="min-w-0 flex-1 bg-transparent py-4 pr-1 pl-1 text-sm text-text-primary placeholder-neutral-700 outline-none disabled:opacity-50 sm:text-base"
+                className="min-w-0 flex-1 bg-transparent py-4 pr-1 pl-1 text-sm text-text-primary outline-none placeholder:text-text-muted disabled:opacity-50 sm:text-base"
               />
               <button
                 type="button"

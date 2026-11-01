@@ -29,7 +29,7 @@
   /* Text */
   --color-text-primary: #ffffff;
   --color-text-secondary: #a1a1a1;
-  --color-text-muted: #666666;
+  --color-text-muted: #8a8a8a;
   --color-text-inverse: #000000;
   --color-popover-foreground: var(--color-text-primary);
 

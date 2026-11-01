@@ -1128,7 +1128,7 @@ export function TaskConversation({
             }}
             rows={3}
             placeholder="Escribe un comentario…"
-            className="w-full resize-y rounded-md border border-border bg-surface-base px-3 py-2 text-sm text-text-primary outline-none transition-colors placeholder:text-text-muted/60 focus:border-accent disabled:opacity-50"
+            className="w-full resize-y rounded-md border border-border bg-surface-base px-3 py-2 text-sm text-text-primary outline-none transition-colors placeholder:text-text-muted focus:border-accent disabled:opacity-50"
           />
           <div className="flex flex-wrap items-center justify-between gap-2">
             {renderMentionPicker("Mencionar miembro", selectCreateMention)}

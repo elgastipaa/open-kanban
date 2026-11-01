@@ -1,4 +1,9 @@
-import { motion, useScroll, useTransform } from "motion/react";
+import {
+  motion,
+  useReducedMotion,
+  useScroll,
+  useTransform,
+} from "motion/react";
 import { useRef } from "react";
 
 export function StorySection({
@@ -15,6 +20,7 @@ export function StorySection({
   index: number;
 }) {
   const ref = useRef(null);
+  const shouldReduceMotion = useReducedMotion();
   const { scrollYProgress } = useScroll({
     target: ref,
     offset: ["0 1", "0.5 0.5"],
@@ -30,7 +36,7 @@ export function StorySection({
       className="mb-32 flex min-h-[60vh] items-center px-6 md:px-24"
     >
       <motion.div
-        style={{ opacity, y, scale }}
+        style={shouldReduceMotion ? undefined : { opacity, y, scale }}
         className={`relative w-full max-w-4xl ${align === "right" ? "ml-auto text-right" : ""}`}
       >
         {/* Subtle large background number */}

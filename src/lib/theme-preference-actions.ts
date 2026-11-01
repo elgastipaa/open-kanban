@@ -1,6 +1,5 @@
 "use server";
 
-import { resolveApplicationAccess } from "@/lib/auth";
 import { saveMyThemePreference } from "@/lib/db/theme-preferences";
 import { createClient } from "@/lib/supabase/server";
 import type {
@@ -28,9 +27,6 @@ export async function saveAccountThemePreference(
     const supabase = await createClient();
     const { data: authData, error: authError } = await supabase.auth.getUser();
     if (authError || !authData.user) return { status: "error" };
-
-    const access = await resolveApplicationAccess(supabase);
-    if (access.status !== "active") return { status: "error" };
 
     return await saveMyThemePreference(supabase, theme, expectedVersion);
   } catch {

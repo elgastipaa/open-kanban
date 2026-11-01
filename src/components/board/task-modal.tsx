@@ -12,6 +12,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import { TaskConversation } from "@/components/board/task-conversation";
 import { TaskDueDate } from "@/components/board/task-due-date";
+import { ThemePreferenceControl } from "@/components/theme/theme-preference-provider";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
@@ -277,6 +278,7 @@ export function TaskModal({
       task ? preservationBaseVersionsFor(task, restoredDraft) : null,
     );
   const [showDetails, setShowDetails] = useState(false);
+  const [showAccountPreferences, setShowAccountPreferences] = useState(false);
   const [showDescription, setShowDescription] = useState(
     Boolean(task?.description),
   );
@@ -344,6 +346,7 @@ export function TaskModal({
     setWorkflow(createTaskEditWorkflow(initialDraft));
     setConflicts(restoration?.conflicts ?? {});
     setDraftPreservationBaseVersions(preservationVersions);
+    setShowAccountPreferences(false);
     onEditDraftChange(
       task.id,
       initialDraft,
@@ -1204,7 +1207,17 @@ export function TaskModal({
       >
         <div className="flex min-h-[calc(100dvh-5rem)] flex-col gap-5 sm:min-h-0">
           <div>
-            <p className="mb-3 text-text-muted text-xs">{contextLabel}</p>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <p className="text-text-muted text-xs">{contextLabel}</p>
+              <Button
+                size="sm"
+                variant="ghost"
+                aria-haspopup="dialog"
+                onClick={() => setShowAccountPreferences(true)}
+              >
+                Cuenta
+              </Button>
+            </div>
             <label
               htmlFor="task-title"
               className="mb-2 flex items-center gap-1.5 font-semibold text-text-muted text-xs"
@@ -1227,7 +1240,7 @@ export function TaskModal({
                 }
               }}
               placeholder="¿Qué hay que hacer?"
-              className="w-full rounded-md border border-border bg-transparent px-3 py-3 font-medium text-base text-text-primary outline-none transition-colors placeholder:text-text-muted/60 focus:border-accent focus:ring-1 focus:ring-accent disabled:opacity-60"
+              className="w-full rounded-md border border-border bg-transparent px-3 py-3 font-medium text-base text-text-primary outline-none transition-colors placeholder:text-text-muted focus:border-accent focus:ring-1 focus:ring-accent disabled:opacity-60"
             />
           </div>
 
@@ -1261,7 +1274,7 @@ export function TaskModal({
                 }
                 rows={5}
                 placeholder="Añade los detalles necesarios para completar la tarea."
-                className="w-full resize-y rounded-md border border-border bg-transparent px-3 py-2.5 text-sm text-text-primary outline-none transition-colors placeholder:text-text-muted/60 focus:border-accent focus:ring-1 focus:ring-accent disabled:opacity-60"
+                className="w-full resize-y rounded-md border border-border bg-transparent px-3 py-2.5 text-sm text-text-primary outline-none transition-colors placeholder:text-text-muted focus:border-accent focus:ring-1 focus:ring-accent disabled:opacity-60"
               />
             )}
           </section>
@@ -2052,6 +2065,26 @@ export function TaskModal({
             </output>
           )}
         </div>
+      </Modal>
+      <Modal
+        open={showAccountPreferences}
+        onClose={() => setShowAccountPreferences(false)}
+        title="Cuenta y preferencias"
+        closeLabel="Cerrar preferencias de cuenta"
+      >
+        <section aria-labelledby="account-theme-heading">
+          <h3
+            id="account-theme-heading"
+            className="mb-2 font-semibold text-sm text-text-primary"
+          >
+            Tema de la cuenta
+          </h3>
+          <p className="mb-4 text-sm text-text-secondary leading-6">
+            Claro y Oscuro se sincronizan con tu cuenta. Sistema sigue la
+            apariencia de este dispositivo.
+          </p>
+          <ThemePreferenceControl />
+        </section>
       </Modal>
       <ConfirmDialog
         open={pendingChecklistReview !== null}

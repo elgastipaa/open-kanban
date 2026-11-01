@@ -1,5 +1,6 @@
 "use client";
 
+import { MotionConfig } from "motion/react";
 import {
   createContext,
   type ReactNode,
@@ -142,9 +143,11 @@ export function ThemePreferenceProvider({
   );
 
   return (
-    <ThemePreferenceContext.Provider value={value}>
-      {children}
-    </ThemePreferenceContext.Provider>
+    <MotionConfig reducedMotion="user">
+      <ThemePreferenceContext.Provider value={value}>
+        {children}
+      </ThemePreferenceContext.Provider>
+    </MotionConfig>
   );
 }
 

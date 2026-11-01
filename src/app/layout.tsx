@@ -3,8 +3,10 @@ import { Bricolage_Grotesque, Inter } from "next/font/google";
 import { ThemePreferenceProvider } from "@/components/theme/theme-preference-provider";
 import { OfflineBanner } from "@/components/ui/offline-banner";
 import { ThemeAwareToaster } from "@/components/ui/theme-aware-toaster";
-import { resolveApplicationAccess } from "@/lib/auth";
-import { getMyThemePreference } from "@/lib/db/theme-preferences";
+import {
+  getMyThemePreference,
+  ThemePreferenceError,
+} from "@/lib/db/theme-preferences";
 import { siteUrl } from "@/lib/site";
 import { createClient } from "@/lib/supabase/server";
 import "./globals.css";
@@ -79,15 +81,16 @@ async function loadThemeBootstrap() {
       return { accountId: null, preference: systemTheme, loadFailed: false };
     }
 
-    const access = await resolveApplicationAccess(supabase);
-    if (access.status !== "active") {
-      return { accountId: null, preference: systemTheme, loadFailed: false };
-    }
-
     try {
       const preference = await getMyThemePreference(supabase);
       return { accountId: authData.user.id, preference, loadFailed: false };
-    } catch {
+    } catch (error) {
+      if (
+        error instanceof ThemePreferenceError &&
+        error.reason === "access_denied"
+      ) {
+        return { accountId: null, preference: systemTheme, loadFailed: false };
+      }
       return {
         accountId: authData.user.id,
         preference: systemTheme,

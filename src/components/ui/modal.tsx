@@ -10,6 +10,8 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
+const activeModals: symbol[] = [];
+
 interface ModalProps {
   open: boolean;
   onClose: () => void;
@@ -32,6 +34,7 @@ export function Modal({
   const overlayRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
+  const modalTokenRef = useRef(Symbol("modal"));
   const onCloseRef = useRef(onClose);
   const onAfterCloseRef = useRef(onAfterClose);
   const titleId = useId();
@@ -45,6 +48,7 @@ export function Modal({
     returnFocusRef.current =
       activeElement instanceof HTMLElement ? activeElement : null;
     const previousOverflow = document.body.style.overflow;
+    activeModals.push(modalTokenRef.current);
     document.body.style.overflow = "hidden";
 
     const focusFrame = window.requestAnimationFrame(() => {
@@ -59,6 +63,7 @@ export function Modal({
     });
 
     function handleKeyDown(event: KeyboardEvent) {
+      if (activeModals.at(-1) !== modalTokenRef.current) return;
       if (event.key === "Escape") {
         event.preventDefault();
         onCloseRef.current();
@@ -88,6 +93,8 @@ export function Modal({
     return () => {
       window.cancelAnimationFrame(focusFrame);
       document.removeEventListener("keydown", handleKeyDown);
+      const modalIndex = activeModals.lastIndexOf(modalTokenRef.current);
+      if (modalIndex !== -1) activeModals.splice(modalIndex, 1);
       document.body.style.overflow = previousOverflow;
       const returnTarget = returnFocusRef.current;
       if (returnTarget?.isConnected) {

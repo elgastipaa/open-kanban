@@ -11,6 +11,10 @@ import {
   renewInvitation,
   revokeInvitation,
 } from "@/lib/invitation-actions";
+import {
+  completeInvitationOperation,
+  getOrCreateInvitationOperation,
+} from "@/lib/invitation-operation";
 
 interface BoardInvitationsDialogProps {
   open: boolean;
@@ -109,24 +113,50 @@ export function BoardInvitationsDialog({
   }
 
   async function createLink() {
+    const scope = `create-link:${slug}`;
+    const operation = getOrCreateInvitationOperation(scope, true);
     setError(null);
     setMessage("");
     setLinkMessage("");
     setIsSaving(true);
-    const result = await createInvitationLink(slug);
-    setIsSaving(false);
-    if (result.status !== "ok") {
-      setError(result.message);
-      return;
+    try {
+      const result = await createInvitationLink(
+        slug,
+        operation.operationId,
+        operation.token ?? "",
+      );
+      if (result.status !== "ok") {
+        setError(result.message);
+        return;
+      }
+      if (result.data.status === "expired_unknown") {
+        completeInvitationOperation(scope);
+        setError("No se pudo confirmar el enlace. Actualiza y crea otro.");
+        return;
+      }
+      if (result.data.status === "unavailable") {
+        completeInvitationOperation(scope);
+        setError("El enlace ya no está disponible.");
+        return;
+      }
+      completeInvitationOperation(scope);
+      setLinkUrl(
+        new URL(
+          `/invite/${result.data.token}`,
+          window.location.origin,
+        ).toString(),
+      );
+      setLinkMessage(
+        "Enlace creado. Caduca en 72 horas y se usa una sola vez.",
+      );
+      await refresh();
+    } catch {
+      setError(
+        "No se pudo confirmar el enlace. Reintenta esta misma solicitud.",
+      );
+    } finally {
+      setIsSaving(false);
     }
-    setLinkUrl(
-      new URL(
-        `/invite/${result.data.token}`,
-        window.location.origin,
-      ).toString(),
-    );
-    setLinkMessage("Enlace creado. Caduca en 72 horas y se usa una sola vez.");
-    await refresh();
   }
 
   async function copyLink() {
@@ -142,31 +172,56 @@ export function BoardInvitationsDialog({
   }
 
   async function renew(invitation: BoardInvitation) {
+    const scope = `renew:${slug}:${invitation.id}`;
+    const isGeneric = invitation.invitation_type === "generic";
+    const operation = getOrCreateInvitationOperation(scope, isGeneric);
     setError(null);
     setMessage("");
     setIsSaving(true);
-    const result = await renewInvitation(slug, invitation.id);
-    setIsSaving(false);
-    if (result.status !== "ok") {
-      setError(result.message);
-      return;
-    }
-    if (result.data.status === "not_expired") {
-      setMessage("La invitación todavía está vigente.");
-    } else if (result.data.status === "unavailable") {
-      setError("La invitación ya no está disponible para renovar.");
-    } else if (result.data.token) {
-      setLinkUrl(
-        new URL(
-          `/invite/${result.data.token}`,
-          window.location.origin,
-        ).toString(),
+    try {
+      const result = await renewInvitation(
+        slug,
+        invitation.id,
+        operation.operationId,
+        operation.token,
       );
-      setLinkMessage("Enlace renovado. El enlace anterior dejó de funcionar.");
-    } else {
-      setMessage("Invitación directa renovada por 72 horas.");
+      if (result.status !== "ok") {
+        setError(result.message);
+        return;
+      }
+      if (result.data.status === "expired_unknown") {
+        completeInvitationOperation(scope);
+        setError(
+          "No se pudo confirmar la renovación. Actualiza e inténtalo de nuevo.",
+        );
+        return;
+      }
+      completeInvitationOperation(scope);
+      if (result.data.status === "not_expired") {
+        setMessage("La invitación todavía está vigente.");
+      } else if (result.data.status === "unavailable") {
+        setError("La invitación ya no está disponible para renovar.");
+      } else if (result.data.token) {
+        setLinkUrl(
+          new URL(
+            `/invite/${result.data.token}`,
+            window.location.origin,
+          ).toString(),
+        );
+        setLinkMessage(
+          "Enlace renovado. El enlace anterior dejó de funcionar.",
+        );
+      } else {
+        setMessage("Invitación directa renovada por 72 horas.");
+      }
+      await refresh();
+    } catch {
+      setError(
+        "No se pudo confirmar la renovación. Reintenta esta misma solicitud.",
+      );
+    } finally {
+      setIsSaving(false);
     }
-    await refresh();
   }
 
   async function revoke(invitation: BoardInvitation) {

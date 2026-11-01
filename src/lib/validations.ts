@@ -51,6 +51,7 @@ export const invitationEmailSchema = z
   .max(254)
   .regex(/^[^\s@]+@[^\s@]+\.[^\s@]+$/);
 export const invitationIdSchema = z.uuid();
+export const invitationOperationIdSchema = z.uuid();
 export const invitationTokenSchema = z.string().regex(/^[0-9a-f]{64}$/);
 
 export const createColumnSchema = z.object({

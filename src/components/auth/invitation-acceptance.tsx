@@ -5,6 +5,10 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { acceptInvitationLink } from "@/lib/invitation-actions";
 import type { InvitationPreview } from "@/lib/invitation-contract";
+import {
+  completeInvitationOperation,
+  getOrCreateInvitationOperation,
+} from "@/lib/invitation-operation";
 
 export function InvitationAcceptance({
   token,
@@ -18,21 +22,35 @@ export function InvitationAcceptance({
   const [error, setError] = useState("");
 
   async function accept() {
+    const scope = `accept-link:${token}`;
+    const operation = getOrCreateInvitationOperation(scope, false);
     setIsAccepting(true);
     setError("");
-    const result = await acceptInvitationLink(token);
-    setIsAccepting(false);
-    if (result.status !== "ok") {
-      setError(result.message);
-      return;
-    }
-    if (result.data.status === "unavailable") {
+    try {
+      const result = await acceptInvitationLink(token, operation.operationId);
+      if (result.status !== "ok") {
+        setError(result.message);
+        return;
+      }
+      if (
+        result.data.status === "unavailable" ||
+        result.data.status === "expired_unknown"
+      ) {
+        completeInvitationOperation(scope);
+        setError(
+          "Esta invitación ya no está disponible. No se realizó ningún cambio.",
+        );
+        return;
+      }
+      completeInvitationOperation(scope);
+      router.replace(`/${result.data.board_slug}`);
+    } catch {
       setError(
-        "Esta invitación ya no está disponible. No se realizó ningún cambio.",
+        "No se pudo confirmar la aceptación. Reintenta esta misma solicitud.",
       );
-      return;
+    } finally {
+      setIsAccepting(false);
     }
-    router.replace(`/${result.data.board_slug}`);
   }
 
   return (

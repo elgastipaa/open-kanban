@@ -28,20 +28,25 @@ export type DirectInvitationResult =
       expires_at: string;
     };
 
-export interface InvitationLinkResult {
-  status: "created" | "renewed";
-  id: string;
-  token: string;
-  expires_at: string;
-  role: "collaborator";
-}
+export type InvitationLinkResult =
+  | { status: "unavailable" }
+  | { status: "expired_unknown" }
+  | {
+      status: "created";
+      id: string;
+      token: string;
+      expires_at: string;
+      role: "collaborator";
+    };
 
 export type InvitationAcceptanceResult =
   | { status: "unavailable" }
+  | { status: "expired_unknown" }
   | { status: "accepted" | "already_member"; board_slug: string };
 
 export type InvitationRenewalResult =
   | { status: "unavailable" }
+  | { status: "expired_unknown" }
   | { status: "not_expired" }
   | {
       status: "renewed";
@@ -87,8 +92,14 @@ function parseDirectInvitationResult(value: unknown): DirectInvitationResult {
 
 function parseInvitationLinkResult(value: unknown): InvitationLinkResult {
   if (
+    isRecord(value) &&
+    (value.status === "unavailable" || value.status === "expired_unknown")
+  ) {
+    return { status: value.status };
+  }
+  if (
     !isRecord(value) ||
-    (value.status !== "created" && value.status !== "renewed") ||
+    value.status !== "created" ||
     !isText(value.id) ||
     !isText(value.token) ||
     !/^[0-9a-f]{64}$/.test(value.token) ||
@@ -107,8 +118,11 @@ function parseInvitationLinkResult(value: unknown): InvitationLinkResult {
 }
 
 function parseAcceptanceResult(value: unknown): InvitationAcceptanceResult {
-  if (isRecord(value) && value.status === "unavailable") {
-    return { status: "unavailable" };
+  if (
+    isRecord(value) &&
+    (value.status === "unavailable" || value.status === "expired_unknown")
+  ) {
+    return { status: value.status };
   }
   if (
     isRecord(value) &&
@@ -124,7 +138,9 @@ function parseAcceptanceResult(value: unknown): InvitationAcceptanceResult {
 function parseRenewalResult(value: unknown): InvitationRenewalResult {
   if (
     isRecord(value) &&
-    (value.status === "unavailable" || value.status === "not_expired")
+    (value.status === "unavailable" ||
+      value.status === "expired_unknown" ||
+      value.status === "not_expired")
   ) {
     return { status: value.status };
   }
@@ -260,9 +276,15 @@ export async function createDirectBoardInvitation(
 export async function createBoardInvitationLink(
   supabase: SupabaseClient,
   slug: string,
+  operationId: string,
+  token: string,
 ): Promise<InvitationLinkResult> {
   return readRpc(
-    supabase.rpc("create_board_invitation_link_p", { p_slug: slug }),
+    supabase.rpc("create_board_invitation_link_p", {
+      p_slug: slug,
+      p_operation_id: operationId,
+      p_token: token,
+    }),
     parseInvitationLinkResult,
   );
 }
@@ -270,10 +292,12 @@ export async function createBoardInvitationLink(
 export async function acceptDirectBoardInvitation(
   supabase: SupabaseClient,
   invitationId: string,
+  operationId: string,
 ): Promise<InvitationAcceptanceResult> {
   return readRpc(
     supabase.rpc("accept_direct_board_invitation_p", {
       p_invitation_id: invitationId,
+      p_operation_id: operationId,
     }),
     parseAcceptanceResult,
   );
@@ -282,9 +306,13 @@ export async function acceptDirectBoardInvitation(
 export async function acceptBoardInvitationLink(
   supabase: SupabaseClient,
   token: string,
+  operationId: string,
 ): Promise<InvitationAcceptanceResult> {
   return readRpc(
-    supabase.rpc("accept_board_invitation_link_p", { p_token: token }),
+    supabase.rpc("accept_board_invitation_link_p", {
+      p_token: token,
+      p_operation_id: operationId,
+    }),
     parseAcceptanceResult,
   );
 }
@@ -322,10 +350,14 @@ export async function revokeBoardInvitation(
 export async function renewBoardInvitation(
   supabase: SupabaseClient,
   invitationId: string,
+  operationId: string,
+  token: string | null,
 ): Promise<InvitationRenewalResult> {
   return readRpc(
     supabase.rpc("renew_board_invitation_p", {
       p_invitation_id: invitationId,
+      p_operation_id: operationId,
+      p_token: token,
     }),
     parseRenewalResult,
   );

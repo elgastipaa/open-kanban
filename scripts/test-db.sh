@@ -244,6 +244,7 @@ done
 "${psql[@]}" -f "$repo_dir/tests/db/admin_authorization.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/private_boards.sql"
 "${psql[@]}" -q -f "$repo_dir/tests/db/board_invitations.sql"
+"${psql[@]}" -q -f "$repo_dir/tests/db/board_invitation_operation_receipts.sql"
 
 # Two enabled synthetic users race to consume the same transferable link.
 # The first transaction holds the board/invitation locks after acceptance;
@@ -268,7 +269,9 @@ PGAPPNAME=openkanban_invitation_actor_a "${psql[@]}" -qAt \
 BEGIN;
 SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000001', true);
-SELECT public.accept_board_invitation_link_p(:'invitation_token')->>'status';
+SELECT public.accept_board_invitation_link_p(
+  :'invitation_token', '11220000-0000-4000-8000-000000000004'
+)->>'status';
 SELECT pg_sleep(4);
 COMMIT;
 SQL
@@ -297,7 +300,9 @@ PGAPPNAME=openkanban_invitation_actor_b "${psql[@]}" -qAt \
 BEGIN;
 SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000005', true);
-SELECT public.accept_board_invitation_link_p(:'invitation_token')->>'status';
+SELECT public.accept_board_invitation_link_p(
+  :'invitation_token', '11220000-0000-4000-8000-000000000005'
+)->>'status';
 COMMIT;
 SQL
 invitation_race_second_pid=$!

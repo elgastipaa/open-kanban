@@ -6,7 +6,8 @@ CREATE TEMP TABLE issue12_invitation_refs (
   board_id uuid NOT NULL,
   board_slug text NOT NULL,
   invitation_id uuid,
-  token text
+  token text,
+  expires_at timestamptz
 );
 GRANT SELECT, INSERT, UPDATE ON issue12_invitation_refs TO authenticated;
 
@@ -67,7 +68,9 @@ BEGIN
     RAISE EXCEPTION 'Repeated direct invitation created or renewed another record: %', v_repeat;
   END IF;
 
-  v_link := public.create_board_invitation_link_p(v_board.slug);
+  v_link := public.create_board_invitation_link_p(
+    v_board.slug, 'd1220000-0000-4000-8000-000000000001', repeat('1', 64)
+  );
   IF v_link->>'status' IS DISTINCT FROM 'created'
     OR v_link->>'role' IS DISTINCT FROM 'collaborator'
     OR v_link->>'token' !~ '^[0-9a-f]{64}$'
@@ -107,14 +110,18 @@ BEGIN
     'expiring-direct', v_board.id, v_board.slug, (v_invitation->>'id')::uuid
   );
 
-  v_link := public.create_board_invitation_link_p(v_board.slug);
+  v_link := public.create_board_invitation_link_p(
+    v_board.slug, 'd1220000-0000-4000-8000-000000000002', repeat('2', 64)
+  );
   INSERT INTO pg_temp.issue12_invitation_refs(
     label, board_id, board_slug, invitation_id, token
   ) VALUES (
     'revoked-link', v_board.id, v_board.slug,
     (v_link->>'id')::uuid, v_link->>'token'
   );
-  v_link := public.create_board_invitation_link_p(v_board.slug);
+  v_link := public.create_board_invitation_link_p(
+    v_board.slug, 'd1220000-0000-4000-8000-000000000003', repeat('3', 64)
+  );
   INSERT INTO pg_temp.issue12_invitation_refs(
     label, board_id, board_slug, invitation_id, token
   ) VALUES (
@@ -136,7 +143,9 @@ BEGIN
   SELECT * INTO STRICT v_renewal_board FROM public.create_board_p(
     'Tablero para renovar', 'UTC', 'c1220000-0000-4000-8000-000000000002'
   );
-  v_renewal_link := public.create_board_invitation_link_p(v_renewal_board.slug);
+  v_renewal_link := public.create_board_invitation_link_p(
+    v_renewal_board.slug, 'd1220000-0000-4000-8000-000000000004', repeat('4', 64)
+  );
   INSERT INTO pg_temp.issue12_invitation_refs(
     label, board_id, board_slug, invitation_id, token
   ) VALUES (
@@ -147,7 +156,9 @@ BEGIN
   SELECT * INTO STRICT v_deleted_board FROM public.create_board_p(
     'Tablero eliminado', 'UTC', 'c1220000-0000-4000-8000-000000000003'
   );
-  v_deleted_link := public.create_board_invitation_link_p(v_deleted_board.slug);
+  v_deleted_link := public.create_board_invitation_link_p(
+    v_deleted_board.slug, 'd1220000-0000-4000-8000-000000000005', repeat('5', 64)
+  );
   INSERT INTO pg_temp.issue12_invitation_refs(
     label, board_id, board_slug, invitation_id, token
   ) VALUES (
@@ -158,7 +169,9 @@ BEGIN
   SELECT * INTO STRICT v_orphan_board FROM public.create_board_p(
     'Tablero sin emisor', 'UTC', 'c1220000-0000-4000-8000-000000000004'
   );
-  v_orphan_link := public.create_board_invitation_link_p(v_orphan_board.slug);
+  v_orphan_link := public.create_board_invitation_link_p(
+    v_orphan_board.slug, 'd1220000-0000-4000-8000-000000000006', repeat('6', 64)
+  );
   INSERT INTO pg_temp.issue12_invitation_refs(
     label, board_id, board_slug, invitation_id, token
   ) VALUES (
@@ -169,7 +182,9 @@ BEGIN
   SELECT * INTO STRICT v_race_board FROM public.create_board_p(
     'Tablero para carrera', 'UTC', 'c1220000-0000-4000-8000-000000000005'
   );
-  v_race_link := public.create_board_invitation_link_p(v_race_board.slug);
+  v_race_link := public.create_board_invitation_link_p(
+    v_race_board.slug, 'd1220000-0000-4000-8000-000000000007', repeat('7', 64)
+  );
   INSERT INTO public.issue12_invitation_race_fixture(board_id, board_slug, token)
   VALUES (v_race_board.id, v_race_board.slug, v_race_link->>'token');
 END;
@@ -187,7 +202,8 @@ DECLARE
   v_count integer;
 BEGIN
   v_result := public.accept_direct_board_invitation_p(
-    (SELECT invitation_id FROM pg_temp.issue12_invitation_refs WHERE label = 'main')
+    (SELECT invitation_id FROM pg_temp.issue12_invitation_refs WHERE label = 'main'),
+    'e1220000-0000-4000-8000-000000000001'
   );
   IF v_result->>'status' IS DISTINCT FROM 'unavailable' THEN
     RAISE EXCEPTION 'A different enabled user accepted a direct invitation: %', v_result;
@@ -214,7 +230,9 @@ DECLARE
   v_result jsonb;
 BEGIN
   v_preview := public.preview_board_invitation_p(v_token);
-  v_result := public.accept_board_invitation_link_p(v_token);
+  v_result := public.accept_board_invitation_link_p(
+    v_token, 'e1220000-0000-4000-8000-000000000002'
+  );
   IF v_preview <> jsonb_build_object('status', 'unavailable')
     OR v_result <> jsonb_build_object('status', 'unavailable') THEN
     RAISE EXCEPTION 'A non-enabled identity learned invitation details or consumed a link: %, %',
@@ -242,7 +260,9 @@ BEGIN
   IF v_count <> 1 THEN
     RAISE EXCEPTION 'The intended recipient cannot see their direct invitation';
   END IF;
-  v_result := public.accept_direct_board_invitation_p(v_direct_id);
+  v_result := public.accept_direct_board_invitation_p(
+    v_direct_id, 'e1220000-0000-4000-8000-000000000003'
+  );
   IF v_result->>'status' IS DISTINCT FROM 'accepted'
     OR v_result->>'board_slug' IS DISTINCT FROM v_board_slug THEN
     RAISE EXCEPTION 'Direct acceptance did not create board access: %', v_result;
@@ -253,7 +273,9 @@ BEGIN
     RAISE EXCEPTION 'Direct acceptance did not create exactly one collaborator membership';
   END IF;
 
-  v_result := public.accept_board_invitation_link_p(v_token);
+  v_result := public.accept_board_invitation_link_p(
+    v_token, 'e1220000-0000-4000-8000-000000000004'
+  );
   IF v_result->>'status' IS DISTINCT FROM 'already_member'
     OR v_result->>'board_slug' IS DISTINCT FROM v_board_slug THEN
     RAISE EXCEPTION 'A current member did not retain an unconsumed generic link: %', v_result;
@@ -333,7 +355,9 @@ BEGIN
     RAISE EXCEPTION 'Preview returned missing or unauthorized metadata: %', v_preview;
   END IF;
 
-  v_result := public.accept_board_invitation_link_p(v_token);
+  v_result := public.accept_board_invitation_link_p(
+    v_token, 'e1220000-0000-4000-8000-000000000005'
+  );
   IF v_result->>'status' IS DISTINCT FROM 'accepted'
     OR v_result->>'board_slug' IS DISTINCT FROM v_board_slug THEN
     RAISE EXCEPTION 'Explicit generic acceptance failed: %', v_result;
@@ -344,18 +368,24 @@ BEGIN
     RAISE EXCEPTION 'Generic acceptance did not create exactly one collaborator membership';
   END IF;
 
-  v_result := public.accept_direct_board_invitation_p(v_direct_id);
+  v_result := public.accept_direct_board_invitation_p(
+    v_direct_id, 'e1220000-0000-4000-8000-000000000006'
+  );
   IF v_result->>'status' IS DISTINCT FROM 'already_member'
     OR v_result->>'board_slug' IS DISTINCT FROM v_board_slug THEN
     RAISE EXCEPTION 'A current member could not open their board through a direct invite: %', v_result;
   END IF;
-  v_result := public.accept_board_invitation_link_p(v_token);
+  v_result := public.accept_board_invitation_link_p(
+    v_token, 'e1220000-0000-4000-8000-000000000007'
+  );
   IF v_result <> jsonb_build_object('status', 'unavailable') THEN
     RAISE EXCEPTION 'A used generic link disclosed or granted access a second time: %', v_result;
   END IF;
 
   BEGIN
-    PERFORM public.create_board_invitation_link_p(v_board_slug);
+    PERFORM public.create_board_invitation_link_p(
+      v_board_slug, 'e1220000-0000-4000-8000-000000000008', repeat('8', 64)
+    );
   EXCEPTION WHEN insufficient_privilege THEN
     v_denied := true;
   END;
@@ -453,7 +483,9 @@ BEGIN
     OR v_repeat->>'id' IS DISTINCT FROM v_direct_id::text THEN
     RAISE EXCEPTION 'Repeating an expired direct invite silently renewed or duplicated it: %', v_repeat;
   END IF;
-  v_early := public.renew_board_invitation_p(v_renewal_id);
+  v_early := public.renew_board_invitation_p(
+    v_renewal_id, 'f1220000-0000-4000-8000-000000000001', repeat('8', 64)
+  );
   IF v_early->>'status' IS DISTINCT FROM 'renewed' THEN
     RAISE EXCEPTION 'Expired generic invitation could not be explicitly renewed: %', v_early;
   END IF;
@@ -463,9 +495,13 @@ BEGIN
   SELECT 'renew-link-old', board_id, board_slug, invitation_id, token
   FROM pg_temp.issue12_invitation_refs WHERE label = 'renew-link';
   UPDATE pg_temp.issue12_invitation_refs
-  SET token = v_early->>'token' WHERE label = 'renew-link';
+  SET token = v_early->>'token',
+      expires_at = (v_early->>'expires_at')::timestamptz
+  WHERE label = 'renew-link';
 
-  v_renewed_direct := public.renew_board_invitation_p(v_direct_id);
+  v_renewed_direct := public.renew_board_invitation_p(
+    v_direct_id, 'f1220000-0000-4000-8000-000000000002', NULL
+  );
   IF v_renewed_direct->>'status' IS DISTINCT FROM 'renewed'
     OR v_renewed_direct->>'id' IS DISTINCT FROM v_direct_id::text
     OR abs(extract(epoch FROM (
@@ -479,7 +515,9 @@ BEGIN
   SELECT 'expired-link-old', board_id, board_slug, invitation_id, token
   FROM pg_temp.issue12_invitation_refs WHERE label = 'expired-link';
 
-  v_renewed_link := public.renew_board_invitation_p(v_link_id);
+  v_renewed_link := public.renew_board_invitation_p(
+    v_link_id, 'f1220000-0000-4000-8000-000000000003', repeat('9', 64)
+  );
   IF v_renewed_link->>'status' IS DISTINCT FROM 'renewed'
     OR v_renewed_link->>'token' IS NULL
     OR v_renewed_link->>'token' = v_old_token
@@ -489,9 +527,71 @@ BEGIN
     RAISE EXCEPTION 'Explicit generic renewal did not rotate the link for 72 hours: %', v_renewed_link;
   END IF;
   UPDATE pg_temp.issue12_invitation_refs
-  SET token = v_renewed_link->>'token' WHERE label = 'expired-link';
+  SET token = v_renewed_link->>'token',
+      expires_at = (v_renewed_link->>'expires_at')::timestamptz
+  WHERE label = 'expired-link';
   UPDATE pg_temp.issue12_invitation_refs
-  SET token = v_early->>'token' WHERE label = 'renew-link';
+  SET expires_at = (v_renewed_direct->>'expires_at')::timestamptz
+  WHERE label = 'expiring-direct';
+END;
+$$;
+COMMIT;
+
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);
+DO $$
+DECLARE
+  v_direct_id uuid := (SELECT invitation_id FROM pg_temp.issue12_invitation_refs WHERE label = 'expiring-direct');
+  v_direct_expiry timestamptz := (SELECT expires_at FROM pg_temp.issue12_invitation_refs WHERE label = 'expiring-direct');
+  v_early_id uuid := (SELECT invitation_id FROM pg_temp.issue12_invitation_refs WHERE label = 'renew-link');
+  v_early_token text := (SELECT token FROM pg_temp.issue12_invitation_refs WHERE label = 'renew-link');
+  v_early_expiry timestamptz := (SELECT expires_at FROM pg_temp.issue12_invitation_refs WHERE label = 'renew-link');
+  v_link_id uuid := (SELECT invitation_id FROM pg_temp.issue12_invitation_refs WHERE label = 'expired-link');
+  v_link_token text := (SELECT token FROM pg_temp.issue12_invitation_refs WHERE label = 'expired-link');
+  v_link_expiry timestamptz := (SELECT expires_at FROM pg_temp.issue12_invitation_refs WHERE label = 'expired-link');
+  v_direct_replay jsonb;
+  v_early_replay jsonb;
+  v_link_replay jsonb;
+  v_conflict boolean := false;
+BEGIN
+  v_early_replay := public.renew_board_invitation_p(
+    v_early_id, 'f1220000-0000-4000-8000-000000000001', repeat('8', 64)
+  );
+  IF v_early_replay->>'status' IS DISTINCT FROM 'renewed'
+    OR v_early_replay->>'token' IS DISTINCT FROM v_early_token
+    OR (v_early_replay->>'expires_at')::timestamptz IS DISTINCT FROM v_early_expiry THEN
+    RAISE EXCEPTION 'Generic renewal replay did not return its original token/result: %', v_early_replay;
+  END IF;
+
+  v_direct_replay := public.renew_board_invitation_p(
+    v_direct_id, 'f1220000-0000-4000-8000-000000000002', NULL
+  );
+  IF v_direct_replay->>'status' IS DISTINCT FROM 'renewed'
+    OR (v_direct_replay->>'expires_at')::timestamptz IS DISTINCT FROM v_direct_expiry THEN
+    RAISE EXCEPTION 'Direct renewal replay extended or changed its result: %', v_direct_replay;
+  END IF;
+
+  v_link_replay := public.renew_board_invitation_p(
+    v_link_id, 'f1220000-0000-4000-8000-000000000003', repeat('9', 64)
+  );
+  IF v_link_replay->>'status' IS DISTINCT FROM 'renewed'
+    OR v_link_replay->>'token' IS DISTINCT FROM v_link_token
+    OR (v_link_replay->>'expires_at')::timestamptz IS DISTINCT FROM v_link_expiry THEN
+    RAISE EXCEPTION 'Rotated generic renewal replay did not return its original result: %', v_link_replay;
+  END IF;
+
+  BEGIN
+    PERFORM public.renew_board_invitation_p(
+      v_link_id, 'f1220000-0000-4000-8000-000000000003', repeat('c', 64)
+    );
+  EXCEPTION WHEN check_violation THEN
+    v_conflict := true;
+  END;
+  IF NOT v_conflict OR public.preview_board_invitation_p(v_link_token)->>'status'
+      IS DISTINCT FROM 'available' THEN
+    RAISE EXCEPTION 'A renewal key accepted a different token or replaced the renewed link';
+  END IF;
 END;
 $$;
 COMMIT;
@@ -504,7 +604,9 @@ DECLARE
   v_id uuid := (SELECT invitation_id FROM pg_temp.issue12_invitation_refs WHERE label = 'expiring-direct');
   v_result jsonb;
 BEGIN
-  v_result := public.accept_direct_board_invitation_p(v_id);
+  v_result := public.accept_direct_board_invitation_p(
+    v_id, 'e1220000-0000-4000-8000-000000000009'
+  );
   IF v_result->>'status' IS DISTINCT FROM 'accepted' THEN
     RAISE EXCEPTION 'A renewed direct invitation could not be accepted: %', v_result;
   END IF;
@@ -521,7 +623,9 @@ DECLARE
   v_result jsonb;
   v_preview jsonb;
 BEGIN
-  v_result := public.accept_board_invitation_link_p(v_old_token);
+  v_result := public.accept_board_invitation_link_p(
+    v_old_token, 'e1220000-0000-4000-8000-000000000010'
+  );
   v_preview := public.preview_board_invitation_p(v_old_token);
   IF v_result <> jsonb_build_object('status', 'unavailable')
     OR v_preview <> jsonb_build_object('status', 'unavailable') THEN
@@ -549,7 +653,9 @@ BEGIN
     OR v_result->>'board_name' IS DISTINCT FROM 'Tablero de invitaciones' THEN
     RAISE EXCEPTION 'New explicitly renewed link is not available to an enabled identity: %', v_result;
   END IF;
-  v_result := public.accept_board_invitation_link_p(v_new_token);
+  v_result := public.accept_board_invitation_link_p(
+    v_new_token, 'e1220000-0000-4000-8000-000000000011'
+  );
   IF v_result->>'status' IS DISTINCT FROM 'already_member' THEN
     RAISE EXCEPTION 'An existing member consumed a renewed generic link: %', v_result;
   END IF;
@@ -574,7 +680,9 @@ BEGIN
   IF v_result->>'status' IS DISTINCT FROM 'available' THEN
     RAISE EXCEPTION 'Explicitly renewed invitation link is not available: %', v_result;
   END IF;
-  v_result := public.accept_board_invitation_link_p(v_new_token);
+  v_result := public.accept_board_invitation_link_p(
+    v_new_token, 'e1220000-0000-4000-8000-000000000012'
+  );
   IF v_result->>'status' IS DISTINCT FROM 'accepted'
     OR v_result->>'board_slug' IS DISTINCT FROM (
       SELECT board_slug FROM pg_temp.issue12_invitation_refs WHERE label = 'renew-link'
@@ -639,7 +747,9 @@ BEGIN
   IF v_result <> jsonb_build_object('status', 'unavailable') THEN
     RAISE EXCEPTION 'A removed issuer left a descriptive invitation: %', v_result;
   END IF;
-  v_result := public.accept_board_invitation_link_p(v_token);
+  v_result := public.accept_board_invitation_link_p(
+    v_token, 'e1220000-0000-4000-8000-000000000013'
+  );
   SELECT count(*) INTO v_count FROM public.list_my_boards()
   WHERE slug = (SELECT board_slug FROM pg_temp.issue12_invitation_refs WHERE label = 'orphan-link');
   IF v_result <> jsonb_build_object('status', 'unavailable') OR v_count <> 0 THEN
@@ -666,7 +776,7 @@ BEGIN
   END IF;
   IF has_table_privilege('authenticated', 'public.board_invitations', 'SELECT')
     OR has_table_privilege('authenticated', 'public.board_invitations', 'INSERT')
-    OR has_function_privilege('anon', 'public.accept_board_invitation_link_p(text)', 'EXECUTE') THEN
+    OR has_function_privilege('anon', 'public.accept_board_invitation_link_p(text,uuid)', 'EXECUTE') THEN
     RAISE EXCEPTION 'Invitation storage or RPC privileges are broader than intended';
   END IF;
 END;

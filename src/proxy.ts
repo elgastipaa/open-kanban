@@ -1,22 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { type NextRequest, NextResponse } from "next/server";
+import { boardSlugFromProxyPath } from "@/lib/proxy-path";
 import { getBoardVisitLimiter } from "@/lib/ratelimit";
-
-const IGNORED_PREFIXES = [
-  "/_next",
-  "/api",
-  "/favicon.ico",
-  "/og.png",
-  "/OpenKanban-Logo.png",
-  "/rate-limit",
-  "/privacy",
-  "/terms",
-  "/robots.txt",
-  "/sitemap.xml",
-  "/login",
-  "/auth",
-  "/admin",
-];
 
 function sanitizeSlug(raw: string): string {
   let decoded = raw;
@@ -78,11 +63,8 @@ async function refreshSession(request: NextRequest) {
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  if (
-    pathname !== "/" &&
-    !IGNORED_PREFIXES.some((prefix) => pathname.startsWith(prefix))
-  ) {
-    const slug = pathname.slice(1);
+  const slug = boardSlugFromProxyPath(pathname);
+  if (slug !== null) {
     const sanitized = sanitizeSlug(slug);
     if (!sanitized) {
       return addPrivateHeaders(

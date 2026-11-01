@@ -20,6 +20,7 @@ import { createClient } from "@/lib/supabase/server";
 import {
   invitationEmailSchema,
   invitationIdSchema,
+  invitationOperationIdSchema,
   invitationTokenSchema,
   slugSchema,
 } from "@/lib/validations";
@@ -123,11 +124,19 @@ export async function createDirectInvitation(
 
 export async function createInvitationLink(
   slug: string,
+  operationId: string,
+  token: string,
 ): Promise<
   ActionResult<Awaited<ReturnType<typeof createBoardInvitationLink>>>
 > {
   const parsedSlug = slugSchema.safeParse(slug);
-  if (!parsedSlug.success) {
+  const parsedOperationId = invitationOperationIdSchema.safeParse(operationId);
+  const parsedToken = invitationTokenSchema.safeParse(token);
+  if (
+    !parsedSlug.success ||
+    !parsedOperationId.success ||
+    !parsedToken.success
+  ) {
     return { status: "unavailable", message: "No se pudo crear el enlace." };
   }
   const supabase = await getActiveClient();
@@ -138,7 +147,12 @@ export async function createInvitationLink(
     };
   }
   try {
-    const data = await createBoardInvitationLink(supabase, parsedSlug.data);
+    const data = await createBoardInvitationLink(
+      supabase,
+      parsedSlug.data,
+      parsedOperationId.data,
+      parsedToken.data,
+    );
     revalidatePath(`/${parsedSlug.data}`);
     return {
       status: "ok",
@@ -186,10 +200,22 @@ export async function revokeInvitation(
 export async function renewInvitation(
   slug: string,
   invitationId: string,
+  operationId: string,
+  token: string | null,
 ): Promise<ActionResult<Awaited<ReturnType<typeof renewBoardInvitation>>>> {
   const parsedSlug = slugSchema.safeParse(slug);
   const parsedId = invitationIdSchema.safeParse(invitationId);
-  if (!parsedSlug.success || !parsedId.success) {
+  const parsedOperationId = invitationOperationIdSchema.safeParse(operationId);
+  const parsedToken =
+    token === null
+      ? { success: true as const, data: null }
+      : invitationTokenSchema.safeParse(token);
+  if (
+    !parsedSlug.success ||
+    !parsedId.success ||
+    !parsedOperationId.success ||
+    !parsedToken.success
+  ) {
     return {
       status: "unavailable",
       message: "No se pudo renovar la invitación.",
@@ -203,7 +229,12 @@ export async function renewInvitation(
     };
   }
   try {
-    const data = await renewBoardInvitation(supabase, parsedId.data);
+    const data = await renewBoardInvitation(
+      supabase,
+      parsedId.data,
+      parsedOperationId.data,
+      parsedToken.data,
+    );
     revalidatePath(`/${parsedSlug.data}`);
     return { status: "ok", data };
   } catch (error) {
@@ -233,11 +264,13 @@ export async function previewInvitationLink(
 
 export async function acceptDirectInvitation(
   invitationId: string,
+  operationId: string,
 ): Promise<
   ActionResult<Awaited<ReturnType<typeof acceptDirectBoardInvitation>>>
 > {
   const parsedId = invitationIdSchema.safeParse(invitationId);
-  if (!parsedId.success) {
+  const parsedOperationId = invitationOperationIdSchema.safeParse(operationId);
+  if (!parsedId.success || !parsedOperationId.success) {
     return {
       status: "unavailable",
       message: "Esta invitación ya no está disponible.",
@@ -253,7 +286,11 @@ export async function acceptDirectInvitation(
   try {
     return {
       status: "ok",
-      data: await acceptDirectBoardInvitation(supabase, parsedId.data),
+      data: await acceptDirectBoardInvitation(
+        supabase,
+        parsedId.data,
+        parsedOperationId.data,
+      ),
     };
   } catch (error) {
     return { status: "unavailable", message: requestErrorMessage(error) };
@@ -262,10 +299,13 @@ export async function acceptDirectInvitation(
 
 export async function acceptInvitationLink(
   token: string,
+  operationId: string,
 ): Promise<
   ActionResult<Awaited<ReturnType<typeof acceptBoardInvitationLink>>>
 > {
-  if (!invitationTokenSchema.safeParse(token).success) {
+  const parsedToken = invitationTokenSchema.safeParse(token);
+  const parsedOperationId = invitationOperationIdSchema.safeParse(operationId);
+  if (!parsedToken.success || !parsedOperationId.success) {
     return { status: "ok", data: { status: "unavailable" } };
   }
   const supabase = await getActiveClient();
@@ -276,8 +316,14 @@ export async function acceptInvitationLink(
     };
   }
   try {
-    const data = await acceptBoardInvitationLink(supabase, token);
-    if (data.status !== "unavailable") revalidatePath("/");
+    const data = await acceptBoardInvitationLink(
+      supabase,
+      parsedToken.data,
+      parsedOperationId.data,
+    );
+    if (data.status === "accepted" || data.status === "already_member") {
+      revalidatePath("/");
+    }
     return { status: "ok", data };
   } catch (error) {
     return { status: "unavailable", message: requestErrorMessage(error) };

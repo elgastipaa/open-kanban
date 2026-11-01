@@ -7,6 +7,10 @@ import {
   acceptDirectInvitation,
   rejectInvitation,
 } from "@/lib/invitation-actions";
+import {
+  completeInvitationOperation,
+  getOrCreateInvitationOperation,
+} from "@/lib/invitation-operation";
 
 export function PendingInvitations({
   invitations,
@@ -22,23 +26,37 @@ export function PendingInvitations({
   const [message, setMessage] = useState("");
 
   async function accept(id: string) {
+    const scope = `accept-direct:${id}`;
+    const operation = getOrCreateInvitationOperation(scope, false);
     setBusyId(id);
     setError("");
     setMessage("");
-    const result = await acceptDirectInvitation(id);
-    setBusyId(null);
-    if (result.status !== "ok") {
-      setError(result.message);
-      return;
-    }
-    if (result.data.status === "unavailable") {
-      setError("Esta invitación ya no está disponible. Actualiza la lista.");
-      setPending((current) =>
-        current.filter((invitation) => invitation.id !== id),
+    try {
+      const result = await acceptDirectInvitation(id, operation.operationId);
+      if (result.status !== "ok") {
+        setError(result.message);
+        return;
+      }
+      if (
+        result.data.status === "unavailable" ||
+        result.data.status === "expired_unknown"
+      ) {
+        completeInvitationOperation(scope);
+        setError("Esta invitación ya no está disponible. Actualiza la lista.");
+        setPending((current) =>
+          current.filter((invitation) => invitation.id !== id),
+        );
+        return;
+      }
+      completeInvitationOperation(scope);
+      router.push(`/${result.data.board_slug}`);
+    } catch {
+      setError(
+        "No se pudo confirmar la aceptación. Reintenta esta misma solicitud.",
       );
-      return;
+    } finally {
+      setBusyId(null);
     }
-    router.push(`/${result.data.board_slug}`);
   }
 
   async function reject(id: string) {

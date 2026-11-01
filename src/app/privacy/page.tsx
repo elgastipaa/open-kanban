@@ -29,7 +29,7 @@ export default function PrivacyPage() {
         <h1 className="mb-6 font-bold font-display text-5xl tracking-tight md:text-6xl">
           Privacy Policy.
         </h1>
-        <p className="mb-16 font-mono text-accent text-sm">
+        <p className="mb-16 font-mono text-accent-text text-sm">
           Last updated: {new Date().toLocaleDateString()}
         </p>
 

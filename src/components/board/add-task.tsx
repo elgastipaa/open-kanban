@@ -217,7 +217,7 @@ export function AddTask({ columnId, onAdd }: AddTaskProps) {
             <button
               type="button"
               onClick={discardDraft}
-              className="mt-2 cursor-pointer font-semibold text-accent underline"
+              className="mt-2 cursor-pointer font-semibold text-accent-text underline"
             >
               Descartar borrador sin reintentar
             </button>

@@ -10,7 +10,7 @@ export default function RateLimitPage() {
     <div className="relative flex min-h-dvh flex-col items-center justify-center overflow-hidden bg-surface-base text-text-primary selection:bg-accent selection:text-black">
       {/* Background elements */}
       <div className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-5">
-        <span className="select-none font-black font-display text-[30vw] text-accent tracking-tighter mix-blend-screen">
+        <span className="select-none font-black font-display text-[30vw] text-accent-text tracking-tighter mix-blend-screen">
           429
         </span>
       </div>
@@ -25,7 +25,7 @@ export default function RateLimitPage() {
         transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
         className="relative z-10 flex w-full max-w-md flex-col items-center gap-6 px-6 text-center"
       >
-        <div className="flex h-20 w-20 items-center justify-center rounded-2xl border border-accent/20 bg-accent/5 text-accent shadow-[0_0_30px_rgba(225,255,0,0.1)]">
+        <div className="flex h-20 w-20 items-center justify-center rounded-2xl border border-accent/20 bg-accent/5 text-accent-text shadow-[0_0_30px_rgba(225,255,0,0.1)]">
           <IconHandStop size={40} stroke={1.5} />
         </div>
 

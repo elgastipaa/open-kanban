@@ -107,7 +107,7 @@ export function KeyboardShortcuts() {
                   viewBox="0 0 30 40"
                   fill="none"
                   xmlns="http://www.w3.org/2000/svg"
-                  className="-bottom-9 absolute right-4 text-accent opacity-80"
+                  className="-bottom-9 absolute right-4 text-accent-text opacity-80"
                 >
                   <title>Animated arrow pointing to keyboard shortcuts</title>
                   <motion.path

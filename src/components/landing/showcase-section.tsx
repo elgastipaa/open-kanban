@@ -87,7 +87,7 @@ export function ShowcaseSection() {
               <div className="h-2 w-2 animate-pulse rounded-full bg-accent shadow-[0_0_8px_var(--color-accent)]"></div>
               <div className="h-3 w-20 rounded-full bg-text-muted/50"></div>
             </div>
-            <div className="flex h-4 w-6 items-center justify-center rounded bg-accent/20 font-medium font-mono text-[10px] text-accent sm:text-xs">
+            <div className="flex h-4 w-6 items-center justify-center rounded bg-accent/20 font-medium font-mono text-[10px] text-accent-text sm:text-xs">
               2
             </div>
           </div>

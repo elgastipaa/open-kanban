@@ -129,7 +129,7 @@ export const HeroSection = ({
                 onClick={() => setSlug(generateRandomSlug())}
                 disabled={isNavigating}
                 title="Generate random URL"
-                className="shrink-0 p-2 pr-3 text-text-muted transition-colors hover:text-accent disabled:opacity-50"
+                className="shrink-0 p-2 pr-3 text-text-muted transition-colors hover:text-accent-text disabled:opacity-50"
               >
                 <IconDice5 size={18} />
               </button>

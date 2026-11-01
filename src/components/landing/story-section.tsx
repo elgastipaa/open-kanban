@@ -46,7 +46,7 @@ export function StorySection({
           0{index}
         </div>
 
-        <h3 className="mb-6 flex items-center justify-start gap-4 font-medium text-accent text-xs uppercase tracking-[0.3em] md:text-sm">
+        <h3 className="mb-6 flex items-center justify-start gap-4 font-medium text-accent-text text-xs uppercase tracking-[0.3em] md:text-sm">
           {align === "right" && (
             <span className="h-px flex-1 bg-surface-column"></span>
           )}

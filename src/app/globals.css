@@ -10,6 +10,7 @@
   --color-accent: #e1ff00;
   --color-accent-hover: #cce600;
   --color-accent-muted: #e1ff0033;
+  --color-accent-text: #e1ff00;
   --color-accent-foreground: #000000;
 
   /* Surfaces */
@@ -71,6 +72,7 @@ html[data-theme="light"] {
   --color-border: #d0d0ca;
   --color-border-hover: #9a9a91;
   --color-border-accent: #8b9900;
+  --color-accent-text: #495700;
   --color-text-primary: #171717;
   --color-text-secondary: #4b4b4b;
   --color-text-muted: #626262;
@@ -98,6 +100,7 @@ html[data-theme="light"] {
     --color-border: #d0d0ca;
     --color-border-hover: #9a9a91;
     --color-border-accent: #8b9900;
+    --color-accent-text: #495700;
     --color-text-primary: #171717;
     --color-text-secondary: #4b4b4b;
     --color-text-muted: #626262;

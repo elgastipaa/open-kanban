@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { ModalStack, getModalFocusReturnTarget } = await import(
-  "../../src/lib/modal-stack.ts"
-);
+const { ModalStack } = await import("../../src/lib/modal-stack.ts");
 
 test("only the topmost modal handles Escape and focus trapping", () => {
   const stack = new ModalStack();
@@ -20,17 +18,6 @@ test("only the topmost modal handles Escape and focus trapping", () => {
   assert.equal(stack.isTop(editor), true);
   closeEditor();
   assert.equal(stack.isTop(editor), false);
-});
-
-test("a nested Account modal returns focus to the active editor input", () => {
-  const titleInput = { id: "task-title" };
-  const accountButton = { id: "account-trigger" };
-
-  assert.equal(
-    getModalFocusReturnTarget(titleInput, accountButton),
-    titleInput,
-  );
-  assert.equal(getModalFocusReturnTarget(null, accountButton), accountButton);
 });
 
 test("overlapping modal cleanup restores document scrolling after the last close", () => {

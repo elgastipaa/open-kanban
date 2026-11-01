@@ -6,7 +6,7 @@ export function CallToAction() {
   return (
     <section className="relative z-20 flex flex-col items-center justify-center border-border border-t bg-surface-raised px-6 py-20 text-center">
       <h2 className="mb-12 font-bold font-display text-5xl tracking-tighter md:text-8xl">
-        Ready to <span className="text-accent">organize?</span>
+        Ready to <span className="text-accent-text">organize?</span>
       </h2>
       <motion.button
         onClick={() =>

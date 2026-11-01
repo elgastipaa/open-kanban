@@ -34,10 +34,3 @@ export class ModalStack {
     return this.active.at(-1) === token;
   }
 }
-
-export function getModalFocusReturnTarget<T>(
-  preferredTarget: T | null | undefined,
-  opener: T | null,
-): T | null {
-  return preferredTarget ?? opener;
-}

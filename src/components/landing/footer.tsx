@@ -18,7 +18,7 @@ export function Footer() {
             href="https://github.com/Slogllykop/OpenKanban"
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center gap-2 transition-colors hover:text-accent"
+            className="flex items-center gap-2 transition-colors hover:text-accent-text"
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -36,10 +36,13 @@ export function Footer() {
             </svg>
             GitHub
           </a>
-          <a href="/terms" className="transition-colors hover:text-accent">
+          <a href="/terms" className="transition-colors hover:text-accent-text">
             Terms
           </a>
-          <a href="/privacy" className="transition-colors hover:text-accent">
+          <a
+            href="/privacy"
+            className="transition-colors hover:text-accent-text"
+          >
             Privacy
           </a>
         </div>
@@ -53,7 +56,7 @@ export function Footer() {
             href="https://github.com/Slogllykop"
             target="_blank"
             rel="noopener noreferrer"
-            className="text-text-secondary transition-colors hover:text-accent"
+            className="text-text-secondary transition-colors hover:text-accent-text"
           >
             Slogllykop
           </a>

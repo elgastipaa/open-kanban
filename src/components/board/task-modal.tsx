@@ -327,9 +327,6 @@ export function TaskModal({
   const [reconciliationError, setReconciliationError] = useState("");
   const [isReconciling, setIsReconciling] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
-  const lastEditorInputRef = useRef<HTMLInputElement | HTMLTextAreaElement>(
-    null,
-  );
 
   // A board refresh for this task must not replace an in-session draft.
   // Reset only when the editor opens for a new task identity.
@@ -1208,17 +1205,7 @@ export function TaskModal({
         closeLabel="Cerrar detalle de tarea"
         onAfterClose={onAfterClose}
       >
-        <div
-          className="flex min-h-[calc(100dvh-5rem)] flex-col gap-5 sm:min-h-0"
-          onFocusCapture={(event) => {
-            if (
-              event.target instanceof HTMLInputElement ||
-              event.target instanceof HTMLTextAreaElement
-            ) {
-              lastEditorInputRef.current = event.target;
-            }
-          }}
-        >
+        <div className="flex min-h-[calc(100dvh-5rem)] flex-col gap-5 sm:min-h-0">
           <div>
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <p className="text-text-muted text-xs">{contextLabel}</p>
@@ -2084,7 +2071,6 @@ export function TaskModal({
         onClose={() => setShowAccountPreferences(false)}
         title="Cuenta y preferencias"
         closeLabel="Cerrar preferencias de cuenta"
-        returnFocusTo={() => lastEditorInputRef.current}
       >
         <section aria-labelledby="account-theme-heading">
           <h3

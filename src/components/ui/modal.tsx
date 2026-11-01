@@ -9,7 +9,7 @@ import {
   useRef,
 } from "react";
 import { createPortal } from "react-dom";
-import { getModalFocusReturnTarget, ModalStack } from "@/lib/modal-stack";
+import { ModalStack } from "@/lib/modal-stack";
 
 const activeModals = new ModalStack();
 const focusableSelector =
@@ -23,7 +23,6 @@ interface ModalProps {
   fullScreenMobile?: boolean;
   closeLabel?: string;
   onAfterClose?: () => void;
-  returnFocusTo?: () => HTMLElement | null;
 }
 
 export function Modal({
@@ -34,7 +33,6 @@ export function Modal({
   fullScreenMobile = false,
   closeLabel = "Cerrar ventana",
   onAfterClose,
-  returnFocusTo,
 }: ModalProps) {
   const overlayRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -42,11 +40,9 @@ export function Modal({
   const modalTokenRef = useRef(Symbol("modal"));
   const onCloseRef = useRef(onClose);
   const onAfterCloseRef = useRef(onAfterClose);
-  const returnFocusToRef = useRef(returnFocusTo);
   const titleId = useId();
   onCloseRef.current = onClose;
   onAfterCloseRef.current = onAfterClose;
-  returnFocusToRef.current = returnFocusTo;
 
   // Keep keyboard focus in the dialog and return it to the opener on close.
   useLayoutEffect(() => {
@@ -97,12 +93,8 @@ export function Modal({
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
       deactivateModal();
-      const returnTarget = getModalFocusReturnTarget(
-        returnFocusToRef.current?.(),
-        returnFocusRef.current,
-      );
-      if (returnTarget?.isConnected) {
-        returnTarget.focus({ preventScroll: true });
+      if (returnFocusRef.current?.isConnected) {
+        returnFocusRef.current.focus({ preventScroll: true });
       }
       onAfterCloseRef.current?.();
     };

@@ -105,7 +105,7 @@ export function MobileColumnControls({
               Columna {currentIndex + 1} de {totalColumns}
             </span>
             <span className="h-1 w-1 shrink-0 rounded-full bg-border-hover" />
-            <span className="text-accent">
+            <span className="text-accent-text">
               {taskCount} {taskCount === 1 ? "tarea" : "tareas"}
             </span>
           </div>
@@ -155,7 +155,7 @@ export function MobileColumnControls({
                 setEditError(null);
                 setIsEditing(true);
               }}
-              className="max-w-full truncate text-left font-bold text-text-primary text-xl tracking-tight transition-colors hover:text-accent"
+              className="max-w-full truncate text-left font-bold text-text-primary text-xl tracking-tight transition-colors hover:text-accent-text"
               aria-label={`Renombrar columna ${title}`}
             >
               {title}
@@ -199,7 +199,7 @@ export function MobileColumnControls({
           <IconLayoutColumns
             size={16}
             stroke={2}
-            className="text-accent transition-colors group-hover:text-accent"
+            className="text-accent-text transition-colors group-hover:text-accent-text"
           />
           <span className="translate-y-px">Nueva columna</span>
         </button>

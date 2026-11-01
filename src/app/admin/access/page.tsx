@@ -1,12 +1,12 @@
 import { notFound, redirect } from "next/navigation";
 import { AccessManager } from "@/components/auth/access-manager";
-import { AdminBoardRecovery } from "@/components/board/admin-board-recovery";
 import { SignOutButton } from "@/components/auth/sign-out-button";
+import { AdminBoardRecovery } from "@/components/board/admin-board-recovery";
 import { Logo } from "@/components/ui/logo";
 import { resolveApplicationAccess } from "@/lib/auth";
 import type { AdminRecoverableBoard } from "@/lib/db/boards";
-import { createClient } from "@/lib/supabase/server";
 import { listAdminRecoverableBoards } from "@/lib/db/boards";
+import { createClient } from "@/lib/supabase/server";
 
 export default async function AccessAdminPage() {
   const supabase = await createClient();

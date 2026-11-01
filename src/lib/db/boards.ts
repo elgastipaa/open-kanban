@@ -49,7 +49,10 @@ export interface BoardRecoveryResult {
   owner_id?: string;
 }
 
-export type BoardRecoveryErrorReason = "access_denied" | "conflict" | "uncertain";
+export type BoardRecoveryErrorReason =
+  | "access_denied"
+  | "conflict"
+  | "uncertain";
 
 export class BoardRecoveryError extends Error {
   constructor(readonly reason: BoardRecoveryErrorReason) {
@@ -93,12 +96,18 @@ function isRecoverableBoard(value: unknown): value is RecoverableBoard {
   return (
     typeof value === "object" &&
     value !== null &&
-    "id" in value && typeof value.id === "string" &&
-    "slug" in value && typeof value.slug === "string" &&
-    "name" in value && typeof value.name === "string" &&
-    "owner_id" in value && typeof value.owner_id === "string" &&
-    "deleted_at" in value && typeof value.deleted_at === "string" &&
-    "expires_at" in value && typeof value.expires_at === "string"
+    "id" in value &&
+    typeof value.id === "string" &&
+    "slug" in value &&
+    typeof value.slug === "string" &&
+    "name" in value &&
+    typeof value.name === "string" &&
+    "owner_id" in value &&
+    typeof value.owner_id === "string" &&
+    "deleted_at" in value &&
+    typeof value.deleted_at === "string" &&
+    "expires_at" in value &&
+    typeof value.expires_at === "string"
   );
 }
 

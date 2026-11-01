@@ -6,8 +6,8 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   BoardRecoveryError,
-  restoreBoard,
   type RecoverableBoard,
+  restoreBoard,
 } from "@/lib/db/boards";
 import { createClient } from "@/lib/supabase/client";
 import { generateUUID } from "@/lib/utils";
@@ -52,11 +52,7 @@ export function MyBoardRecovery({
     setMessage("");
     setErrorMessage("");
     try {
-      const result = await restoreBoard(
-        createClient(),
-        board.id,
-        operationId,
-      );
+      const result = await restoreBoard(createClient(), board.id, operationId);
       if (result.status === "confirmed") {
         operationIds.current.delete(board.id);
         setBoards((current) => current.filter((item) => item.id !== board.id));
@@ -67,7 +63,9 @@ export function MyBoardRecovery({
         setErrorMessage(`Venció el plazo de recuperación de «${board.name}».`);
         router.refresh();
       } else {
-        setErrorMessage("No se pudo restaurar el tablero con la autoridad actual.");
+        setErrorMessage(
+          "No se pudo restaurar el tablero con la autoridad actual.",
+        );
       }
     } catch (error) {
       setErrorMessage(ownerRestoreError(error));
@@ -81,9 +79,15 @@ export function MyBoardRecovery({
   return (
     <section className="mt-8 rounded-2xl border border-amber-200/20 bg-amber-100/[0.04] p-5">
       <div className="flex items-start gap-3">
-        <IconRefresh aria-hidden="true" className="mt-0.5 text-amber-100" size={20} />
+        <IconRefresh
+          aria-hidden="true"
+          className="mt-0.5 text-amber-100"
+          size={20}
+        />
         <div className="min-w-0 flex-1">
-          <h2 className="font-semibold text-amber-50">Tableros en recuperación</h2>
+          <h2 className="font-semibold text-amber-50">
+            Tableros en recuperación
+          </h2>
           <p className="mt-1 text-neutral-400 text-sm">
             El tablero y su contenido permanecen ocultos hasta restaurarlo. Las
             invitaciones revocadas no se reactivan.
@@ -106,7 +110,8 @@ export function MyBoardRecovery({
               <div className="min-w-0">
                 <p className="truncate font-medium">{board.name}</p>
                 <p className="mt-1 text-neutral-500 text-xs">
-                  /{board.slug} · Recuperable hasta {formatDeadline(board.expires_at)}
+                  /{board.slug} · Recuperable hasta{" "}
+                  {formatDeadline(board.expires_at)}
                 </p>
               </div>
               <Button
@@ -122,9 +127,7 @@ export function MyBoardRecovery({
         </ul>
       ) : null}
       {message ? (
-        <output className="mt-3 text-green-200 text-sm">
-          {message}
-        </output>
+        <output className="mt-3 text-green-200 text-sm">{message}</output>
       ) : null}
       {errorMessage ? (
         <p className="mt-3 text-red-200 text-sm" role="alert">

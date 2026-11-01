@@ -3,13 +3,13 @@ import Link from "next/link";
 import { PendingInvitations } from "@/components/auth/pending-invitations";
 import { SignInButton } from "@/components/auth/sign-in-button";
 import { SignOutButton } from "@/components/auth/sign-out-button";
-import { MyBoardRecovery } from "@/components/board/my-board-recovery";
 import { CreateBoardForm } from "@/components/board/create-board-form";
+import { MyBoardRecovery } from "@/components/board/my-board-recovery";
 import { Logo } from "@/components/ui/logo";
 import { resolveApplicationAccess } from "@/lib/auth";
+import { listMyRecoverableBoards } from "@/lib/db/boards";
 import type { PendingBoardInvitation } from "@/lib/db/invitations";
 import { listMyPendingBoardInvitations } from "@/lib/db/invitations";
-import { listMyRecoverableBoards } from "@/lib/db/boards";
 import { createClient } from "@/lib/supabase/server";
 import type { Board } from "@/lib/types";
 
@@ -82,7 +82,8 @@ export default async function HomePage() {
   const boards = (boardsData ?? []) as Board[];
   let invitations: PendingBoardInvitation[] = [];
   let invitationsLoadError = false;
-  let recoverableBoards: Awaited<ReturnType<typeof listMyRecoverableBoards>> = [];
+  let recoverableBoards: Awaited<ReturnType<typeof listMyRecoverableBoards>> =
+    [];
   let recoveryLoadError = false;
   try {
     invitations = await listMyPendingBoardInvitations(supabase);

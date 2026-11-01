@@ -5,16 +5,16 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
-  BoardRecoveryError,
-  listBoardRecoveryOwners,
-  restoreBoard,
-  type AdminRecoverableBoard,
-  type BoardRecoveryOwner,
-} from "@/lib/db/boards";
-import {
   adminMayResolveBoardRecovery,
   prepareBoardRestoreCommand,
 } from "@/lib/board-recovery-flow";
+import {
+  type AdminRecoverableBoard,
+  BoardRecoveryError,
+  type BoardRecoveryOwner,
+  listBoardRecoveryOwners,
+  restoreBoard,
+} from "@/lib/db/boards";
 import { createClient } from "@/lib/supabase/client";
 import { generateUUID } from "@/lib/utils";
 
@@ -77,7 +77,9 @@ export function AdminBoardRecovery({
         [board.id]: current[board.id] ?? owners[0]?.user_id ?? "",
       }));
     } catch {
-      setErrorMessage("No se pudieron cargar las opciones de dueño habilitado.");
+      setErrorMessage(
+        "No se pudieron cargar las opciones de dueño habilitado.",
+      );
     } finally {
       if (generation === ownerLoadGeneration.current) setLoadingOwnersId(null);
     }
@@ -91,7 +93,9 @@ export function AdminBoardRecovery({
       generateUUID,
     );
     if (commandDecision.kind === "owner_required") {
-      setErrorMessage("Selecciona una identidad habilitada para recibir el tablero.");
+      setErrorMessage(
+        "Selecciona una identidad habilitada para recibir el tablero.",
+      );
       return;
     }
     if (commandDecision.kind === "owner_locked") {
@@ -119,7 +123,9 @@ export function AdminBoardRecovery({
           return next;
         });
         setBoards((current) => current.filter((item) => item.id !== board.id));
-        setMessage(`Se restauró «${board.name}» y se asignó un dueño habilitado.`);
+        setMessage(
+          `Se restauró «${board.name}» y se asignó un dueño habilitado.`,
+        );
         router.refresh();
       } else if (result.status === "expired") {
         setCommands((current) => {
@@ -135,7 +141,9 @@ export function AdminBoardRecovery({
           delete next[board.id];
           return next;
         });
-        setErrorMessage("Este tablero requiere que elijas un nuevo dueño habilitado.");
+        setErrorMessage(
+          "Este tablero requiere que elijas un nuevo dueño habilitado.",
+        );
       } else {
         setCommands((current) => {
           const next = { ...current };
@@ -156,7 +164,11 @@ export function AdminBoardRecovery({
   return (
     <section className="mt-8 rounded-2xl border border-white/10 bg-neutral-950 p-5">
       <div className="flex items-start gap-3">
-        <IconRefresh aria-hidden="true" className="mt-0.5 text-neutral-300" size={20} />
+        <IconRefresh
+          aria-hidden="true"
+          className="mt-0.5 text-neutral-300"
+          size={20}
+        />
         <div className="min-w-0 flex-1">
           <h2 className="font-semibold">Recuperación de tableros</h2>
           <p className="mt-1 text-neutral-400 text-sm">
@@ -185,7 +197,8 @@ export function AdminBoardRecovery({
                   <div className="min-w-0">
                     <p className="truncate font-medium">{board.name}</p>
                     <p className="mt-1 text-neutral-500 text-xs">
-                      /{board.slug} · Recuperable hasta {formatDeadline(board.expires_at)}
+                      /{board.slug} · Recuperable hasta{" "}
+                      {formatDeadline(board.expires_at)}
                     </p>
                     <p className="mt-2 text-neutral-400 text-sm">
                       {board.owner_is_valid
@@ -230,7 +243,8 @@ export function AdminBoardRecovery({
                         <option value="">Selecciona una identidad</option>
                         {owners.map((owner) => (
                           <option key={owner.user_id} value={owner.user_id}>
-                            {owner.email}{owner.is_admin ? " · Administrador" : ""}
+                            {owner.email}
+                            {owner.is_admin ? " · Administrador" : ""}
                           </option>
                         ))}
                       </select>
@@ -241,7 +255,9 @@ export function AdminBoardRecovery({
                       disabled={busyId !== null || owners.length === 0}
                       onClick={() => restore(board)}
                     >
-                      {busyId === board.id ? "Restaurando…" : "Asignar y restaurar"}
+                      {busyId === board.id
+                        ? "Restaurando…"
+                        : "Asignar y restaurar"}
                     </Button>
                   </div>
                 ) : null}
@@ -256,9 +272,7 @@ export function AdminBoardRecovery({
         </ul>
       ) : null}
       {message ? (
-        <output className="mt-3 text-green-200 text-sm">
-          {message}
-        </output>
+        <output className="mt-3 text-green-200 text-sm">{message}</output>
       ) : null}
       {errorMessage ? (
         <p className="mt-3 text-red-200 text-sm" role="alert">

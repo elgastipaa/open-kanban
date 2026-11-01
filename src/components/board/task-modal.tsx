@@ -163,6 +163,19 @@ function dirtyTaskEditFields(
   });
 }
 
+function preservationBaseVersionsFor(
+  task: Task,
+  restoredDraft: PreservedTaskDraft | null,
+): TaskFieldVersions {
+  const versions = { ...task.field_versions };
+  if (!restoredDraft) return versions;
+  for (const field of restoredDraft.dirtyFields) {
+    const originalVersion = restoredDraft.baseVersions[field];
+    if (originalVersion !== undefined) versions[field] = originalVersion;
+  }
+  return versions;
+}
+
 function fieldLabel(field: TaskEditableField) {
   switch (field) {
     case "title":
@@ -260,7 +273,9 @@ export function TaskModal({
     () => initialRestoration?.conflicts ?? {},
   );
   const [draftPreservationBaseVersions, setDraftPreservationBaseVersions] =
-    useState<TaskFieldVersions | null>(() => task?.field_versions ?? null);
+    useState<TaskFieldVersions | null>(() =>
+      task ? preservationBaseVersionsFor(task, restoredDraft) : null,
+    );
   const [showDetails, setShowDetails] = useState(false);
   const [showDescription, setShowDescription] = useState(
     Boolean(task?.description),
@@ -321,15 +336,10 @@ export function TaskModal({
         ? rebasePreservedTaskDraft(task, restoredDraft)
         : null;
     const initialDraft = restoration?.draft ?? draftFor(task);
-    const preservationVersions = { ...task.field_versions };
-    if (restoredDraft) {
-      for (const field of restoredDraft.dirtyFields) {
-        const originalVersion = restoredDraft.baseVersions[field];
-        if (originalVersion !== undefined) {
-          preservationVersions[field] = originalVersion;
-        }
-      }
-    }
+    const preservationVersions = preservationBaseVersionsFor(
+      task,
+      restoredDraft,
+    );
     setBaseTask(task);
     setWorkflow(createTaskEditWorkflow(initialDraft));
     setConflicts(restoration?.conflicts ?? {});

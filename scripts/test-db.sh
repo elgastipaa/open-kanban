@@ -247,6 +247,104 @@ done
 "${psql[@]}" -q -f "$repo_dir/tests/db/board_invitation_operation_receipts.sql"
 "${psql[@]}" -q -f "$repo_dir/tests/db/my_tasks.sql"
 "${psql[@]}" -q -f "$repo_dir/tests/db/task_recovery.sql"
+"${psql[@]}" -q -f "$repo_dir/tests/db/task_comment_recovery_window.sql"
+"${psql[@]}" -q -f "$repo_dir/tests/db/task_comment_operation.sql"
+
+# Two sessions can both lose the response to one comment operation. The
+# receipt's unique-key winner must be returned to both without duplicating text.
+task_comment_race_dir="$test_dir/task-comment-race"
+mkdir -- "$task_comment_race_dir"
+task_comment_race_first_log="$task_comment_race_dir/actor-a.log"
+task_comment_race_second_log="$task_comment_race_dir/actor-b.log"
+IFS='|' read -r task_comment_race_slug task_comment_race_task_id \
+  task_comment_race_actor_id task_comment_race_operation_id task_comment_race_content < <(
+    "${psql[@]}" -AtF '|' -c "SELECT board_slug, task_id, actor_id, operation_id, content FROM public.issue16_comment_concurrency_fixture"
+  )
+
+PGAPPNAME=openkanban_task_comment_actor_a "${psql[@]}" -qAt \
+  -v board_slug="$task_comment_race_slug" -v task_id="$task_comment_race_task_id" \
+  -v actor_id="$task_comment_race_actor_id" -v operation_id="$task_comment_race_operation_id" \
+  -v content="$task_comment_race_content" > "$task_comment_race_first_log" 2>&1 <<'SQL' &
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', :'actor_id', true);
+WITH operation AS MATERIALIZED (
+  SELECT public.create_task_comment_p(
+    :'operation_id'::uuid, :'board_slug', :'task_id'::uuid, :'content'
+  ) AS result
+)
+SELECT (result->>'status') || ':' || (result->>'comment_id') FROM operation;
+SELECT pg_sleep(6);
+COMMIT;
+SQL
+task_comment_race_first_pid=$!
+
+task_comment_race_first_holding=false
+for _ in $(seq 1 100); do
+  race_state=$("${psql[@]}" -At -c "SELECT state FROM pg_stat_activity WHERE application_name = 'openkanban_task_comment_actor_a' AND state = 'active' AND query LIKE '%pg_sleep(6)%'")
+  if [[ "$race_state" == active ]]; then
+    task_comment_race_first_holding=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$task_comment_race_first_holding" != true ]]; then
+  cat -- "$task_comment_race_first_log" >&2
+  echo 'The first comment session did not hold its transaction.' >&2
+  wait "$task_comment_race_first_pid" || true
+  exit 1
+fi
+
+PGAPPNAME=openkanban_task_comment_actor_b "${psql[@]}" -qAt \
+  -v board_slug="$task_comment_race_slug" -v task_id="$task_comment_race_task_id" \
+  -v actor_id="$task_comment_race_actor_id" -v operation_id="$task_comment_race_operation_id" \
+  -v content="$task_comment_race_content" > "$task_comment_race_second_log" 2>&1 <<'SQL' &
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', :'actor_id', true);
+WITH operation AS MATERIALIZED (
+  SELECT public.create_task_comment_p(
+    :'operation_id'::uuid, :'board_slug', :'task_id'::uuid, :'content'
+  ) AS result
+)
+SELECT (result->>'status') || ':' || (result->>'comment_id') FROM operation;
+COMMIT;
+SQL
+task_comment_race_second_pid=$!
+
+task_comment_race_second_waiting=false
+for _ in $(seq 1 100); do
+  waiting_count=$("${psql[@]}" -At -c "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'openkanban_task_comment_actor_b' AND wait_event_type = 'Lock'")
+  if [[ "$waiting_count" == 1 ]]; then
+    task_comment_race_second_waiting=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$task_comment_race_second_waiting" != true ]]; then
+  cat -- "$task_comment_race_first_log" "$task_comment_race_second_log" >&2
+  echo 'The second comment session did not wait for the operation receipt.' >&2
+  "${psql[@]}" -q -c "SELECT pg_cancel_backend(pid) FROM pg_stat_activity WHERE application_name = 'openkanban_task_comment_actor_a'" >/dev/null
+  wait "$task_comment_race_first_pid" || true
+  wait "$task_comment_race_second_pid" || true
+  exit 1
+fi
+
+wait "$task_comment_race_first_pid" || { cat -- "$task_comment_race_first_log" >&2; exit 1; }
+wait "$task_comment_race_second_pid" || { cat -- "$task_comment_race_second_log" >&2; exit 1; }
+task_comment_race_first_result=$(grep -E '^confirmed:' "$task_comment_race_first_log" | tail -n 1)
+task_comment_race_second_result=$(grep -E '^confirmed:' "$task_comment_race_second_log" | tail -n 1)
+task_comment_race_count=$("${psql[@]}" -At -c "SELECT count(*) FROM public.task_comments WHERE task_id = '$task_comment_race_task_id' AND content = '$task_comment_race_content'")
+if [[ -z "$task_comment_race_first_result" \
+  || "$task_comment_race_first_result" != "$task_comment_race_second_result" \
+  || "$task_comment_race_count" != 1 ]]; then
+  echo 'Concurrent comment retries did not return one shared confirmed result.' >&2
+  cat -- "$task_comment_race_first_log" "$task_comment_race_second_log" >&2
+  echo "matching_comments=$task_comment_race_count" >&2
+  exit 1
+fi
+echo 'PASS: two concurrent sessions reconcile one comment operation without a duplicate'
+"${psql[@]}" -q -c 'DROP TABLE public.issue16_comment_concurrency_fixture'
 
 # Restore and expiry purge lock the same task deletion. Exercise both possible
 # winners with independent psql sessions and the private controlled-clock seam.

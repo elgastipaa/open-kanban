@@ -34,6 +34,7 @@ import {
   getTaskChecklistCompletionReview,
   type TaskChecklistCompletionReview,
 } from "@/lib/task-checklist-state";
+import { TaskCommentCreateOperationStore } from "@/lib/task-comments-state";
 import { pendingTaskInsertionIndex } from "@/lib/task-completion";
 import {
   cancelTaskDelete,
@@ -70,6 +71,7 @@ interface BoardProps {
   ownerAuthUserId: string;
   assignableMembers: AssignableBoardMember[] | null;
   initialTaskId: string | null;
+  initialCommentId: string | null;
   myTasksReturnHref: string | null;
 }
 
@@ -88,6 +90,7 @@ export function Board({
   ownerAuthUserId,
   assignableMembers,
   initialTaskId,
+  initialCommentId,
   myTasksReturnHref,
 }: BoardProps) {
   const router = useRouter();
@@ -218,6 +221,7 @@ export function Board({
       initialColumns={initialColumns}
       assignableMembers={assignableMembers}
       initialTaskId={initialTaskId}
+      initialCommentId={initialCommentId}
       myTasksReturnHref={myTasksReturnHref}
       isSessionStale={sessionStatus === "stale"}
       onAccessLost={onAccessLost}
@@ -232,6 +236,7 @@ function BoardWorkspace({
   initialColumns,
   assignableMembers,
   initialTaskId,
+  initialCommentId,
   myTasksReturnHref,
   isSessionStale,
   onAccessLost,
@@ -239,6 +244,10 @@ function BoardWorkspace({
   const router = useRouter();
   const { isMobile, isReady } = useDevice();
   const [openColumnFormSignal, setOpenColumnFormSignal] = useState(0);
+  const taskCommentOperations = useMemo(
+    () => new TaskCommentCreateOperationStore(actorId, slug),
+    [actorId, slug],
+  );
   const currentMemberNames = useMemo(
     () =>
       Object.fromEntries(
@@ -866,6 +875,15 @@ function BoardWorkspace({
       <TaskModal
         key={editingTask?.id ?? "closed"}
         task={editingTask}
+        slug={slug}
+        actorId={actorId}
+        role={board?.role ?? initialBoard.role}
+        initialCommentId={
+          editingTaskId === initialTaskId ? initialCommentId : null
+        }
+        commentOperations={taskCommentOperations}
+        isSessionStale={isSessionStale}
+        onConversationAccessLost={onAccessLost}
         boardTimeZone={board?.time_zone ?? initialBoard.time_zone}
         boardToday={board?.today ?? initialBoard.today}
         columns={columns}
@@ -875,6 +893,7 @@ function BoardWorkspace({
         onClose={() => {
           setEditingTaskId(null);
           if (myTasksReturnHref) router.push(myTasksReturnHref);
+          else if (initialCommentId) router.replace(`/${slug}`);
         }}
         onAfterClose={handleTaskEditorAfterClose}
         onReconcileTask={refreshTaskForEdit}

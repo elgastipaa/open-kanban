@@ -10,6 +10,7 @@ import {
   IconTypography,
 } from "@tabler/icons-react";
 import { useEffect, useRef, useState } from "react";
+import { TaskConversation } from "@/components/board/task-conversation";
 import { TaskDueDate } from "@/components/board/task-due-date";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -33,6 +34,7 @@ import {
   type TaskChecklistCompletionReview,
   type TaskChecklistMutationOutcome,
 } from "@/lib/task-checklist-state";
+import type { TaskCommentCreateOperationStore } from "@/lib/task-comments-state";
 import { taskCompletionFollowUp } from "@/lib/task-completion";
 import { formatTaskDueDate, isDateOnly } from "@/lib/task-date";
 import {
@@ -71,6 +73,13 @@ import { generateUUID } from "@/lib/utils";
 
 interface TaskModalProps {
   task: Task | null;
+  slug: string;
+  actorId: string;
+  role: "owner" | "collaborator";
+  initialCommentId: string | null;
+  commentOperations: TaskCommentCreateOperationStore;
+  isSessionStale: boolean;
+  onConversationAccessLost: () => void;
   boardTimeZone: string;
   boardToday: string;
   columns: ColumnWithTasks[];
@@ -174,6 +183,13 @@ function saveErrorMessage(error: unknown) {
 
 export function TaskModal({
   task,
+  slug,
+  actorId,
+  role,
+  initialCommentId,
+  commentOperations,
+  isSessionStale,
+  onConversationAccessLost,
   boardTimeZone,
   boardToday,
   columns,
@@ -1601,6 +1617,19 @@ export function TaskModal({
               {completionNotice}
             </output>
           )}
+
+          <TaskConversation
+            slug={slug}
+            taskId={baseTask.id}
+            actorId={actorId}
+            role={role}
+            initialCommentId={initialCommentId}
+            assignableMembers={assignableMembers}
+            operations={commentOperations}
+            isOnline={isOnline}
+            isSessionStale={isSessionStale}
+            onAccessLost={onConversationAccessLost}
+          />
 
           {!isOnline && (
             <output

@@ -65,6 +65,98 @@ export interface Task {
   checklist_version: number;
 }
 
+export interface TaskCommentMention {
+  start_char: number;
+  length_chars: number;
+  text: string;
+  user_id?: string;
+}
+
+export interface TaskComment {
+  id: string;
+  author_id: string;
+  author_name: string;
+  created_at: string;
+  edited_at: string | null;
+  version: number | null;
+  deleted: boolean;
+  content: string | null;
+  can_restore?: boolean;
+  expires_at?: string;
+  mentions: TaskCommentMention[];
+}
+
+export interface TaskCommentCursor {
+  created_at: string;
+  id: string;
+}
+
+export type TaskCommentPage =
+  | { status: "unavailable" }
+  | {
+      status: "available";
+      comments: TaskComment[];
+      has_more: boolean;
+      next_cursor: TaskCommentCursor | null;
+      anchor_id?: string;
+      anchor_index?: number;
+    };
+
+export interface TaskCommentMentionInput {
+  user_id: string;
+  start_char: number;
+  length_chars: number;
+}
+
+export interface TaskCommentCreateCommand {
+  task_id: string;
+  operation_id: string;
+  content: string;
+  mentions: TaskCommentMentionInput[];
+}
+
+export interface TaskCommentEditCommand {
+  task_id: string;
+  comment_id: string;
+  operation_id: string;
+  expected_version: number;
+  content: string;
+  mentions: TaskCommentMentionInput[];
+}
+
+export interface TaskCommentActionCommand {
+  action: "delete" | "restore";
+  task_id: string;
+  comment_id: string;
+  operation_id: string;
+}
+
+export type TaskCommentMutationResult =
+  | {
+      status: "confirmed";
+      operation_id: string;
+      comment_id: string;
+      version?: number;
+      deletion_cause?: "author" | "moderation";
+      deleted_at?: string;
+    }
+  | {
+      status: "conflict" | "unavailable" | "expired_unknown";
+      operation_id: string;
+      comment_id?: string;
+      version?: number;
+    }
+  | {
+      status: "expired";
+      operation_id: string;
+      comment_id?: string;
+    };
+
+export type TaskCommentCreateResult = Exclude<
+  TaskCommentMutationResult,
+  { status: "expired" }
+>;
+
 export interface TaskChecklistStep {
   id: string;
   text: string;

@@ -13,6 +13,7 @@ interface BoardPageProps {
   params: Promise<{ slug: string }>;
   searchParams: Promise<{
     task?: string | string[];
+    comment?: string | string[];
     from?: string | string[];
     order?: string | string[];
   }>;
@@ -46,11 +47,21 @@ export default async function BoardPage({
     )
       ? query.task
       : null;
+  const requestedCommentId =
+    typeof query.comment === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      query.comment,
+    )
+      ? query.comment
+      : null;
   const fromMyTasks = query.from === "my-tasks";
   const myTasksReturnOrder: MyTasksOrder =
     query.order === "created" ? "created" : "due";
   const returnQuery = new URLSearchParams();
   if (requestedTaskId) returnQuery.set("task", requestedTaskId);
+  if (requestedTaskId && requestedCommentId) {
+    returnQuery.set("comment", requestedCommentId);
+  }
   if (fromMyTasks) {
     returnQuery.set("from", "my-tasks");
     returnQuery.set("order", myTasksReturnOrder);
@@ -75,15 +86,16 @@ export default async function BoardPage({
 
   if (!boardData) notFound();
 
-  const initialTaskId = fromMyTasks ? requestedTaskId : null;
+  const initialTaskId =
+    fromMyTasks || requestedCommentId ? requestedTaskId : null;
   if (
-    fromMyTasks &&
+    (fromMyTasks || requestedCommentId !== null) &&
     initialTaskId &&
     !boardData.columns.some((column) =>
       column.tasks.some((task) => task.id === initialTaskId),
     )
   ) {
-    redirect(myTasksHref(myTasksReturnOrder));
+    redirect(fromMyTasks ? myTasksHref(myTasksReturnOrder) : `/${slug}`);
   }
 
   let assignableMembers: AssignableBoardMember[] | null = null;
@@ -101,6 +113,7 @@ export default async function BoardPage({
       ownerAuthUserId={authData.user.id}
       assignableMembers={assignableMembers}
       initialTaskId={initialTaskId}
+      initialCommentId={initialTaskId ? requestedCommentId : null}
       myTasksReturnHref={fromMyTasks ? myTasksHref(myTasksReturnOrder) : null}
     />
   );

@@ -16,6 +16,7 @@ export interface ColumnDeletionPreview {
 export type ColumnDeletionDecision =
   | "ready"
   | "needs_destination"
+  | "no_destination"
   | "invalid_destination"
   | "invalid_preview";
 
@@ -168,6 +169,7 @@ export function columnDeletionDecision(
   ) {
     return "invalid_preview";
   }
+  if (preview.destinations.length === 0) return "no_destination";
   if (preview.task_count > 0 && !destinationColumnId) {
     return "needs_destination";
   }
@@ -218,4 +220,10 @@ export function columnDeletionErrorMessage(
     case "confirmed":
       return "La columna se eliminó correctamente.";
   }
+}
+
+export function columnDeletionNoDestinationMessage(taskCount: number): string {
+  return taskCount > 0
+    ? "No se puede borrar la última columna. Agrega otra columna para trasladar allí las tareas o cancela para dejar esta columna."
+    : "No se puede borrar la última columna. Agrega otra columna o cancela para dejar esta columna.";
 }

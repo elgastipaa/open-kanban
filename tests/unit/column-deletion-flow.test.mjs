@@ -4,6 +4,7 @@ import {
   closeColumnDeletionDialog,
   columnDeletionDecision,
   columnDeletionErrorMessage,
+  columnDeletionNoDestinationMessage,
   createColumnDeletionCommand,
   failColumnDeletionPreview,
   failColumnDeletionSubmission,
@@ -38,6 +39,35 @@ test("an empty column can be removed without a destination", () => {
   assert.equal(
     columnDeletionDecision({ ...preview, task_count: 0 }, null),
     "ready",
+  );
+});
+
+test("the last empty column explains that another column must be added first", () => {
+  const lastColumn = { ...preview, task_count: 0, destinations: [] };
+  assert.equal(columnDeletionDecision(lastColumn, null), "no_destination");
+  assert.equal(
+    createColumnDeletionCommand(lastColumn, null, "operation-last"),
+    null,
+  );
+});
+
+test("the last populated column asks for a new destination before moving tasks", () => {
+  const lastColumn = { ...preview, destinations: [] };
+  assert.equal(columnDeletionDecision(lastColumn, null), "no_destination");
+  assert.equal(
+    createColumnDeletionCommand(lastColumn, null, "operation-last"),
+    null,
+  );
+});
+
+test("no destination copy distinguishes an empty last column from tasks to move", () => {
+  assert.equal(
+    columnDeletionNoDestinationMessage(0),
+    "No se puede borrar la última columna. Agrega otra columna o cancela para dejar esta columna.",
+  );
+  assert.equal(
+    columnDeletionNoDestinationMessage(2),
+    "No se puede borrar la última columna. Agrega otra columna para trasladar allí las tareas o cancela para dejar esta columna.",
   );
 });
 

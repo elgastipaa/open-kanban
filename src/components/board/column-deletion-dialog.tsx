@@ -9,6 +9,7 @@ import {
   type ColumnDeletionResultStatus,
   closeColumnDeletionDialog,
   columnDeletionErrorMessage,
+  columnDeletionNoDestinationMessage,
   failColumnDeletionPreview,
   failColumnDeletionSubmission,
   getColumnDeletionCommand,
@@ -149,6 +150,11 @@ export function ColumnDeletionDialog({
   const submitError = hasSubmitError ? state.error : null;
   const canRetrySameCommand =
     state.status === "submit_error" && !retryNeedsNewPreview(state.error);
+  const noDeletionDestination =
+    (state.status === "ready" ||
+      state.status === "submitting" ||
+      state.status === "submit_error") &&
+    state.preview.destinations.length === 0;
 
   return (
     <Modal
@@ -188,84 +194,99 @@ export function ColumnDeletionDialog({
         state.status === "submitting" ||
         state.status === "submit_error" ? (
           <>
-            <p className="text-sm text-text-secondary leading-relaxed">
-              {state.preview.task_count === 0
-                ? `La columna “${state.preview.column_title}” está vacía.`
-                : `La columna “${state.preview.column_title}” tiene ${state.preview.task_count} ${state.preview.task_count === 1 ? "tarea" : "tareas"}. Elige dónde trasladarlas antes de eliminarla.`}{" "}
-              Podrás recuperar su estructura durante siete días; los traslados
-              no se deshacen.
-            </p>
+            {noDeletionDestination ? (
+              <output
+                className="text-sm text-text-secondary leading-relaxed"
+                aria-live="polite"
+              >
+                {columnDeletionNoDestinationMessage(state.preview.task_count)}
+              </output>
+            ) : (
+              <>
+                <p className="text-sm text-text-secondary leading-relaxed">
+                  {state.preview.task_count === 0
+                    ? `La columna “${state.preview.column_title}” está vacía.`
+                    : `La columna “${state.preview.column_title}” tiene ${state.preview.task_count} ${state.preview.task_count === 1 ? "tarea" : "tareas"}. Elige dónde trasladarlas antes de eliminarla.`}{" "}
+                  Podrás recuperar su estructura durante siete días; los
+                  traslados no se deshacen.
+                </p>
 
-            {state.preview.task_count > 0 ? (
-              <div className="space-y-2">
-                <label
-                  htmlFor={destinationId}
-                  className="block font-medium text-sm text-text-primary"
-                >
-                  Trasladar las tareas a
-                </label>
-                <select
-                  id={destinationId}
-                  value={
-                    state.status === "ready"
-                      ? (state.destination_column_id ?? "")
-                      : (state.command.destination_column_id ?? "")
-                  }
-                  onChange={(event) =>
-                    setState((current) =>
-                      selectColumnDeletionDestination(
-                        current,
-                        event.target.value || null,
-                      ),
-                    )
-                  }
-                  disabled={state.status !== "ready"}
-                  aria-describedby={alertId}
-                  className="w-full rounded-md border border-border bg-surface-raised px-3 py-2 text-sm text-text-primary outline-none focus:border-accent"
-                >
-                  <option value="">Elige una columna del tablero</option>
-                  {state.preview.destinations.map((destination) => (
-                    <option key={destination.id} value={destination.id}>
-                      {destination.title}
-                    </option>
-                  ))}
-                </select>
-                <span id={alertId} className="sr-only">
-                  Solo se muestran columnas de este tablero.
-                </span>
-              </div>
-            ) : null}
+                {state.preview.task_count > 0 ? (
+                  <div className="space-y-2">
+                    <label
+                      htmlFor={destinationId}
+                      className="block font-medium text-sm text-text-primary"
+                    >
+                      Trasladar las tareas a
+                    </label>
+                    <select
+                      id={destinationId}
+                      value={
+                        state.status === "ready"
+                          ? (state.destination_column_id ?? "")
+                          : (state.command.destination_column_id ?? "")
+                      }
+                      onChange={(event) =>
+                        setState((current) =>
+                          selectColumnDeletionDestination(
+                            current,
+                            event.target.value || null,
+                          ),
+                        )
+                      }
+                      disabled={state.status !== "ready"}
+                      aria-describedby={alertId}
+                      className="w-full rounded-md border border-border bg-surface-raised px-3 py-2 text-sm text-text-primary outline-none focus:border-accent"
+                    >
+                      <option value="">Elige una columna del tablero</option>
+                      {state.preview.destinations.map((destination) => (
+                        <option key={destination.id} value={destination.id}>
+                          {destination.title}
+                        </option>
+                      ))}
+                    </select>
+                    <span id={alertId} className="sr-only">
+                      Solo se muestran columnas de este tablero.
+                    </span>
+                  </div>
+                ) : null}
 
-            {submitError ? (
-              <p className="text-red-300 text-sm" role="alert">
-                {columnDeletionErrorMessage(submitError)}
-              </p>
-            ) : null}
+                {submitError ? (
+                  <p className="text-red-300 text-sm" role="alert">
+                    {columnDeletionErrorMessage(submitError)}
+                  </p>
+                ) : null}
+              </>
+            )}
 
             <div className="flex flex-wrap items-center justify-end gap-2 pt-2">
               <Button variant="ghost" onClick={close} disabled={!canClose}>
                 Cancelar
               </Button>
-              {submitError && retryNeedsNewPreview(submitError) ? (
+              {!noDeletionDestination &&
+              submitError &&
+              retryNeedsNewPreview(submitError) ? (
                 <Button variant="ghost" onClick={refreshPreview}>
                   Revisar vista previa
                 </Button>
               ) : null}
-              <Button
-                variant="danger"
-                onClick={() => void confirm()}
-                disabled={
-                  state.status === "submitting" ||
-                  (state.status === "ready" && !command) ||
-                  (state.status === "submit_error" && !canRetrySameCommand)
-                }
-              >
-                {state.status === "submitting"
-                  ? "Eliminando…"
-                  : canRetrySameCommand
-                    ? "Reintentar operación"
-                    : "Eliminar columna"}
-              </Button>
+              {!noDeletionDestination ? (
+                <Button
+                  variant="danger"
+                  onClick={() => void confirm()}
+                  disabled={
+                    state.status === "submitting" ||
+                    (state.status === "ready" && !command) ||
+                    (state.status === "submit_error" && !canRetrySameCommand)
+                  }
+                >
+                  {state.status === "submitting"
+                    ? "Eliminando…"
+                    : canRetrySameCommand
+                      ? "Reintentar operación"
+                      : "Eliminar columna"}
+                </Button>
+              ) : null}
             </div>
           </>
         ) : null}

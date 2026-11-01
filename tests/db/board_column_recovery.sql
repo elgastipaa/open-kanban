@@ -33,6 +33,7 @@ DECLARE
   v_created jsonb;
   v_preview jsonb;
   v_deleted jsonb;
+  v_delete_replay jsonb;
   v_restored jsonb;
   v_restore_replay jsonb;
   v_live_task_id uuid;
@@ -109,6 +110,28 @@ BEGIN
   IF v_deleted->>'status' IS DISTINCT FROM 'confirmed' THEN
     RAISE EXCEPTION 'Column deletion with an explicit destination failed: %', v_deleted;
   END IF;
+  v_delete_replay := public.delete_column_p(
+    '18000000-0000-4000-8000-000000000006', v_board.slug, v_source.id,
+    v_destination.id, (v_preview->>'task_order_version')::bigint
+  );
+  IF v_delete_replay->>'status' IS DISTINCT FROM 'confirmed'
+    OR v_delete_replay->>'operation_id' IS DISTINCT FROM '18000000-0000-4000-8000-000000000006'
+    OR v_delete_replay->>'moved_task_count' IS DISTINCT FROM v_deleted->>'moved_task_count'
+    OR v_delete_replay->>'expires_at' IS DISTINCT FROM v_deleted->>'expires_at'
+    OR (SELECT count(*) FROM public.get_tasks_by_board_p(v_board.id) AS task
+        WHERE task.column_id = v_destination.id) <> 2 THEN
+    RAISE EXCEPTION 'Retrying a confirmed column deletion must replay its original result without moving tasks twice: %',
+      v_delete_replay;
+  END IF;
+  BEGIN
+    PERFORM public.delete_column_p(
+      '18000000-0000-4000-8000-000000000006', v_board.slug, v_source.id,
+      NULL, (v_preview->>'task_order_version')::bigint
+    );
+    RAISE EXCEPTION 'Reusing a column deletion operation with a different destination must be rejected';
+  EXCEPTION WHEN check_violation THEN
+    NULL;
+  END;
 
   SELECT count(*) INTO v_task_count
   FROM public.get_tasks_by_board_p(v_board.id) AS task

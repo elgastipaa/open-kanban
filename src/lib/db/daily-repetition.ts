@@ -125,6 +125,7 @@ export interface RepetitionStatus {
   advance_days?: number;
   appearance_column_id?: string;
   template_snapshot?: RepetitionSeriesTemplate;
+  template_label_ids?: string[];
   occurrences?: Array<{
     occurrence_on: string;
     task_id: string;
@@ -226,6 +227,13 @@ export type RepetitionEditResult = Omit<RepetitionEditPreview, "status"> & {
 };
 
 export type RepetitionErrorReason = "uncertain" | "rejected" | "access_denied";
+
+export interface RepetitionTemplateLabelsResult {
+  status: "confirmed" | "conflict" | "unavailable";
+  series_id?: string;
+  reason?: "stale_selection" | "too_many_labels" | "invalid_selection";
+  template_label_ids?: string[];
+}
 
 export class RepetitionError extends Error {
   constructor(readonly reason: RepetitionErrorReason) {
@@ -388,4 +396,37 @@ export async function getRepetition(
     throw new RepetitionError("uncertain");
   }
   return data as unknown as RepetitionStatus;
+}
+
+export async function setRepetitionTemplateLabels(
+  supabase: SupabaseClient,
+  slug: string,
+  taskId: string,
+  expectedLabelIds: string[],
+  labelIds: string[],
+): Promise<RepetitionTemplateLabelsResult> {
+  const { data, error } = await supabase.rpc(
+    "set_repetition_template_labels_p",
+    {
+      p_slug: slug,
+      p_task_id: taskId,
+      p_expected_label_ids: expectedLabelIds,
+      p_label_ids: labelIds,
+    },
+  );
+  if (error) throwRepetitionError(error);
+  if (
+    !isRecord(data) ||
+    !["confirmed", "conflict", "unavailable"].includes(String(data.status))
+  ) {
+    throw new RepetitionError("uncertain");
+  }
+  if (
+    data.template_label_ids !== undefined &&
+    (!Array.isArray(data.template_label_ids) ||
+      !data.template_label_ids.every((id) => typeof id === "string"))
+  ) {
+    throw new RepetitionError("uncertain");
+  }
+  return data as unknown as RepetitionTemplateLabelsResult;
 }

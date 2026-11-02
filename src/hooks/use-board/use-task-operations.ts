@@ -17,6 +17,7 @@ import {
   previewRepetitionEdit,
   RepetitionError,
   reconcileTaskCreation,
+  setRepetitionTemplateLabels,
   setTaskCompletion,
   TaskCaptureError,
   TaskChecklistError,
@@ -36,6 +37,7 @@ import type {
   RepetitionPattern,
   RepetitionPreview,
   RepetitionStatus,
+  RepetitionTemplateLabelsResult,
 } from "@/lib/db/daily-repetition";
 import { getSessionEpoch } from "@/lib/supabase/client";
 import { TaskChecklistAddOperationStore } from "@/lib/task-checklist-state";
@@ -885,6 +887,44 @@ export function useTaskOperations({
     ],
   );
 
+  const setTaskRepetitionTemplateLabels = useCallback(
+    async (
+      taskId: string,
+      expectedLabelIds: string[],
+      labelIds: string[],
+    ): Promise<RepetitionTemplateLabelsResult> => {
+      if (!isPersistedRef.current || taskId.startsWith("local-")) {
+        return { status: "unavailable" };
+      }
+      const sessionEpoch = getSessionEpoch();
+      try {
+        const result = await setRepetitionTemplateLabels(
+          supabase,
+          slug,
+          taskId,
+          expectedLabelIds,
+          labelIds,
+        );
+        if (sessionEpoch !== getSessionEpoch()) {
+          throw new Error(
+            "The session changed while saving repetition labels.",
+          );
+        }
+        if (result.status === "confirmed") onMutationRef.current?.();
+        return result;
+      } catch (error) {
+        if (
+          sessionEpoch !== getSessionEpoch() ||
+          (error instanceof RepetitionError && error.reason === "access_denied")
+        ) {
+          onAccessLost();
+        }
+        throw error;
+      }
+    },
+    [supabase, slug, isPersistedRef, onMutationRef, onAccessLost],
+  );
+
   const completeTask = useCallback(
     async (command: TaskCompletionCommand): Promise<TaskCompletionResult> => {
       if (!isPersistedRef.current || command.id.startsWith("local-")) {
@@ -1434,6 +1474,7 @@ export function useTaskOperations({
     repetitionOperations,
     previewTaskRepetitionEdit,
     editTaskRepetition,
+    setTaskRepetitionTemplateLabels,
     repetitionEditOperations,
   };
 }

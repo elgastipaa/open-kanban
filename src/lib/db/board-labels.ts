@@ -30,6 +30,10 @@ export interface BoardLabelItemPreview {
   would_exceed_limit: boolean;
 }
 
+export interface BoardLabelSeriesPreview extends BoardLabelItemPreview {
+  state: "active" | "stopped" | "finished";
+}
+
 export interface BoardLabelRestorePreview {
   status: "preview" | "unavailable" | "expired";
   can_restore?: boolean;
@@ -37,6 +41,7 @@ export interface BoardLabelRestorePreview {
   label?: DeletedBoardLabel & { proposed_name: string };
   associated_tasks: BoardLabelItemPreview[];
   associated_birthdays: BoardLabelItemPreview[];
+  associated_series: BoardLabelSeriesPreview[];
 }
 
 export interface BoardLabelMutationResult {
@@ -241,7 +246,7 @@ export function previewRestoreBoardLabel(
 ) {
   return call<BoardLabelRestorePreview>(
     supabase,
-    "preview_restore_board_label_p",
+    "preview_restore_board_label_with_series_p",
     {
       p_slug: command.slug,
       p_label_id: command.labelId,
@@ -259,15 +264,22 @@ export function restoreBoardLabel(
     name: string;
     taskIds: string[];
     birthdayIds: string[];
+    seriesIds: string[];
   },
 ) {
-  return call<BoardLabelMutationResult>(supabase, "restore_board_label_p", {
+  return call<
+    BoardLabelMutationResult & {
+      restored_series_ids?: string[];
+      omitted_series_ids?: string[];
+    }
+  >(supabase, "restore_board_label_with_series_p", {
     p_slug: command.slug,
     p_label_id: command.labelId,
     p_expected_version: command.expectedVersion,
     p_name: command.name,
     p_task_ids: command.taskIds,
     p_birthday_ids: command.birthdayIds,
+    p_series_ids: command.seriesIds,
   });
 }
 

@@ -116,6 +116,7 @@ export function BoardLabelsDialog({
   const [restoreName, setRestoreName] = useState("");
   const [selectedTasks, setSelectedTasks] = useState<string[]>([]);
   const [selectedBirthdays, setSelectedBirthdays] = useState<string[]>([]);
+  const [selectedSeries, setSelectedSeries] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [catalogReadFailed, setCatalogReadFailed] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -153,6 +154,7 @@ export function BoardLabelsDialog({
     setRestoreName("");
     setSelectedTasks([]);
     setSelectedBirthdays([]);
+    setSelectedSeries([]);
     setNewName("");
     setNewColor("blue");
     setNotice(null);
@@ -604,6 +606,13 @@ export function BoardLabelsDialog({
             preserveSelections,
           ),
         );
+        setSelectedSeries((current) =>
+          reconcileRestoreSelection(
+            current,
+            (next.associated_series ?? []).map((item) => item.id),
+            preserveSelections,
+          ),
+        );
       } else if (next.status === "expired") {
         setError(resultMessage("expired"));
       }
@@ -648,6 +657,7 @@ export function BoardLabelsDialog({
         name: restoreName,
         taskIds: selectedTasks,
         birthdayIds: selectedBirthdays,
+        seriesIds: selectedSeries,
       });
       if (result.status !== "confirmed") {
         if (result.status === "unavailable") {
@@ -686,12 +696,16 @@ export function BoardLabelsDialog({
 
   const previewTasks = preview?.associated_tasks ?? [];
   const previewBirthdays = preview?.associated_birthdays ?? [];
+  const previewSeries = preview?.associated_series ?? [];
   const hasSelectedOverflow =
     previewTasks.some(
       (item) => item.would_exceed_limit && selectedTasks.includes(item.id),
     ) ||
     previewBirthdays.some(
       (item) => item.would_exceed_limit && selectedBirthdays.includes(item.id),
+    ) ||
+    previewSeries.some(
+      (item) => item.would_exceed_limit && selectedSeries.includes(item.id),
     );
   const canConfirmRestore =
     preview?.status === "preview" &&
@@ -1111,10 +1125,18 @@ export function BoardLabelsDialog({
                     onChange={setSelectedBirthdays}
                     disabled={loading}
                   />
+                  <RestoreAssociationChoices
+                    title="Plantillas de próximas repeticiones"
+                    items={previewSeries}
+                    selectedIds={selectedSeries}
+                    onChange={setSelectedSeries}
+                    disabled={loading}
+                  />
                   {hasSelectedOverflow ? (
                     <output className="block text-priority-medium text-sm">
-                      Desmarcá cada elemento que ya tenga 10 etiquetas o libera
-                      un lugar y actualizá la vista previa.
+                      Desmarcá cada tarea, cumpleaños o plantilla que ya tenga
+                      10 etiquetas, o libera un lugar y actualizá la vista
+                      previa.
                     </output>
                   ) : null}
                   <div className="flex justify-end gap-2">

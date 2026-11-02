@@ -285,6 +285,13 @@ if [[ "${TEST_DB_FOCUS:-}" == 'issue30' ]]; then
   printf 'Issue #30 database regression tests passed (disposable PostgreSQL).\n'
   exit 0
 fi
+if [[ "${TEST_DB_FOCUS:-}" == 'issue31' ]]; then
+  "${psql[@]}" -f "$repo_dir/tests/db/repetition_series_labels.sql"
+  bash "$repo_dir/scripts/test-db-issue-31-race.sh" \
+    "$pg_bin/psql" "$test_dir" 55439 "$test_dir/issue31-label-generation-race"
+  printf 'Issue #31 database regression tests passed (disposable PostgreSQL).\n'
+  exit 0
+fi
 "${psql[@]}" -f "$repo_dir/tests/db/closed_access.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/authentication.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/realtime_epoch.sql"

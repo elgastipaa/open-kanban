@@ -1,0 +1,47 @@
+# Issue #31 — evidencia de validación
+
+## Entorno y alcance
+
+- Worktree `C:\Users\gasto\.codex\worktrees\openkanban-issue-31\open-kanban`, rama `codex/issue-31`, base fija `b4bfa8780d98a483d3d73674e637ce40b74159ef`.
+- Node `v24.14.1`, pnpm `11.25.0`, Next.js `16.4.2`, Biome `2.2.0`.
+- La implementación conserva las dependencias `Blocked by #26` y `#30`. No cambia su estado ni adelanta vistas guardadas, exportación/importación u otros tickets.
+- Las pruebas SQL usan solo identidades, fechas, tableros, etiquetas y tareas sintéticas en PostgreSQL local descartable. No se usaron OAuth, credenciales ni datos reales; no se consultó SQL remoto ni se hizo deploy.
+- No se encontró un ADR aplicable a la herencia de etiquetas en repeticiones; se siguieron C-101/Q9, C-102 y sus contratos de autorización/restauración.
+
+## Criterios y evidencia
+
+| Criterio | Evidencia | Estado |
+| --- | --- | --- |
+| Cada serie conserva una selección de plantilla separada de las ocurrencias | La migración 056 crea `board_label_repetition_assignments` con identidad de tablero y generación, siembra series nuevas desde las etiquetas activas de la ocurrencia de origen y hace backfill de series existentes. La RPC `set_repetition_template_labels_p` requiere miembro vigente, ocurrencia actual de una serie activa, generación actual y conjunto esperado exacto; aplica CAS bajo locks de tablero/serie y limita la selección a 10. La tabla no concede acceso directo a roles de aplicación. | PostgreSQL descartable; tests de selección independiente, CAS, generación y referencias de otro tablero |
+| Crear/editar plantilla no modifica etiquetas de actuales ni pasadas | Las regresiones cambian las etiquetas de la ocurrencia actual y la plantilla por separado, verifican que ambas selecciones sigan independientes y comprueban que editar la plantilla no reescribe ocurrencias ya generadas. El editor presenta un selector rotulado “Etiquetas de próximas tarjetas”, un guardado separado y explica el alcance futuro. | PostgreSQL descartable y contrato unitario; recorrido autenticado pendiente |
+| Cada ocurrencia nueva hereda solo etiquetas de plantilla actualmente activas | El trigger de insert copia relaciones activas del mismo tablero/generación dentro de la transacción de inserción de la ocurrencia. No hereda en la primera ranura ni al reconectar una serie recuperada. Una etiqueta borrada queda oculta y no se copia; una restauración explícita solo afecta generaciones posteriores, no las nacidas durante su ausencia. El límite de 10 se valida al insertar y revierte la transacción completa si se viola. | PostgreSQL descartable; foco #31 y suite completa |
+| Borrado/restauración de etiqueta resuelve explícitamente capacidad de plantillas | El preview owner-only lista series afectadas y su capacidad actual; la confirmación acepta IDs explícitos de series a recuperar y rechaza una plantilla seleccionada que exceda 10. Omitir una serie retira solo su relación con la etiqueta recuperada y no toca tareas/ocurrencias. El RPC legado conserva la selección histórica y sus motivos de conflicto (`active_limit`, `duplicate_name`, `tombstone_association_limit`); las relaciones de series omitidas se eliminan solo después de que la recuperación base confirme, sin escritura parcial al devolver conflicto. | PostgreSQL descartable, con preview/cupo, omisión explícita y compatibilidad de #30 |
+| Borrado de etiqueta y generación se serializan sin herencia incorrecta | El runner `scripts/test-db-issue-31-race.sh` usa sesiones PostgreSQL concurrentes y verifica espera real en `pg_stat_activity`. En orden generación→borrado, la ocurrencia confirmada conserva la etiqueta que estaba activa al generarse y luego la etiqueta queda soft-deleted. En orden borrado→generación, la nueva ocurrencia no hereda la etiqueta oculta. En ambos órdenes existe exactamente una ocurrencia para la fecha y el estado final concuerda con el orden del lock del tablero. | Dos sesiones reales, ambos órdenes, PostgreSQL descartable |
+| Series terminales y ocurrencias borradas/purgadas no exponen su plantilla como historia | El override de 056 conserva el filtro de 045: stopped/finished y task tombstones `deleted`/`purged` reciben datos operativos de serie, pero no `template_snapshot` ni `template_label_ids`. La regresión de ciclo de vida verificó explícitamente los cuatro estados; el caso rojo inicial reprodujo que el getter nuevo reexponía el snapshot terminal redacted y los IDs. | PostgreSQL descartable; getters probados para stopped, finished, deleted y purged |
+| Permisos y borradores de UI | La mutación exige aplicación autorizada y membresía vigente; el editor solo ofrece cambios en series activas y la confirmación CAS conserva el borrador ante `stale_selection`, mostrando revisión explícita del conjunto actual antes de permitir reintento. Las etiquetas de plantilla se pasan como datos independientes de las etiquetas de la tarea. | RPC/contrato unitario y typecheck; sesión Auth real pendiente |
+
+## Ciclo TDD y verificaciones reproducibles
+
+| Comando o etapa | Resultado |
+| --- | --- |
+| Rojo inicial `pnpm test:db:issue-31` | Exit distinto de cero esperado: la API aún no devolvía `template_label_ids` de plantilla. |
+| Rojo de redacción terminal en DB completa | Exit distinto de cero esperado: el override de 056 devolvía `template_snapshot` redacted y `template_label_ids` para una serie terminada; la aserción se añadió antes del fix. |
+| Rojo de compatibilidad restore #30 | Exit distinto de cero esperado: el wrapper cambió `active_limit`/`tombstone_association_limit` por un motivo genérico y podía retirar relaciones antes del rechazo. El fix conserva los motivos previos y mueve la retirada de relaciones omitidas después del éxito de la RPC base. |
+| `pnpm test:db:issue-30` | Exit `0`; regresiones de catálogo/recuperación y carrera del último cupo de #30, aplicando migraciones `001–056`. |
+| `pnpm test:db:issue-31` | Exit `0`; pruebas focales de plantilla/herencia/restore y carreras de borrado-generación en ambos órdenes, en PostgreSQL descartable con migraciones `001–056`. |
+| `pnpm test:db` | Exit `0`; suites DB completas sobre PostgreSQL descartable, migraciones `001–056`, incluidos los casos de ciclo de vida #27 y recuperación de etiquetas #30. |
+| `pnpm test:unit` | Exit `0`; `207/207`. Node emitió advertencias preexistentes `MODULE_TYPELESS_PACKAGE_JSON` en módulos del repositorio. |
+| `pnpm exec next typegen` | Exit `0`; tipos de rutas generados con Next `16.4.2`; no aparecieron cambios rastreados fuera del ticket. |
+| `pnpm typecheck` | Exit `0`; `tsc --noEmit`, después de `next typegen`. |
+| `pnpm build` | Exit `0`; build Next.js `16.4.2`, incluyendo rutas de tablero y `/series`. |
+| `pnpm exec biome check --line-ending=crlf` sobre los 10 archivos TypeScript/JavaScript cambiados | Exit `0`; sin diagnósticos de formato/lint. |
+| `pnpm exec biome check --line-ending=crlf --formatter-enabled=false` | Exit `0`; chequeo global de 219 archivos sin diagnósticos, formatter desactivado para no cambiar archivos ajenos. |
+| `bash -n scripts/test-db.sh scripts/test-db-issue-30.sh scripts/test-db-issue-31.sh scripts/test-db-issue-31-race.sh` | Exit `0`; sintaxis shell válida. |
+| `git diff --check` | Exit `0`; sin errores de whitespace. |
+
+## Pendientes humanos
+
+- Recorrido autenticado en navegador para editar y guardar etiquetas de plantilla, conflicto concurrente, borrar/restaurar etiqueta con preview y verificar las próximas tarjetas. No se hizo bypass de Auth.
+- Revisión manual de teclado, lector de pantalla, foco, mensajes de estado, responsive y móvil/escritorio; las pruebas unitarias de contrato no sustituyen la aceptación visual/accesible.
+- Confirmar en el host de ejecución normal que el scheduler conserva la herencia bajo las credenciales de servicio desplegadas. No se modificó ni verificó infraestructura/cron/host.
+- #26 y #30 permanecen como bloqueos nativos y sus gates humanos no se aceptan aquí. #31 no se cierra ni se integra con esta evidencia.

@@ -144,6 +144,7 @@ BEGIN
   v_finished_lookup := public.get_repetition_p(v_board.slug, v_finished_task.id);
   IF v_finished_lookup->>'state' IS DISTINCT FROM 'finished'
     OR v_finished_lookup ? 'template_snapshot'
+    OR v_finished_lookup ? 'template_label_ids'
     OR v_finished_lookup::text LIKE '%No debe persistir como historia%' THEN
     RAISE EXCEPTION 'A finished series exposed its template as history: %', v_finished_lookup;
   END IF;
@@ -176,6 +177,7 @@ BEGIN
   v_repetition_lookup := public.get_repetition_p(v_board.slug, v_task.id);
   IF v_repetition_lookup->>'state' IS DISTINCT FROM 'stopped'
     OR v_repetition_lookup ? 'template_snapshot'
+    OR v_repetition_lookup ? 'template_label_ids'
     OR v_repetition_lookup::text LIKE '%Se conserva al reprogramar%' THEN
     RAISE EXCEPTION 'A stopped series exposed its template as history: %', v_repetition_lookup;
   END IF;
@@ -365,6 +367,12 @@ BEGIN
   IF v_deleted->>'status' IS DISTINCT FROM 'confirmed' THEN
     RAISE EXCEPTION 'Synthetic task deletion after reprogramming failed: %', v_deleted;
   END IF;
+  v_repetition_lookup := public.get_repetition_p(refs.board_slug, refs.task_id);
+  IF v_repetition_lookup ? 'template_snapshot'
+    OR v_repetition_lookup ? 'template_label_ids' THEN
+    RAISE EXCEPTION 'A deleted occurrence exposed its template as recovery history: %',
+      v_repetition_lookup;
+  END IF;
   v_restored := public.restore_task_p(
     '27000000-0000-4000-8000-000000000075', refs.board_slug,
     refs.task_id, refs.column_id
@@ -424,3 +432,62 @@ END;
 $$;
 
 \echo 'PASS: stop retains current/history; reprogram creates independent series with same task.'
+
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '42700000-0000-4000-8000-000000000002', true);
+DO $$
+DECLARE
+  refs issue27_lifecycle_refs%ROWTYPE;
+  v_deleted jsonb;
+  v_lookup jsonb;
+BEGIN
+  SELECT * INTO refs FROM issue27_lifecycle_refs;
+  v_deleted := public.delete_task_p(
+    '27000000-0000-4000-8000-000000000090', refs.board_slug,
+    refs.task_id, 'user_requested'
+  );
+  IF v_deleted->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Synthetic terminal lookup deletion failed: %', v_deleted;
+  END IF;
+  v_lookup := public.get_repetition_p(refs.board_slug, refs.task_id);
+  IF v_lookup ? 'template_snapshot' OR v_lookup ? 'template_label_ids' THEN
+    RAISE EXCEPTION 'A deleted active occurrence exposed its template: %', v_lookup;
+  END IF;
+END;
+$$;
+COMMIT;
+
+RESET ROLE;
+DO $$
+DECLARE
+  refs issue27_lifecycle_refs%ROWTYPE;
+  v_expires_at timestamptz;
+BEGIN
+  SELECT * INTO refs FROM issue27_lifecycle_refs;
+  SELECT deletion.expires_at INTO STRICT v_expires_at
+  FROM public.task_deletions AS deletion
+  WHERE deletion.task_id = refs.task_id AND deletion.state = 'deleted';
+  IF public.purge_expired_task_internal_p(refs.task_id, v_expires_at)
+    IS DISTINCT FROM 'purged' THEN
+    RAISE EXCEPTION 'Synthetic terminal template purge did not complete';
+  END IF;
+END;
+$$;
+
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '42700000-0000-4000-8000-000000000002', true);
+DO $$
+DECLARE
+  refs issue27_lifecycle_refs%ROWTYPE;
+  v_lookup jsonb;
+BEGIN
+  SELECT * INTO refs FROM issue27_lifecycle_refs;
+  v_lookup := public.get_repetition_p(refs.board_slug, refs.task_id);
+  IF v_lookup ? 'template_snapshot' OR v_lookup ? 'template_label_ids' THEN
+    RAISE EXCEPTION 'A purged occurrence exposed its template as history: %', v_lookup;
+  END IF;
+END;
+$$;
+COMMIT;

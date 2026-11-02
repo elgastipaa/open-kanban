@@ -2,6 +2,7 @@
 
 import { IconRepeat } from "@tabler/icons-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { BoardLabelPicker } from "@/components/labels/board-label-picker";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import type { RepetitionEditOperationStore } from "@/lib/daily-repetition-edit-state";
@@ -17,6 +18,7 @@ import type {
   RepetitionPreview,
   RepetitionSeriesTemplate,
   RepetitionStatus,
+  RepetitionTemplateLabelsResult,
 } from "@/lib/db/daily-repetition";
 import { RepetitionError } from "@/lib/db/daily-repetition";
 import {
@@ -28,6 +30,7 @@ import {
 import { formatTaskDueDate } from "@/lib/task-date";
 import type {
   AssignableBoardMember,
+  BoardLabel,
   ColumnWithTasks,
   Priority,
   Task,
@@ -47,6 +50,7 @@ interface TaskRepetitionProps {
   editOperations: RepetitionEditOperationStore;
   columns: ColumnWithTasks[];
   assignableMembers: AssignableBoardMember[] | null;
+  labels: BoardLabel[];
   onLoad: (taskId: string) => Promise<RepetitionStatus>;
   onPreview: (
     taskId: string,
@@ -63,6 +67,11 @@ interface TaskRepetitionProps {
     command: Omit<RepetitionEditCommand, "operation_id" | "expected_revision">,
   ) => Promise<RepetitionEditPreview>;
   onEdit: (command: RepetitionEditCommand) => Promise<RepetitionEditResult>;
+  onSetTemplateLabels: (
+    taskId: string,
+    expectedLabelIds: string[],
+    labelIds: string[],
+  ) => Promise<RepetitionTemplateLabelsResult>;
 }
 
 type FinalMode = RepetitionFinalMode;
@@ -155,11 +164,13 @@ export function TaskRepetition({
   editOperations,
   columns,
   assignableMembers,
+  labels,
   onLoad,
   onPreview,
   onCreate,
   onPreviewEdit,
   onEdit,
+  onSetTemplateLabels,
 }: TaskRepetitionProps) {
   const [status, setStatus] = useState<RepetitionStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -195,6 +206,14 @@ export function TaskRepetition({
   const [templateSteps, setTemplateSteps] = useState<
     RepetitionTemplateStepDraft[]
   >([]);
+  const [templateLabelIds, setTemplateLabelIds] = useState<string[]>([]);
+  const [templateLabelBaseline, setTemplateLabelBaseline] = useState<string[]>(
+    [],
+  );
+  const [templateLabelConflict, setTemplateLabelConflict] = useState<
+    string[] | null
+  >(null);
+  const [isSavingTemplateLabels, setIsSavingTemplateLabels] = useState(false);
   const [preview, setPreview] = useState<RepetitionPreview | null>(null);
   const [editPreview, setEditPreview] = useState<RepetitionEditPreview | null>(
     null,
@@ -212,6 +231,14 @@ export function TaskRepetition({
     useState<RepetitionEditCommand | null>(null);
   const operationIdRef = useRef<string | null>(null);
   const editOperationIdRef = useRef<string | null>(null);
+
+  const applyLoadedTemplateLabels = useCallback((result: RepetitionStatus) => {
+    if (result.status !== "available") return;
+    const next = [...(result.template_label_ids ?? [])].sort();
+    setTemplateLabelIds(next);
+    setTemplateLabelBaseline(next);
+    setTemplateLabelConflict(null);
+  }, []);
 
   const applyPattern = useCallback(
     (pattern: RepetitionPattern, anchor: string) => {
@@ -307,6 +334,7 @@ export function TaskRepetition({
       .then((result) => {
         if (!active) return;
         setStatus(result);
+        applyLoadedTemplateLabels(result);
         if (
           !pendingEdit &&
           result.status === "available" &&
@@ -381,6 +409,7 @@ export function TaskRepetition({
   }, [
     onLoad,
     applyPattern,
+    applyLoadedTemplateLabels,
     clearPreview,
     operations,
     editOperations,
@@ -638,7 +667,9 @@ export function TaskRepetition({
         clearPreview();
         setShowSetup(false);
         setNotice("La repetición quedó guardada.");
-        setStatus(await onLoad(task.id));
+        const nextStatus = await onLoad(task.id);
+        setStatus(nextStatus);
+        applyLoadedTemplateLabels(nextStatus);
         return;
       }
       if (result.status === "confirmation_required") {
@@ -839,6 +870,65 @@ export function TaskRepetition({
     await submitEdit(retryEditCommand);
   }
 
+  async function saveTemplateLabels() {
+    if (
+      !isOnline ||
+      isDisabled ||
+      isSavingTemplateLabels ||
+      templateLabelConflict !== null ||
+      templateLabelIds.length > 10
+    ) {
+      return;
+    }
+    const expected = [...templateLabelBaseline].sort();
+    const requested = [...templateLabelIds].sort();
+    if (JSON.stringify(expected) === JSON.stringify(requested)) return;
+    setIsSavingTemplateLabels(true);
+    setNotice("");
+    try {
+      const result = await onSetTemplateLabels(task.id, expected, requested);
+      if (result.status === "confirmed") {
+        const saved = [...(result.template_label_ids ?? requested)].sort();
+        setTemplateLabelIds(saved);
+        setTemplateLabelBaseline(saved);
+        setTemplateLabelConflict(null);
+        setNotice("Las etiquetas de próximas repeticiones quedaron guardadas.");
+        return;
+      }
+      if (result.status === "conflict" && result.reason === "stale_selection") {
+        setTemplateLabelConflict([...(result.template_label_ids ?? [])].sort());
+        setNotice(
+          "La plantilla cambió en otra sesión. Tu propuesta se conserva; revisa el conjunto actual antes de volver a guardar.",
+        );
+        return;
+      }
+      setNotice(
+        result.reason === "too_many_labels"
+          ? "La plantilla admite hasta diez etiquetas activas. No se guardó ningún cambio."
+          : result.reason === "invalid_selection"
+            ? "Alguna etiqueta ya no está disponible en este tablero. Actualiza la vista y revisa tu propuesta."
+            : "La serie ya no está disponible para cambiar sus etiquetas.",
+      );
+    } catch (error) {
+      setNotice(
+        error instanceof RepetitionError && error.reason === "access_denied"
+          ? "Tu acceso al tablero cambió. Actualiza la página antes de continuar."
+          : "No se pudo confirmar el cambio de etiquetas. Conservamos tu propuesta para reintentar.",
+      );
+    } finally {
+      setIsSavingTemplateLabels(false);
+    }
+  }
+
+  function reviewTemplateLabelConflict() {
+    if (!templateLabelConflict) return;
+    setTemplateLabelBaseline(templateLabelConflict);
+    setTemplateLabelConflict(null);
+    setNotice(
+      "Revisaste la selección actual. Tu propuesta sigue en el selector; guarda solo si coincide con lo que querés para las próximas tarjetas.",
+    );
+  }
+
   function chooseSuggestedDate() {
     const suggested = editPreview?.proposed_start_on;
     if (!suggested) return;
@@ -916,6 +1006,9 @@ export function TaskRepetition({
 
   const activeSeries =
     status?.status === "available" && status.state === "active";
+  const templateLabelsDirty =
+    JSON.stringify([...templateLabelIds].sort()) !==
+    JSON.stringify([...templateLabelBaseline].sort());
   const canCreate =
     status?.status === "not_repeating" ||
     (status?.status === "available" && status.state !== "active");
@@ -1009,6 +1102,13 @@ export function TaskRepetition({
             <p className="text-text-muted text-xs">
               Guarda primero los cambios de esta tarjeta para convertirla en la
               primera ocurrencia.
+            </p>
+          ) : null}
+          {showSetup && !editingSeries ? (
+            <p className="text-text-muted text-xs">
+              La plantilla empieza con las etiquetas activas de esta tarea.
+              Luego podés cambiarlas sin modificar esta ocurrencia ni las
+              anteriores.
             </p>
           ) : null}
           {!showSetup ? (
@@ -1304,6 +1404,72 @@ export function TaskRepetition({
                     </Button>
                   </fieldset>
                 </fieldset>
+              ) : null}
+              {editingSeries ? (
+                <div className="space-y-3 rounded-md border border-border p-3">
+                  <BoardLabelPicker
+                    labels={labels}
+                    selectedIds={templateLabelIds}
+                    onChange={(next) => setTemplateLabelIds([...next].sort())}
+                    disabled={
+                      !isOnline ||
+                      isDisabled ||
+                      isWorking ||
+                      isSavingTemplateLabels
+                    }
+                    idPrefix={`repetition-template-label-${task.id}`}
+                    legend="Etiquetas de próximas tarjetas"
+                  />
+                  <p className="text-text-muted text-xs">
+                    Esta selección es independiente de las etiquetas de la
+                    tarjeta actual. Solo se copia en ocurrencias nuevas.
+                  </p>
+                  {templateLabelConflict ? (
+                    <section
+                      className="space-y-2 rounded-md border border-priority-medium/40 p-3 text-sm text-text-secondary"
+                      aria-label="Revisión de etiquetas de la plantilla"
+                    >
+                      <p>
+                        Selección actual:{" "}
+                        {templateLabelConflict.length > 0
+                          ? templateLabelConflict
+                              .map(
+                                (id) =>
+                                  labels.find((label) => label.id === id)
+                                    ?.name ?? "etiqueta ya no disponible",
+                              )
+                              .join(", ")
+                          : "sin etiquetas"}
+                        . Tu propuesta sigue en el selector.
+                      </p>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        onClick={reviewTemplateLabelConflict}
+                      >
+                        Revisar selección actual y conservar mi propuesta
+                      </Button>
+                    </section>
+                  ) : null}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() => void saveTemplateLabels()}
+                    disabled={
+                      !isOnline ||
+                      isDisabled ||
+                      isSavingTemplateLabels ||
+                      !templateLabelsDirty ||
+                      templateLabelConflict !== null ||
+                      templateLabelIds.length > 10
+                    }
+                  >
+                    {isSavingTemplateLabels
+                      ? "Guardando etiquetas…"
+                      : "Guardar etiquetas de próximas tarjetas"}
+                  </Button>
+                </div>
               ) : null}
               <div className="grid gap-3 sm:grid-cols-2">
                 <label

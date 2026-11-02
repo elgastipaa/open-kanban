@@ -7,19 +7,21 @@ export function BoardLabelPicker({
   onChange,
   disabled = false,
   idPrefix,
+  legend = "Etiquetas",
 }: {
   labels: BoardLabel[];
   selectedIds: string[];
   onChange: (next: string[]) => void;
   disabled?: boolean;
   idPrefix: string;
+  legend?: string;
 }) {
   const selected = new Set(selectedIds);
 
   return (
     <fieldset disabled={disabled} className="space-y-2">
       <legend className="font-semibold text-sm text-text-primary">
-        Etiquetas
+        {legend}
       </legend>
       {labels.length === 0 ? (
         <p className="text-text-muted text-xs">

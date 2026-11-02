@@ -527,6 +527,7 @@ function BoardWorkspace({
     repetitionOperations,
     previewTaskRepetitionEdit,
     editTaskRepetition,
+    setTaskRepetitionTemplateLabels,
     repetitionEditOperations,
     moveColumn,
     removeBoard,
@@ -1438,6 +1439,7 @@ function BoardWorkspace({
         repetitionOperations={repetitionOperations}
         onPreviewRepetitionEdit={previewTaskRepetitionEdit}
         onEditRepetition={editTaskRepetition}
+        onSetRepetitionTemplateLabels={setTaskRepetitionTemplateLabels}
         repetitionEditOperations={repetitionEditOperations}
         onMoveTask={moveTaskFromEditor}
         boardLabels={boardLabels}

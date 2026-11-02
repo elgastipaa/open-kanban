@@ -36,6 +36,7 @@ import type {
   RepetitionPattern,
   RepetitionPreview,
   RepetitionStatus,
+  RepetitionTemplateLabelsResult,
 } from "@/lib/db/daily-repetition";
 import { TaskChecklistError, TaskEditError } from "@/lib/db/tasks";
 import { resolveTaskChecklistCompletionReview } from "@/lib/task-checklist-completion";
@@ -143,6 +144,11 @@ interface TaskModalProps {
   onEditRepetition: (
     command: RepetitionEditCommand,
   ) => Promise<RepetitionEditResult>;
+  onSetRepetitionTemplateLabels: (
+    taskId: string,
+    expectedLabelIds: string[],
+    labelIds: string[],
+  ) => Promise<RepetitionTemplateLabelsResult>;
   repetitionOperations: RepetitionOperationStore;
   repetitionEditOperations: RepetitionEditOperationStore;
   onSetTaskCompletion: (
@@ -311,6 +317,7 @@ export function TaskModal({
   onCreateRepetition,
   onPreviewRepetitionEdit,
   onEditRepetition,
+  onSetRepetitionTemplateLabels,
   repetitionOperations,
   repetitionEditOperations,
   onSetTaskCompletion,
@@ -1912,11 +1919,13 @@ export function TaskModal({
                     editOperations={repetitionEditOperations}
                     columns={columns}
                     assignableMembers={assignableMembers}
+                    labels={boardLabels}
                     onLoad={onGetRepetition}
                     onPreview={onPreviewRepetition}
                     onCreate={onCreateRepetition}
                     onPreviewEdit={onPreviewRepetitionEdit}
                     onEdit={onEditRepetition}
+                    onSetTemplateLabels={onSetRepetitionTemplateLabels}
                     openEditorOnLoad={openRepetitionEditor}
                   />
                 ) : null}

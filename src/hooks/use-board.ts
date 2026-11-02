@@ -103,6 +103,7 @@ export function useBoard({
     repetitionOperations,
     previewTaskRepetitionEdit,
     editTaskRepetition,
+    setTaskRepetitionTemplateLabels,
     repetitionEditOperations,
   } = useTaskOperations({
     actorId,
@@ -140,6 +141,7 @@ export function useBoard({
     repetitionOperations,
     previewTaskRepetitionEdit,
     editTaskRepetition,
+    setTaskRepetitionTemplateLabels,
     repetitionEditOperations,
     moveColumn,
     removeBoard,

@@ -20,6 +20,7 @@ CREATE TEMP TABLE issue23_transfer_results (
   latest_on_after_stop date,
   start_on_after_stop date,
   end_on_after_stop date,
+  template_snapshot_after_stop jsonb,
   occurrence_count_after_stop bigint,
   occurrence_id_after_stop uuid,
   occurrence_on_after_stop date,
@@ -220,6 +221,7 @@ BEGIN
       latest_on_after_stop = series.latest_occurrence_on,
       start_on_after_stop = series.start_on,
       end_on_after_stop = series.end_on,
+      template_snapshot_after_stop = series.template_snapshot,
       occurrence_count_after_stop = occurrence_stats.occurrence_count,
       occurrence_id_after_stop = occurrence.id,
       occurrence_on_after_stop = occurrence.occurrence_on,
@@ -272,50 +274,48 @@ DECLARE
   v_series_a uuid;
   v_series_b uuid;
   v_snapshot issue23_transfer_results%ROWTYPE;
+  v_series_a_after public.daily_repetition_series%ROWTYPE;
+  v_series_b_after public.daily_repetition_series%ROWTYPE;
+  v_occurrence_a_after public.daily_repetition_occurrences%ROWTYPE;
+  v_occurrence_b_after public.daily_repetition_occurrences%ROWTYPE;
+  v_occurrence_count_after bigint;
 BEGIN
   SELECT * INTO v_ref FROM issue23_refs WHERE purpose = 'series_transfer';
   SELECT * INTO v_snapshot FROM issue23_transfer_results;
   v_series_a := v_snapshot.series_a;
   v_series_b := v_snapshot.series_b;
-  IF (SELECT series.state FROM public.daily_repetition_series AS series
-      WHERE series.id = v_series_a) IS DISTINCT FROM 'stopped'
-    OR (SELECT series.next_due_on FROM public.daily_repetition_series AS series
-      WHERE series.id = v_series_a) IS NOT NULL
-    OR (SELECT series.revision FROM public.daily_repetition_series AS series
-      WHERE series.id = v_series_a) IS DISTINCT FROM v_snapshot.revision_after_stop
-    OR (SELECT series.consumed_count FROM public.daily_repetition_series AS series
-      WHERE series.id = v_series_a) IS DISTINCT FROM v_snapshot.consumed_count_after_stop
-    OR (SELECT series.latest_occurrence_on FROM public.daily_repetition_series AS series
-      WHERE series.id = v_series_a) IS DISTINCT FROM v_snapshot.latest_on_after_stop
-    OR (SELECT series.start_on FROM public.daily_repetition_series AS series
-      WHERE series.id = v_series_a) IS DISTINCT FROM v_snapshot.start_on_after_stop
-    OR (SELECT series.end_on FROM public.daily_repetition_series AS series
-      WHERE series.id = v_series_a) IS DISTINCT FROM v_snapshot.end_on_after_stop
-    OR (SELECT pg_catalog.count(*) FROM public.daily_repetition_occurrences AS occurrence
-      WHERE occurrence.series_id = v_series_a) IS DISTINCT FROM v_snapshot.occurrence_count_after_stop
-    OR (SELECT series.state FROM public.daily_repetition_series AS series
-      WHERE series.id = v_series_b) IS DISTINCT FROM 'active'
-    OR (SELECT occurrence.id FROM public.daily_repetition_occurrences AS occurrence
-      WHERE occurrence.series_id = v_series_a) IS DISTINCT FROM v_snapshot.occurrence_id_after_stop
-    OR (SELECT occurrence.task_id FROM public.daily_repetition_occurrences AS occurrence
-      WHERE occurrence.series_id = v_series_a) IS DISTINCT FROM v_snapshot.occurrence_task_id_after_stop
-    OR (SELECT occurrence.occurrence_on FROM public.daily_repetition_occurrences AS occurrence
-      WHERE occurrence.series_id = v_series_a) IS DISTINCT FROM v_snapshot.occurrence_on_after_stop
-    OR (SELECT occurrence.state FROM public.daily_repetition_occurrences AS occurrence
-      WHERE occurrence.series_id = v_series_a) IS DISTINCT FROM 'transferred'
-    OR (SELECT occurrence.transferred_to_series_id
-      FROM public.daily_repetition_occurrences AS occurrence
-      WHERE occurrence.series_id = v_series_a) IS DISTINCT FROM v_series_b
-    OR (SELECT occurrence.due_on_override FROM public.daily_repetition_occurrences AS occurrence
-      WHERE occurrence.series_id = v_series_a) IS DISTINCT FROM v_snapshot.occurrence_override_after_stop
-    OR (SELECT occurrence.created_at FROM public.daily_repetition_occurrences AS occurrence
-      WHERE occurrence.series_id = v_series_a) IS DISTINCT FROM v_snapshot.occurrence_created_at_after_stop
-    OR (SELECT occurrence.task_id FROM public.daily_repetition_occurrences AS occurrence
-      WHERE occurrence.series_id = v_series_b) IS DISTINCT FROM v_ref.task_id
-    OR (SELECT occurrence.occurrence_on FROM public.daily_repetition_occurrences AS occurrence
-      WHERE occurrence.series_id = v_series_b) IS DISTINCT FROM '2026-11-06'::date
-    OR (SELECT occurrence.state FROM public.daily_repetition_occurrences AS occurrence
-      WHERE occurrence.series_id = v_series_b) IS DISTINCT FROM 'current' THEN
+  SELECT * INTO v_series_a_after FROM public.daily_repetition_series AS series
+  WHERE series.id = v_series_a;
+  SELECT * INTO v_series_b_after FROM public.daily_repetition_series AS series
+  WHERE series.id = v_series_b;
+  SELECT * INTO v_occurrence_a_after FROM public.daily_repetition_occurrences AS occurrence
+  WHERE occurrence.series_id = v_series_a;
+  SELECT * INTO v_occurrence_b_after FROM public.daily_repetition_occurrences AS occurrence
+  WHERE occurrence.series_id = v_series_b;
+  SELECT pg_catalog.count(*) INTO v_occurrence_count_after
+  FROM public.daily_repetition_occurrences AS occurrence
+  WHERE occurrence.series_id = v_series_a;
+
+  IF v_series_a_after.state IS DISTINCT FROM 'stopped'
+    OR v_series_a_after.next_due_on IS NOT NULL
+    OR v_series_a_after.revision IS DISTINCT FROM v_snapshot.revision_after_stop
+    OR v_series_a_after.consumed_count IS DISTINCT FROM v_snapshot.consumed_count_after_stop
+    OR v_series_a_after.latest_occurrence_on IS DISTINCT FROM v_snapshot.latest_on_after_stop
+    OR v_series_a_after.start_on IS DISTINCT FROM v_snapshot.start_on_after_stop
+    OR v_series_a_after.end_on IS DISTINCT FROM v_snapshot.end_on_after_stop
+    OR v_series_a_after.template_snapshot IS DISTINCT FROM v_snapshot.template_snapshot_after_stop
+    OR v_occurrence_count_after IS DISTINCT FROM v_snapshot.occurrence_count_after_stop
+    OR v_series_b_after.state IS DISTINCT FROM 'active'
+    OR v_occurrence_a_after.id IS DISTINCT FROM v_snapshot.occurrence_id_after_stop
+    OR v_occurrence_a_after.task_id IS DISTINCT FROM v_snapshot.occurrence_task_id_after_stop
+    OR v_occurrence_a_after.occurrence_on IS DISTINCT FROM v_snapshot.occurrence_on_after_stop
+    OR v_occurrence_a_after.state IS DISTINCT FROM 'transferred'
+    OR v_occurrence_a_after.transferred_to_series_id IS DISTINCT FROM v_series_b
+    OR v_occurrence_a_after.due_on_override IS DISTINCT FROM v_snapshot.occurrence_override_after_stop
+    OR v_occurrence_a_after.created_at IS DISTINCT FROM v_snapshot.occurrence_created_at_after_stop
+    OR v_occurrence_b_after.task_id IS DISTINCT FROM v_ref.task_id
+    OR v_occurrence_b_after.occurrence_on IS DISTINCT FROM '2026-11-06'::date
+    OR v_occurrence_b_after.state IS DISTINCT FROM 'current' THEN
     RAISE EXCEPTION 'C112 transfer changed source history or failed to preserve the new first occurrence';
   END IF;
 END;

@@ -3,12 +3,15 @@
 import { IconCheck } from "@tabler/icons-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { ViewPreferenceStatus } from "@/components/preferences/view-preference-status";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useOnlineStatus } from "@/hooks/use-online-status";
+import { useViewPreferences } from "@/hooks/use-view-preferences";
 import { setTaskCompletion, TaskCompletionError } from "@/lib/db/tasks";
 import { getMyTaskCompletionControl } from "@/lib/my-task-completion-control";
-import { myTaskBoardHref, myTasksHref } from "@/lib/my-tasks-navigation";
+import { orderMyTaskEntries } from "@/lib/my-task-view";
+import { myTaskBoardHref } from "@/lib/my-tasks-navigation";
 import { createClient } from "@/lib/supabase/client";
 import { resolveTaskChecklistCompletionReview } from "@/lib/task-checklist-completion";
 import {
@@ -24,10 +27,14 @@ import type {
   TaskCompletionResult,
 } from "@/lib/types";
 import { generateUUID } from "@/lib/utils";
+import type { ViewPreferenceSnapshot } from "@/lib/view-preference-state";
 
 interface MyTasksListProps {
+  actorId: string;
   entries: MyTaskEntry[];
-  order: MyTasksOrder;
+  explicitOrder: MyTasksOrder | null;
+  initialViewPreferences: ViewPreferenceSnapshot | null;
+  initialViewPreferencesLoadFailed: boolean;
   loadError: boolean;
 }
 
@@ -57,9 +64,33 @@ function priorityLabel(priority: MyTaskEntry["task"]["priority"]): string {
   }
 }
 
-export function MyTasksList({ entries, order, loadError }: MyTasksListProps) {
+export function MyTasksList({
+  actorId,
+  entries,
+  explicitOrder,
+  initialViewPreferences,
+  initialViewPreferencesLoadFailed,
+  loadError,
+}: MyTasksListProps) {
   const router = useRouter();
   const { isOnline } = useOnlineStatus();
+  const viewPreferences = useViewPreferences({
+    accountId: actorId,
+    context: { type: "my_tasks", boardId: null },
+    initialSnapshot: initialViewPreferences,
+    initialDrafts: explicitOrder ? { order: explicitOrder } : undefined,
+    initialLoadFailed: initialViewPreferencesLoadFailed,
+  });
+  const order =
+    viewPreferences.state.values.order === "created" ? "created" : "due";
+  const completedView = viewPreferences.state.values.completed_view as {
+    expanded: boolean;
+    visible: boolean;
+  };
+  const orderedEntries = useMemo(
+    () => orderMyTaskEntries(entries, order),
+    [entries, order],
+  );
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState("");
   const [pendingCompletionReview, setPendingCompletionReview] = useState<{
@@ -162,8 +193,16 @@ export function MyTasksList({ entries, order, loadError }: MyTasksListProps) {
     }
   }
 
-  const activeEntries = entries.filter((entry) => !entry.task.is_completed);
-  const completedEntries = entries.filter((entry) => entry.task.is_completed);
+  const activeEntries = orderedEntries.filter(
+    (entry) => !entry.task.is_completed,
+  );
+  const completedEntries = orderedEntries.filter(
+    (entry) => entry.task.is_completed,
+  );
+
+  useEffect(() => {
+    if (viewPreferences.state.accessLost) router.replace("/");
+  }, [router, viewPreferences.state.accessLost]);
 
   function renderTask(entry: MyTaskEntry) {
     const isPending = pendingTaskId === entry.task.id;
@@ -251,22 +290,46 @@ export function MyTasksList({ entries, order, loadError }: MyTasksListProps) {
             >
               Cuenta
             </Link>
-            <Link
-              href={myTasksHref("due")}
-              aria-current={order === "due" ? "page" : undefined}
+            <button
+              type="button"
+              onClick={() => viewPreferences.changePreference("order", "due")}
+              aria-pressed={order === "due"}
               className={`rounded-lg border px-3 py-2 text-sm ${order === "due" ? "border-border-accent bg-accent-muted text-text-primary" : "border-border text-text-secondary hover:bg-surface-hover"}`}
             >
               Por vencimiento
-            </Link>
-            <Link
-              href={myTasksHref("created")}
-              aria-current={order === "created" ? "page" : undefined}
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                viewPreferences.changePreference("order", "created")
+              }
+              aria-pressed={order === "created"}
               className={`rounded-lg border px-3 py-2 text-sm ${order === "created" ? "border-border-accent bg-accent-muted text-text-primary" : "border-border text-text-secondary hover:bg-surface-hover"}`}
             >
               Por creación
-            </Link>
+            </button>
+            <button
+              type="button"
+              onClick={viewPreferences.resetPreferences}
+              disabled={viewPreferences.state.accessLost}
+              className="rounded px-2 py-1 text-text-muted text-xs underline underline-offset-2 disabled:opacity-50"
+            >
+              Reiniciar preferencias
+            </button>
           </div>
         </header>
+
+        <ViewPreferenceStatus
+          state={viewPreferences.state}
+          loadFailed={viewPreferences.loadFailed}
+          onRetry={viewPreferences.retryPreference}
+          onRetryLoad={viewPreferences.retryLoad}
+          onResolveConflict={viewPreferences.resolveConflict}
+          resetConflict={viewPreferences.resetConflict}
+          resetFailed={viewPreferences.resetFailed}
+          onResolveResetConflict={viewPreferences.resolveResetConflict}
+          onRetryReset={viewPreferences.resetPreferences}
+        />
 
         {!isOnline ? (
           <output
@@ -313,15 +376,48 @@ export function MyTasksList({ entries, order, loadError }: MyTasksListProps) {
             ) : null}
             {completedEntries.length ? (
               <section aria-labelledby="my-completed-tasks-heading">
-                <h2
-                  id="my-completed-tasks-heading"
-                  className="mb-3 font-semibold text-sm text-text-primary"
-                >
-                  Completadas recientemente
-                </h2>
-                <ul className="space-y-2">
-                  {completedEntries.map(renderTask)}
-                </ul>
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <h2
+                    id="my-completed-tasks-heading"
+                    className="font-semibold text-sm text-text-primary"
+                  >
+                    Completadas recientemente ({completedEntries.length})
+                  </h2>
+                  <div className="flex items-center gap-3">
+                    {completedView.visible ? (
+                      <button
+                        type="button"
+                        aria-expanded={completedView.expanded}
+                        onClick={() =>
+                          viewPreferences.changePreference("completed_view", {
+                            visible: true,
+                            expanded: !completedView.expanded,
+                          })
+                        }
+                        className="rounded px-2 py-1 text-text-muted text-xs underline underline-offset-2"
+                      >
+                        {completedView.expanded ? "Contraer" : "Expandir"}
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        viewPreferences.changePreference("completed_view", {
+                          visible: !completedView.visible,
+                          expanded: true,
+                        })
+                      }
+                      className="rounded px-2 py-1 text-text-muted text-xs underline underline-offset-2"
+                    >
+                      {completedView.visible ? "Ocultar" : "Mostrar"}
+                    </button>
+                  </div>
+                </div>
+                {completedView.visible && completedView.expanded ? (
+                  <ul className="space-y-2">
+                    {completedEntries.map(renderTask)}
+                  </ul>
+                ) : null}
               </section>
             ) : null}
           </div>

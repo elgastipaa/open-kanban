@@ -24,6 +24,7 @@ import { TaskModal } from "@/components/board/task-modal";
 import { TaskRecoveryDialog } from "@/components/board/task-recovery-dialog";
 import { BoardLabelFilter } from "@/components/labels/board-label-filter";
 import { BoardLabelsDialog } from "@/components/labels/board-labels-dialog";
+import { ViewPreferenceStatus } from "@/components/preferences/view-preference-status";
 import { useThemePreference } from "@/components/theme/theme-preference-provider";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useBoard } from "@/hooks/use-board";
@@ -33,6 +34,7 @@ import { useHotKeys } from "@/hooks/use-hotkeys";
 import { useOnlineStatus } from "@/hooks/use-online-status";
 import { usePresence } from "@/hooks/use-presence";
 import { useRealtime } from "@/hooks/use-realtime";
+import { useViewPreferences } from "@/hooks/use-view-preferences";
 import { resolveApplicationAccess } from "@/lib/auth";
 import { hasBoardAuthorizationEpochChanged } from "@/lib/board-auth-epoch";
 import { columnDeletionSuccessMessage } from "@/lib/column-deletion-flow";
@@ -102,6 +104,7 @@ import type {
   TaskOrderResult,
 } from "@/lib/types";
 import { generateUUID } from "@/lib/utils";
+import type { ViewPreferenceSnapshot } from "@/lib/view-preference-state";
 
 interface BoardProps {
   slug: string;
@@ -116,6 +119,8 @@ interface BoardProps {
   initialRepetitionEditTaskId: string | null;
   myTasksReturnHref: string | null;
   seriesReturnHref: string | null;
+  initialViewPreferences: ViewPreferenceSnapshot | null;
+  initialViewPreferencesLoadFailed: boolean;
 }
 
 type BoardWorkspaceProps = Omit<BoardProps, "ownerAuthUserId"> & {
@@ -141,6 +146,8 @@ export function Board({
   initialRepetitionEditTaskId,
   myTasksReturnHref,
   seriesReturnHref,
+  initialViewPreferences,
+  initialViewPreferencesLoadFailed,
 }: BoardProps) {
   const router = useRouter();
   const { resetTheme } = useThemePreference();
@@ -328,6 +335,8 @@ export function Board({
       initialRepetitionEditTaskId={initialRepetitionEditTaskId}
       myTasksReturnHref={myTasksReturnHref}
       seriesReturnHref={seriesReturnHref}
+      initialViewPreferences={initialViewPreferences}
+      initialViewPreferencesLoadFailed={initialViewPreferencesLoadFailed}
       isSessionStale={sessionStatus === "stale"}
       onAccessLost={onAccessLost}
       onRealtimeReconnect={onRealtimeReconnect}
@@ -349,30 +358,60 @@ function BoardWorkspace({
   initialRepetitionEditTaskId,
   myTasksReturnHref,
   seriesReturnHref,
+  initialViewPreferences,
+  initialViewPreferencesLoadFailed,
   isSessionStale,
   onAccessLost,
   onRealtimeReconnect,
 }: BoardWorkspaceProps) {
   const router = useRouter();
   const { isMobile, isReady } = useDevice();
+  const viewPreferences = useViewPreferences({
+    accountId: actorId,
+    context: { type: "board", boardId: initialBoard.id },
+    initialSnapshot: initialViewPreferences,
+    initialLoadFailed: initialViewPreferencesLoadFailed,
+  });
+  const selectedLabelIds = Array.isArray(viewPreferences.state.values.labels)
+    ? viewPreferences.state.values.labels.filter(
+        (value): value is string => typeof value === "string",
+      )
+    : [];
+  const completedView = viewPreferences.state.values.completed_view as {
+    collapsed: string[];
+    hidden: string[];
+  };
+  useEffect(() => {
+    if (viewPreferences.state.accessLost) onAccessLost();
+  }, [onAccessLost, viewPreferences.state.accessLost]);
   const [openColumnFormSignal, setOpenColumnFormSignal] = useState(0);
   const labelSupabase = useMemo(() => createClient(), []);
   const [boardLabels, setBoardLabels] = useState<BoardLabel[]>([]);
-  const [selectedLabelIds, setSelectedLabelIds] = useState<string[]>([]);
   const [isLabelsDialogOpen, setIsLabelsDialogOpen] = useState(false);
   const [birthdayLabelRefreshSignal, setBirthdayLabelRefreshSignal] =
     useState(0);
   const refreshBoardLabels = useCallback(async () => {
     const labels = await listBoardLabels(labelSupabase, slug);
     setBoardLabels(labels);
-    const activeIds = new Set(labels.map((label) => label.id));
-    setSelectedLabelIds((current) => current.filter((id) => activeIds.has(id)));
   }, [labelSupabase, slug]);
   const handleBoardLabelsChange = useCallback((labels: BoardLabel[]) => {
     setBoardLabels(labels);
-    const activeIds = new Set(labels.map((label) => label.id));
-    setSelectedLabelIds((current) => current.filter((id) => activeIds.has(id)));
   }, []);
+  const changeCompletedView = useCallback(
+    (columnId: string, visible: boolean, expanded: boolean) => {
+      const hidden = new Set(completedView.hidden);
+      const collapsed = new Set(completedView.collapsed);
+      if (visible) hidden.delete(columnId);
+      else hidden.add(columnId);
+      if (expanded) collapsed.delete(columnId);
+      else collapsed.add(columnId);
+      viewPreferences.changePreference("completed_view", {
+        hidden: [...hidden],
+        collapsed: [...collapsed],
+      });
+    },
+    [completedView, viewPreferences.changePreference],
+  );
   useEffect(() => {
     void refreshBoardLabels().catch(() => undefined);
   }, [refreshBoardLabels]);
@@ -569,7 +608,14 @@ function BoardWorkspace({
   );
 
   const isLabelFilterActive = selectedLabelIds.length > 0;
+  const activeBoardLabelIds = new Set(boardLabels.map((label) => label.id));
+  const unavailableSelectedLabelIds = selectedLabelIds.filter(
+    (id) => !activeBoardLabelIds.has(id),
+  );
   const displayedColumns = useMemo(() => {
+    if (unavailableSelectedLabelIds.length > 0) {
+      return columns.map((column) => ({ ...column, tasks: [] }));
+    }
     if (!isLabelFilterActive) return columns;
     const selected = new Set(selectedLabelIds);
     return columns.map((column) => ({
@@ -578,7 +624,12 @@ function BoardWorkspace({
         task.labels?.some((label) => selected.has(label.id)),
       ),
     }));
-  }, [columns, isLabelFilterActive, selectedLabelIds]);
+  }, [
+    columns,
+    isLabelFilterActive,
+    selectedLabelIds,
+    unavailableSelectedLabelIds.length,
+  ]);
 
   // Wire the refs after useBoard returns
   refreshRef.current = refreshFromDB;
@@ -1285,6 +1336,38 @@ function BoardWorkspace({
         onOpenLabels={() => setIsLabelsDialogOpen(true)}
       />
 
+      <ViewPreferenceStatus
+        state={viewPreferences.state}
+        loadFailed={viewPreferences.loadFailed}
+        onRetry={viewPreferences.retryPreference}
+        onRetryLoad={viewPreferences.retryLoad}
+        onResolveConflict={viewPreferences.resolveConflict}
+        onClearReference={(key) => {
+          if (key === "labels") {
+            viewPreferences.changePreference("labels", []);
+          } else if (key === "completed_view") {
+            viewPreferences.changePreference("completed_view", {
+              hidden: [],
+              collapsed: [],
+            });
+          }
+        }}
+        resetConflict={viewPreferences.resetConflict}
+        resetFailed={viewPreferences.resetFailed}
+        onResolveResetConflict={viewPreferences.resolveResetConflict}
+        onRetryReset={viewPreferences.resetPreferences}
+      />
+      <div className="flex shrink-0 items-center justify-end border-border border-b px-4 py-1 md:px-6">
+        <button
+          type="button"
+          onClick={viewPreferences.resetPreferences}
+          disabled={viewPreferences.state.accessLost}
+          className="rounded px-2 py-1 text-text-muted text-xs underline underline-offset-2 disabled:opacity-50"
+        >
+          Reiniciar preferencias de este tablero
+        </button>
+      </div>
+
       <BoardLabelsDialog
         open={isLabelsDialogOpen}
         onClose={() => setIsLabelsDialogOpen(false)}
@@ -1298,8 +1381,29 @@ function BoardWorkspace({
       <BoardLabelFilter
         labels={boardLabels}
         selectedIds={selectedLabelIds}
-        onChange={setSelectedLabelIds}
+        onChange={(ids) => viewPreferences.changePreference("labels", ids)}
       />
+      {unavailableSelectedLabelIds.length > 0 ? (
+        <div
+          role="alert"
+          className="border-border border-b bg-priority-medium/10 px-4 py-2 text-sm"
+        >
+          Una etiqueta recordada ya no está disponible. El filtro está detenido;
+          revisa las preferencias o quita la referencia pendiente.
+          <button
+            type="button"
+            className="ml-2 rounded underline underline-offset-2 focus-visible:outline"
+            onClick={() =>
+              viewPreferences.changePreference(
+                "labels",
+                selectedLabelIds.filter((id) => activeBoardLabelIds.has(id)),
+              )
+            }
+          >
+            Quitar referencias pendientes
+          </button>
+        </div>
+      ) : null}
 
       {isReady ? (
         <BirthdayPanel
@@ -1353,6 +1457,9 @@ function BoardWorkspace({
           onCompleteTask={handleCardCompletion}
           onMoveTask={moveTask}
           onRequestDeleteColumn={(colId) => setDeletingColumnId(colId)}
+          hiddenCompletedColumnIds={completedView.hidden}
+          collapsedCompletedColumnIds={completedView.collapsed}
+          onCompletedViewChange={changeCompletedView}
         />
       ) : (
         /* ── Desktop: horizontal scrolling multi-column view ── */
@@ -1379,6 +1486,11 @@ function BoardWorkspace({
                   onCompleteTask={handleCardCompletion}
                   onMoveTask={moveTask}
                   isReorderingDisabled={isLabelFilterActive}
+                  showCompleted={!completedView.hidden.includes(column.id)}
+                  completedExpanded={
+                    !completedView.collapsed.includes(column.id)
+                  }
+                  onCompletedViewChange={changeCompletedView}
                 />
               ))}
               <AddColumn onAdd={addColumn} openSignal={openColumnFormSignal} />

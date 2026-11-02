@@ -7,6 +7,7 @@ import { getFullBoard } from "@/lib/db";
 import { listCurrentBoardMembers } from "@/lib/db/board-members";
 import { hasOtherCurrentBoardMembers } from "@/lib/db/membership-departure";
 import { listAssignableBoardMembers } from "@/lib/db/my-tasks";
+import { getMyViewPreferences } from "@/lib/db/view-preferences";
 import { myTasksHref } from "@/lib/my-tasks-navigation";
 import { resolveSeriesTaskEditorIntent } from "@/lib/repetition-series-navigation";
 import { createClient } from "@/lib/supabase/server";
@@ -15,6 +16,7 @@ import type {
   CurrentBoardMember,
   MyTasksOrder,
 } from "@/lib/types";
+import type { ViewPreferenceSnapshot } from "@/lib/view-preference-state";
 
 interface BoardPageProps {
   params: Promise<{ slug: string }>;
@@ -176,6 +178,17 @@ export default async function BoardPage({
 
   if (!boardData) notFound();
 
+  let initialViewPreferences: ViewPreferenceSnapshot | null = null;
+  let initialViewPreferencesLoadFailed = false;
+  try {
+    initialViewPreferences = await getMyViewPreferences(supabase, {
+      type: "board",
+      boardId: boardData.board.id,
+    });
+  } catch {
+    initialViewPreferencesLoadFailed = true;
+  }
+
   const requestedTaskIsInBoard = Boolean(
     requestedTaskId &&
       boardData.columns.some((column) =>
@@ -253,6 +266,8 @@ export default async function BoardPage({
       myTasksReturnHref={fromMyTasks ? myTasksHref(myTasksReturnOrder) : null}
       initialRepetitionEditTaskId={repetitionEditorIntent?.taskId ?? null}
       seriesReturnHref={repetitionEditorIntent?.returnHref ?? null}
+      initialViewPreferences={initialViewPreferences}
+      initialViewPreferencesLoadFailed={initialViewPreferencesLoadFailed}
     />
   );
 }

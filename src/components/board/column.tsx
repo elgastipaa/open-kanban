@@ -6,7 +6,6 @@ import {
   IconLayoutSidebarRightCollapse,
 } from "@tabler/icons-react";
 import { motion } from "motion/react";
-import { useState } from "react";
 import { AddTask } from "@/components/board/add-task";
 import { ColumnHeader } from "@/components/board/column-header";
 import { TaskCard } from "@/components/board/task-card";
@@ -55,6 +54,13 @@ interface ColumnProps {
     destinationIndex: number,
   ) => unknown;
   isReorderingDisabled?: boolean;
+  showCompleted: boolean;
+  completedExpanded: boolean;
+  onCompletedViewChange: (
+    columnId: string,
+    visible: boolean,
+    expanded: boolean,
+  ) => void;
 }
 
 export function Column({
@@ -75,9 +81,10 @@ export function Column({
   onCompleteTask,
   onMoveTask,
   isReorderingDisabled = false,
+  showCompleted,
+  completedExpanded,
+  onCompletedViewChange,
 }: ColumnProps) {
-  const [showCompleted, setShowCompleted] = useState(true);
-  const [completedExpanded, setCompletedExpanded] = useState(true);
   const { pending, completed } = orderTasksByCompletion(column.tasks);
 
   if (column.is_collapsed) {
@@ -226,7 +233,11 @@ export function Column({
                         className="flex min-h-8 items-center gap-1 rounded-md px-1 text-left font-medium text-text-secondary text-xs hover:text-text-primary"
                         aria-expanded={completedExpanded}
                         onClick={() =>
-                          setCompletedExpanded((expanded) => !expanded)
+                          onCompletedViewChange(
+                            column.id,
+                            showCompleted,
+                            !completedExpanded,
+                          )
                         }
                       >
                         <IconChevronDown
@@ -245,8 +256,7 @@ export function Column({
                       type="button"
                       className="rounded-md px-2 py-1 text-text-muted text-xs hover:bg-surface-overlay hover:text-text-primary"
                       onClick={() => {
-                        setShowCompleted((visible) => !visible);
-                        setCompletedExpanded(true);
+                        onCompletedViewChange(column.id, !showCompleted, true);
                       }}
                     >
                       {showCompleted ? "Ocultar" : "Mostrar"}

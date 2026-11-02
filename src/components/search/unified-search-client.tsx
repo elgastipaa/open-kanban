@@ -4,6 +4,8 @@ import type { AuthChangeEvent, Session } from "@supabase/supabase-js";
 import { IconHistory, IconSearch, IconX } from "@tabler/icons-react";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ViewPreferenceStatus } from "@/components/preferences/view-preference-status";
+import { useViewPreferences } from "@/hooks/use-view-preferences";
 import type { UnifiedSearchResult } from "@/lib/db/unified-search";
 import { createClient } from "@/lib/supabase/client";
 import { buildUnifiedSearchResultHref } from "@/lib/unified-search-navigation";
@@ -16,6 +18,11 @@ import {
   isCurrentUnifiedSearchRequest,
   postUnifiedSearch,
 } from "@/lib/unified-search-state";
+import type {
+  ViewPreferenceContext,
+  ViewPreferenceDrafts,
+  ViewPreferenceSnapshot,
+} from "@/lib/view-preference-state";
 
 interface SearchBoardOption {
   id: string;
@@ -64,6 +71,11 @@ interface UnifiedSearchClientProps {
   boards: SearchBoardOption[];
   assignees: SearchAssigneeOption[];
   initialState: SearchUiState;
+  preferenceContext: ViewPreferenceContext;
+  initialViewPreferences: ViewPreferenceSnapshot | null;
+  initialViewPreferencesLoadFailed: boolean;
+  initialPreferenceDrafts?: ViewPreferenceDrafts;
+  initialScopeUnavailable: boolean;
 }
 
 const groupLabels = {
@@ -75,6 +87,7 @@ const groupLabels = {
 
 function toSearchParams(state: SearchUiState): URLSearchParams {
   const params = new URLSearchParams();
+  params.set("view_state", "1");
   params.set("scope", state.scope);
   if (state.scope === "board" && state.boardSlug) {
     params.set("board_slug", state.boardSlug);
@@ -128,7 +141,7 @@ function resultOrigin(result: UnifiedSearchResult): string {
 
 function backHref(state: SearchUiState): string {
   if (state.scope === "my_tasks") {
-    return `/my-tasks?order=${state.order}`;
+    return "/my-tasks";
   }
   if (state.scope === "board" && state.boardSlug) {
     return `/${encodeURIComponent(state.boardSlug)}`;
@@ -141,8 +154,96 @@ export function UnifiedSearchClient({
   boards,
   assignees,
   initialState,
+  preferenceContext,
+  initialViewPreferences,
+  initialViewPreferencesLoadFailed,
+  initialPreferenceDrafts,
+  initialScopeUnavailable,
 }: UnifiedSearchClientProps) {
-  const [state, setState] = useState(initialState);
+  const [navigationState, setNavigationState] = useState(() => ({
+    query: initialState.query,
+    scope: initialState.scope,
+    boardSlug: initialState.boardSlug,
+    mode: initialState.mode,
+  }));
+  const viewPreferences = useViewPreferences({
+    accountId,
+    context: preferenceContext,
+    initialSnapshot: initialViewPreferences,
+    initialDrafts: initialPreferenceDrafts,
+    initialLoadFailed: initialViewPreferencesLoadFailed,
+  });
+  const values = viewPreferences.state.values;
+  const savedResponsibility = values.filter_responsibility as
+    | { assignee_id: string | null; unassigned: boolean }
+    | undefined;
+  const savedLabels = useMemo(
+    () =>
+      Array.isArray(values.filter_labels)
+        ? values.filter_labels.filter(
+            (entry): entry is { board_id: string; label_id: string } =>
+              typeof entry === "object" &&
+              entry !== null &&
+              "board_id" in entry &&
+              "label_id" in entry,
+          )
+        : [],
+    [values.filter_labels],
+  );
+  const [labelNames, setLabelNames] = useState(
+    () =>
+      new Map(
+        initialState.labelFilters.map((filter) => [
+          `${filter.board_id}:${filter.label_id}`,
+          filter,
+        ]),
+      ),
+  );
+  const state: SearchUiState = useMemo(
+    () => ({
+      ...navigationState,
+      filterBoardId:
+        typeof values.filter_board === "string" ? values.filter_board : null,
+      includeCompleted: values.include_completed === true,
+      includeHistory: values.include_history === true,
+      priority:
+        values.filter_priority === "low" ||
+        values.filter_priority === "medium" ||
+        values.filter_priority === "high" ||
+        values.filter_priority === "urgent"
+          ? values.filter_priority
+          : null,
+      assigneeId: savedResponsibility?.assignee_id ?? null,
+      unassigned: savedResponsibility?.unassigned ?? false,
+      dueFilter:
+        values.filter_due === "today" ||
+        values.filter_due === "overdue" ||
+        values.filter_due === "next_7_days" ||
+        values.filter_due === "no_date"
+          ? values.filter_due
+          : null,
+      labelFilters: savedLabels.map((filter) => {
+        const label = labelNames.get(`${filter.board_id}:${filter.label_id}`);
+        return {
+          ...filter,
+          label_name: label?.label_name ?? null,
+          board_name:
+            label?.board_name ??
+            boards.find((board) => board.id === filter.board_id)?.name ??
+            null,
+        };
+      }),
+      order: values.order === "created" ? "created" : "due",
+    }),
+    [
+      boards,
+      labelNames,
+      navigationState,
+      savedLabels,
+      savedResponsibility,
+      values,
+    ],
+  );
   const [results, setResults] = useState<UnifiedSearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [hasMore, setHasMore] = useState(false);
@@ -155,9 +256,12 @@ export function UnifiedSearchClient({
   );
   const [message, setMessage] = useState("");
   const [accessUnavailable, setAccessUnavailable] = useState(false);
-  const [scopeUnavailable, setScopeUnavailable] = useState(false);
+  const [scopeUnavailable, setScopeUnavailable] = useState(
+    initialScopeUnavailable,
+  );
   const requestId = useRef(0);
   const accountIdRef = useRef(accountId);
+  accountIdRef.current = accountId;
   const queryInputRef = useRef<HTMLInputElement>(null);
 
   const selectedBoard = boards.find((board) => board.slug === state.boardSlug);
@@ -176,12 +280,13 @@ export function UnifiedSearchClient({
   }, []);
 
   useEffect(() => {
+    if (scopeUnavailable) return;
     window.history.replaceState(
       null,
       "",
       `/search?${toSearchParams(state).toString()}`,
     );
-  }, [state]);
+  }, [scopeUnavailable, state]);
 
   useEffect(() => {
     const supabase = createClient();
@@ -226,11 +331,29 @@ export function UnifiedSearchClient({
   }, [state.query]);
 
   useEffect(() => {
+    if (!viewPreferences.state.accessLost) return;
+    requestId.current += 1;
+    setResults([]);
+    setHasMore(false);
+    setNextCursor(null);
+    setPageCursor(null);
+    if (viewPreferences.state.context.type === "search_board") {
+      setScopeUnavailable(true);
+    } else {
+      setAccessUnavailable(true);
+    }
+  }, [viewPreferences.state.accessLost, viewPreferences.state.context.type]);
+
+  useEffect(() => {
     // Keep explicit refreshes in the same monotonically increasing stale guard.
     requestId.current += refreshNonce + 1;
     const currentRequestId = requestId.current;
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
+      if (accessUnavailable || scopeUnavailable || viewPreferences.isLoading) {
+        setLoading(false);
+        return;
+      }
       if (!state.query.trim()) {
         setResults([]);
         setHasMore(false);
@@ -331,14 +454,105 @@ export function UnifiedSearchClient({
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [accountId, pageCursor, state, refreshNonce]);
+  }, [
+    accessUnavailable,
+    accountId,
+    pageCursor,
+    refreshNonce,
+    scopeUnavailable,
+    state,
+    viewPreferences.isLoading,
+  ]);
 
   function updateState(patch: Partial<SearchUiState>) {
     setPageCursor(null);
     setHasMore(false);
     setNextCursor(null);
     setResults([]);
-    setState((current) => ({ ...current, ...patch }));
+    if ("filterBoardId" in patch) {
+      viewPreferences.changePreference(
+        "filter_board",
+        patch.filterBoardId ?? null,
+      );
+    }
+    if ("includeCompleted" in patch) {
+      viewPreferences.changePreference(
+        "include_completed",
+        Boolean(patch.includeCompleted),
+      );
+    }
+    if ("includeHistory" in patch) {
+      viewPreferences.changePreference(
+        "include_history",
+        Boolean(patch.includeHistory),
+      );
+    }
+    if ("priority" in patch) {
+      viewPreferences.changePreference(
+        "filter_priority",
+        patch.priority ?? null,
+      );
+    }
+    if ("dueFilter" in patch) {
+      viewPreferences.changePreference("filter_due", patch.dueFilter ?? null);
+    }
+    if ("labelFilters" in patch) {
+      viewPreferences.changePreference(
+        "filter_labels",
+        (patch.labelFilters ?? []).map(({ board_id, label_id }) => ({
+          board_id,
+          label_id,
+        })),
+      );
+    }
+    if ("order" in patch) {
+      viewPreferences.changePreference("order", patch.order ?? "due");
+    }
+    if (
+      viewPreferences.state.context.type !== "search_my_tasks" &&
+      ("assigneeId" in patch || "unassigned" in patch)
+    ) {
+      viewPreferences.changePreference("filter_responsibility", {
+        assignee_id:
+          "assigneeId" in patch ? (patch.assigneeId ?? null) : state.assigneeId,
+        unassigned: patch.unassigned ?? state.unassigned,
+      });
+    }
+    const navigationPatch: Partial<typeof navigationState> = {};
+    if ("query" in patch) navigationPatch.query = patch.query ?? "";
+    if ("mode" in patch) navigationPatch.mode = patch.mode ?? "suggestions";
+    setNavigationState((current) => ({ ...current, ...navigationPatch }));
+  }
+
+  function changeScope(scope: UnifiedSearchScope, boardSlug: string | null) {
+    setPageCursor(null);
+    setHasMore(false);
+    setNextCursor(null);
+    setResults([]);
+    setScopeUnavailable(false);
+    setAccessUnavailable(false);
+    const board =
+      scope === "board" ? boards.find((item) => item.slug === boardSlug) : null;
+    if (scope === "board" && !board) {
+      setNavigationState((current) => ({ ...current, scope, boardSlug }));
+      setScopeUnavailable(true);
+      return;
+    }
+    const nextContext: ViewPreferenceContext =
+      scope === "my_tasks"
+        ? { type: "search_my_tasks", boardId: null }
+        : scope === "board"
+          ? { type: "search_board", boardId: board?.id ?? null }
+          : { type: "search_all", boardId: null };
+    if (
+      viewPreferences.state.contextKey !==
+      (nextContext.boardId
+        ? `${nextContext.type}:${nextContext.boardId.toLowerCase()}`
+        : nextContext.type)
+    ) {
+      void viewPreferences.switchContext(nextContext);
+    }
+    setNavigationState((current) => ({ ...current, scope, boardSlug }));
   }
 
   function toggleLabel(result: UnifiedSearchResult) {
@@ -358,6 +572,16 @@ export function UnifiedSearchClient({
             board_name: String(result.board_name),
           },
         ];
+    if (!existing) {
+      setLabelNames((current) =>
+        new Map(current).set(key, {
+          board_id: String(result.board_id),
+          label_id: String(result.label_id),
+          label_name: String(result.label_name),
+          board_name: String(result.board_name),
+        }),
+      );
+    }
     updateState({ labelFilters: next });
   }
 
@@ -388,6 +612,29 @@ export function UnifiedSearchClient({
           Inicio
         </Link>
       </header>
+
+      {!accessUnavailable && !scopeUnavailable ? (
+        <ViewPreferenceStatus
+          state={viewPreferences.state}
+          loadFailed={viewPreferences.loadFailed}
+          onRetry={viewPreferences.retryPreference}
+          onRetryLoad={viewPreferences.retryLoad}
+          onResolveConflict={viewPreferences.resolveConflict}
+          onClearReference={(key) => {
+            if (key === "filter_board") updateState({ filterBoardId: null });
+            if (key === "filter_due") updateState({ dueFilter: null });
+            if (key === "filter_labels") updateState({ labelFilters: [] });
+            if (key === "filter_priority") updateState({ priority: null });
+            if (key === "filter_responsibility") {
+              updateState({ assigneeId: null, unassigned: false });
+            }
+          }}
+          resetConflict={viewPreferences.resetConflict}
+          resetFailed={viewPreferences.resetFailed}
+          onResolveResetConflict={viewPreferences.resolveResetConflict}
+          onRetryReset={viewPreferences.resetPreferences}
+        />
+      ) : null}
 
       {accessUnavailable ? (
         <section className="rounded-2xl border border-border bg-surface-raised p-6">
@@ -479,12 +726,9 @@ export function UnifiedSearchClient({
                   event.target.value === "all" ||
                   event.target.value === "my_tasks"
                 ) {
-                  updateState({ scope: event.target.value, boardSlug: null });
+                  changeScope(event.target.value, null);
                 } else {
-                  updateState({
-                    scope: "board",
-                    boardSlug: event.target.value.slice(6),
-                  });
+                  changeScope("board", event.target.value.slice(6));
                 }
               }}
               className="min-h-11 w-full rounded-lg border border-border bg-surface-base px-3 text-sm"
@@ -523,6 +767,12 @@ export function UnifiedSearchClient({
                   {board.name}
                 </option>
               ))}
+              {state.filterBoardId &&
+              !boards.some((board) => board.id === state.filterBoardId) ? (
+                <option value={state.filterBoardId}>
+                  Tablero no disponible
+                </option>
+              ) : null}
             </select>
             {state.scope === "board" ? (
               <p className="mt-2 text-text-muted text-xs">
@@ -632,6 +882,14 @@ export function UnifiedSearchClient({
                       {assignee.name} · {assignee.board_name}
                     </option>
                   ))}
+                  {state.assigneeId &&
+                  !assignees.some(
+                    (assignee) => assignee.user_id === state.assigneeId,
+                  ) ? (
+                    <option value={state.assigneeId}>
+                      Responsable no disponible
+                    </option>
+                  ) : null}
                 </select>
                 <label className="mt-3 flex items-center gap-2 text-sm">
                   <input
@@ -669,9 +927,8 @@ export function UnifiedSearchClient({
                         className="flex w-full items-center justify-between gap-2 rounded-lg border border-border px-2 py-2 text-left text-xs hover:bg-surface-hover"
                       >
                         <span>
-                          {filter.label_name ??
-                            `Etiqueta ${filter.label_id.slice(0, 8)}`}{" "}
-                          · {filter.board_name ?? "tablero"}
+                          {filter.label_name ?? "Etiqueta guardada"} ·{" "}
+                          {filter.board_name ?? "tablero no disponible"}
                         </span>
                         <IconX aria-hidden="true" size={14} />
                       </button>
@@ -700,12 +957,18 @@ export function UnifiedSearchClient({
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={viewPreferences.resetPreferences}
+                  disabled={viewPreferences.state.accessLost}
+                  className="rounded-lg border border-border px-3 py-2 text-sm text-text-secondary hover:bg-surface-hover disabled:opacity-50"
+                >
+                  Reiniciar preferencias
+                </button>
                 {state.scope !== "all" ? (
                   <button
                     type="button"
-                    onClick={() =>
-                      updateState({ scope: "all", boardSlug: null })
-                    }
+                    onClick={() => changeScope("all", null)}
                     className="rounded-lg border border-border px-3 py-2 text-sm text-text-secondary hover:bg-surface-hover"
                   >
                     Buscar en todos los tableros accesibles

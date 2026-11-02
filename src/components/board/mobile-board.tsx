@@ -39,6 +39,13 @@ interface MobileBoardProps {
   ) => void;
   onRequestDeleteColumn: (columnId: string) => void;
   isReorderingDisabled?: boolean;
+  hiddenCompletedColumnIds: string[];
+  collapsedCompletedColumnIds: string[];
+  onCompletedViewChange: (
+    columnId: string,
+    visible: boolean,
+    expanded: boolean,
+  ) => void;
 }
 
 /** Slide variants - direction is passed via `custom` */
@@ -71,14 +78,11 @@ export function MobileBoard({
   onMoveTask,
   onRequestDeleteColumn,
   isReorderingDisabled = false,
+  hiddenCompletedColumnIds,
+  collapsedCompletedColumnIds,
+  onCompletedViewChange,
 }: MobileBoardProps) {
   const [isAddingColumn, setIsAddingColumn] = useState(false);
-  const [showCompletedByColumn, setShowCompletedByColumn] = useState<
-    Record<string, boolean>
-  >({});
-  const [completedExpandedByColumn, setCompletedExpandedByColumn] = useState<
-    Record<string, boolean>
-  >({});
   const { safeIndex, direction, goToPrev, goToNext, goTo, onDragEnd } =
     useColumnSwipe(columns.length);
 
@@ -87,10 +91,10 @@ export function MobileBoard({
     ? orderTasksByCompletion(activeColumn.tasks)
     : { pending: [], completed: [] };
   const showCompleted = activeColumn
-    ? showCompletedByColumn[activeColumn.id] !== false
+    ? !hiddenCompletedColumnIds.includes(activeColumn.id)
     : true;
   const completedExpanded = activeColumn
-    ? completedExpandedByColumn[activeColumn.id] !== false
+    ? !collapsedCompletedColumnIds.includes(activeColumn.id)
     : true;
 
   function handleShiftLeft() {
@@ -264,10 +268,11 @@ export function MobileBoard({
                           className="flex min-h-9 items-center gap-1 rounded-md px-1 text-left font-medium text-sm text-text-secondary hover:text-text-primary"
                           aria-expanded={completedExpanded}
                           onClick={() =>
-                            setCompletedExpandedByColumn((current) => ({
-                              ...current,
-                              [activeColumn.id]: !completedExpanded,
-                            }))
+                            onCompletedViewChange(
+                              activeColumn.id,
+                              showCompleted,
+                              !completedExpanded,
+                            )
                           }
                         >
                           <span aria-hidden="true">
@@ -284,14 +289,11 @@ export function MobileBoard({
                         type="button"
                         className="rounded-md px-2 py-2 text-sm text-text-muted hover:bg-surface-overlay hover:text-text-primary"
                         onClick={() => {
-                          setShowCompletedByColumn((current) => ({
-                            ...current,
-                            [activeColumn.id]: !showCompleted,
-                          }));
-                          setCompletedExpandedByColumn((current) => ({
-                            ...current,
-                            [activeColumn.id]: true,
-                          }));
+                          onCompletedViewChange(
+                            activeColumn.id,
+                            !showCompleted,
+                            true,
+                          );
                         }}
                       >
                         {showCompleted ? "Ocultar" : "Mostrar"}

@@ -4,7 +4,13 @@ import { UnifiedSearchClient } from "@/components/search/unified-search-client";
 import { resolveApplicationAccess } from "@/lib/auth";
 import { listBoardLabels } from "@/lib/db/board-labels";
 import { listAssignableBoardMembers } from "@/lib/db/my-tasks";
+import { getMyViewPreferences } from "@/lib/db/view-preferences";
 import { createClient } from "@/lib/supabase/server";
+import type {
+  ViewPreferenceContext,
+  ViewPreferenceDrafts,
+  ViewPreferenceSnapshot,
+} from "@/lib/view-preference-state";
 
 export const metadata: Metadata = {
   title: "Buscar",
@@ -57,6 +63,11 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
     : [];
 
   const scopeValue = first(query.scope);
+  const invalidScope =
+    scopeValue !== null &&
+    scopeValue !== "all" &&
+    scopeValue !== "board" &&
+    scopeValue !== "my_tasks";
   const scope =
     scopeValue === "board" || scopeValue === "my_tasks" ? scopeValue : "all";
   const requestedBoardSlug = first(query.board_slug);
@@ -65,8 +76,38 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
       ? requestedBoardSlug
       : null;
   const initialBoard = boards.find((board) => board.slug === boardSlug) ?? null;
-  const filterBoardId = first(query.filter_board_id);
-  const priorityValue = first(query.priority);
+  const preferenceContext: ViewPreferenceContext =
+    scope === "my_tasks"
+      ? { type: "search_my_tasks", boardId: null }
+      : scope === "board" && initialBoard
+        ? { type: "search_board", boardId: initialBoard.id }
+        : { type: "search_all", boardId: null };
+  const initialScopeUnavailable =
+    invalidScope || (scope === "board" && !initialBoard);
+  let initialViewPreferences: ViewPreferenceSnapshot | null = null;
+  let initialViewPreferencesLoadFailed = initialScopeUnavailable;
+  if (!initialScopeUnavailable) {
+    try {
+      initialViewPreferences = await getMyViewPreferences(
+        supabase,
+        preferenceContext,
+      );
+    } catch {
+      initialViewPreferencesLoadFailed = true;
+    }
+  }
+  const savedPreferences = initialViewPreferences?.preferences ?? {};
+  const hasSerializedViewState = first(query.view_state) === "1";
+  const savedValue = (key: string, fallback: unknown) =>
+    savedPreferences[key]?.value ?? fallback;
+  const filterBoardId = hasSerializedViewState
+    ? first(query.filter_board_id)
+    : typeof savedValue("filter_board", null) === "string"
+      ? (savedValue("filter_board", null) as string)
+      : null;
+  const priorityValue = hasSerializedViewState
+    ? first(query.priority)
+    : savedValue("filter_priority", null);
   const priority =
     priorityValue === "low" ||
     priorityValue === "medium" ||
@@ -74,7 +115,9 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
     priorityValue === "urgent"
       ? priorityValue
       : null;
-  const dueValue = first(query.due);
+  const dueValue = hasSerializedViewState
+    ? first(query.due)
+    : savedValue("filter_due", null);
   const dueFilter =
     dueValue === "today" ||
     dueValue === "overdue" ||
@@ -82,10 +125,19 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
     dueValue === "no_date"
       ? dueValue
       : null;
-  const rawLabelFilters = Array.isArray(query.label)
-    ? query.label
-    : typeof query.label === "string"
-      ? [query.label]
+  const rawLabelFilters = hasSerializedViewState
+    ? Array.isArray(query.label)
+      ? query.label
+      : typeof query.label === "string"
+        ? [query.label]
+        : []
+    : Array.isArray(savedValue("filter_labels", []))
+      ? (
+          savedValue("filter_labels", []) as Array<{
+            board_id: string;
+            label_id: string;
+          }>
+        ).map((item) => `${item.board_id}:${item.label_id}`)
       : [];
   const labelPairs = rawLabelFilters.slice(0, 100).flatMap((value) => {
     const [boardId, labelId, extra] = value.split(":");
@@ -141,14 +193,62 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
     }),
   );
 
-  const orderValue = first(query.order);
+  const orderValue = hasSerializedViewState
+    ? first(query.order)
+    : savedValue("order", "due");
   const modeValue = first(query.mode);
-  const assigneeCandidate = first(query.assignee);
+  const savedResponsibility = savedValue("filter_responsibility", {
+    assignee_id: null,
+    unassigned: false,
+  }) as { assignee_id: string | null; unassigned: boolean };
+  const assigneeCandidate = hasSerializedViewState
+    ? first(query.assignee)
+    : savedResponsibility.assignee_id;
+  const unassigned = hasSerializedViewState
+    ? first(query.unassigned) === "1"
+    : savedResponsibility.unassigned;
+  const includeCompleted = hasSerializedViewState
+    ? first(query.completed) === "1"
+    : savedValue("include_completed", false) === true;
+  const includeHistory = hasSerializedViewState
+    ? first(query.history) === "1"
+    : savedValue("include_history", false) === true;
+  const initialPreferenceDrafts: ViewPreferenceDrafts | undefined =
+    hasSerializedViewState
+      ? {
+          filter_board: filterBoardId,
+          filter_due: dueFilter,
+          filter_labels: labelPairs.map(({ board_id, label_id }) => ({
+            board_id,
+            label_id,
+          })),
+          filter_priority: priority,
+          include_completed: includeCompleted,
+          include_history: includeHistory,
+          order: orderValue === "created" ? "created" : "due",
+          ...(preferenceContext.type === "search_my_tasks"
+            ? {}
+            : {
+                filter_responsibility: {
+                  assignee_id:
+                    assigneeCandidate && uuidPattern.test(assigneeCandidate)
+                      ? assigneeCandidate
+                      : null,
+                  unassigned,
+                },
+              }),
+        }
+      : undefined;
   return (
     <UnifiedSearchClient
       accountId={authData.user.id}
       boards={boards}
       assignees={assignees}
+      preferenceContext={preferenceContext}
+      initialViewPreferences={initialViewPreferences}
+      initialViewPreferencesLoadFailed={initialViewPreferencesLoadFailed}
+      initialPreferenceDrafts={initialPreferenceDrafts}
+      initialScopeUnavailable={initialScopeUnavailable}
       initialState={{
         query: (first(query.q) ?? "").slice(0, 200),
         scope,
@@ -157,14 +257,14 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
           filterBoardId && uuidPattern.test(filterBoardId)
             ? filterBoardId
             : null,
-        includeCompleted: first(query.completed) === "1",
-        includeHistory: first(query.history) === "1",
+        includeCompleted,
+        includeHistory,
         priority,
         assigneeId:
           assigneeCandidate && uuidPattern.test(assigneeCandidate)
             ? assigneeCandidate
             : null,
-        unassigned: first(query.unassigned) === "1",
+        unassigned,
         dueFilter,
         labelFilters: labelPairs.map((pair) => ({
           ...pair,

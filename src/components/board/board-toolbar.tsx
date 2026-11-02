@@ -149,7 +149,7 @@ export function BoardToolbar({
           {myTasksReturnHref ? "Volver a Mis tareas" : "Tableros"}
         </Link>
         <Link
-          href={myTasksReturnHref ? "/" : "/my-tasks?order=due"}
+          href={myTasksReturnHref ? "/" : "/my-tasks"}
           className="shrink-0 rounded-md px-2 py-1 text-sm text-text-secondary hover:bg-surface-overlay hover:text-text-primary"
         >
           {myTasksReturnHref ? "Tableros" : "Mis tareas"}

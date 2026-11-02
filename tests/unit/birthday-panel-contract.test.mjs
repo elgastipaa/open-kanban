@@ -443,9 +443,20 @@ test("closing label administration retains drafts and board filters", () => {
     /clearDialogDrafts|clearPrivateCatalogContent|onLabelsChange|setDrafts|setOrphanedDrafts|setLabelConflicts|setPreview/,
   );
   assert.match(labelsDialogSource, /<Modal[\s\S]*?onClose=\{handleClose\}/);
-  assert.match(boardSource, /const \[selectedLabelIds, setSelectedLabelIds\]/);
+  assert.match(
+    boardSource,
+    /context: \{ type: "board", boardId: initialBoard\.id \}/,
+  );
+  assert.match(
+    boardSource,
+    /const selectedLabelIds = Array\.isArray\(viewPreferences\.state\.values\.labels\)/,
+  );
+  assert.match(
+    boardSource,
+    /viewPreferences\.changePreference\("labels", ids\)/,
+  );
   assert.match(boardSource, /onLabelsChange=\{handleBoardLabelsChange\}/);
-  assert.doesNotMatch(closeHandler[0], /setSelectedLabelIds|setBoardLabels/);
+  assert.doesNotMatch(closeHandler[0], /changePreference|setBoardLabels/);
 });
 
 test("unavailable RPC clears access state while transport errors retain edits", () => {
@@ -486,7 +497,10 @@ test("unavailable RPC clears access state while transport errors retain edits", 
     labelsDialogSource,
     /catch \(failure\)[\s\S]*?failure instanceof BoardLabelsUnavailableError[\s\S]*?clearPrivateCatalogContent/,
   );
-  assert.match(boardSource, /const \[selectedLabelIds, setSelectedLabelIds\]/);
+  assert.match(
+    boardSource,
+    /const selectedLabelIds = Array\.isArray\(viewPreferences\.state\.values\.labels\)/,
+  );
 });
 
 test("catalog RPC unavailability is distinct from transport and parse errors", async () => {

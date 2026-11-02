@@ -117,7 +117,7 @@ export default async function HomePage() {
             Cuenta
           </Link>
           <Link
-            href="/my-tasks?order=due"
+            href="/my-tasks"
             className="rounded-lg border border-border px-4 py-2 text-sm text-text-secondary transition hover:bg-surface-hover hover:text-text-primary"
           >
             Mis tareas

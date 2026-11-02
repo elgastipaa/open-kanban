@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
+import { splitSafeTextLinks } from "../../src/lib/text-links.ts";
 
 const source = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 
@@ -59,6 +60,60 @@ test("steps and historical descriptions and comments use the text renderer", () 
   assert.match(
     series,
     /<LinkifiedText\s+text=\{\s*comment\.deleted[\s\S]*?comment\.content\s*\?\?[\s\S]*?Este comentario ya no tiene contenido disponible\./,
+  );
+});
+
+test("the description editor keeps its draft and shows a separate safe-link preview", () => {
+  const descriptionStart = taskModal.indexOf(
+    '<section aria-labelledby="task-description-heading">',
+  );
+  const checklistStart = taskModal.indexOf(
+    'aria-labelledby="task-checklist-heading"',
+    descriptionStart,
+  );
+  const descriptionSection = taskModal.slice(descriptionStart, checklistStart);
+  const editorStart = descriptionSection.indexOf("<textarea");
+  const editorEnd = descriptionSection.indexOf("/>", editorStart);
+  const previewStart =
+    descriptionSection.match(
+      /<section\s+aria-labelledby="task-description-preview-heading"/,
+    )?.index ?? -1;
+
+  assert.ok(descriptionStart >= 0);
+  assert.ok(editorStart >= 0);
+  assert.ok(editorEnd > editorStart);
+  assert.ok(
+    previewStart > editorEnd,
+    `Preview should follow the textarea (start ${previewStart}, editor end ${editorEnd})`,
+  );
+  assert.match(descriptionSection, /id="task-description"/);
+  assert.match(descriptionSection, /value=\{draft\.description\}/);
+  assert.match(
+    descriptionSection,
+    /updateDraft\(\{ \.\.\.draft, description: event\.target\.value \}\)/,
+  );
+  assert.match(
+    descriptionSection,
+    /<section\s+aria-labelledby="task-description-preview-heading"/,
+  );
+  assert.match(
+    descriptionSection,
+    /id="task-description-preview-heading"[^>]*>\s*Vista previa de la descripción\s*</,
+  );
+  assert.match(
+    descriptionSection,
+    /<LinkifiedText\s+text=\{draft\.description\}/,
+  );
+
+  const previewSegments = splitSafeTextLinks(
+    "Guía: https://example.test/manual.",
+  );
+  assert.ok(
+    previewSegments.some(
+      (segment) =>
+        segment.type === "link" &&
+        segment.href === "https://example.test/manual",
+    ),
   );
 });
 

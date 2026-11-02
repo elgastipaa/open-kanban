@@ -1508,18 +1508,40 @@ export function TaskModal({
               )}
             </div>
             {showDescription && (
-              <textarea
-                id="task-description"
-                aria-label="Descripción de la tarea"
-                value={draft.description}
-                disabled={isWorking}
-                onChange={(event) =>
-                  updateDraft({ ...draft, description: event.target.value })
-                }
-                rows={5}
-                placeholder="Añade los detalles necesarios para completar la tarea."
-                className="w-full resize-y rounded-md border border-border bg-transparent px-3 py-2.5 text-sm text-text-primary outline-none transition-colors placeholder:text-text-muted focus:border-accent focus:ring-1 focus:ring-accent disabled:opacity-60"
-              />
+              <>
+                <textarea
+                  id="task-description"
+                  aria-label="Descripción de la tarea"
+                  value={draft.description}
+                  disabled={isWorking}
+                  onChange={(event) =>
+                    updateDraft({ ...draft, description: event.target.value })
+                  }
+                  rows={5}
+                  placeholder="Añade los detalles necesarios para completar la tarea."
+                  className="w-full resize-y rounded-md border border-border bg-transparent px-3 py-2.5 text-sm text-text-primary outline-none transition-colors placeholder:text-text-muted focus:border-accent focus:ring-1 focus:ring-accent disabled:opacity-60"
+                />
+                <section
+                  aria-labelledby="task-description-preview-heading"
+                  className="mt-3 rounded-md border border-border bg-surface-base/50 px-3 py-2.5"
+                >
+                  <h4
+                    id="task-description-preview-heading"
+                    className="font-medium text-text-muted text-xs"
+                  >
+                    Vista previa de la descripción
+                  </h4>
+                  <p className="mt-1 whitespace-pre-wrap break-words text-sm text-text-primary">
+                    {draft.description ? (
+                      <LinkifiedText text={draft.description} />
+                    ) : (
+                      <span className="text-text-muted">
+                        La descripción está vacía.
+                      </span>
+                    )}
+                  </p>
+                </section>
+              </>
             )}
           </section>
 

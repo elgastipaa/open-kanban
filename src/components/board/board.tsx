@@ -13,6 +13,7 @@ import {
   useState,
 } from "react";
 import { toast } from "sonner";
+import { BirthdayPanel } from "@/components/birthdays/birthday-panel";
 import { AddColumn } from "@/components/board/add-column";
 import { BoardToolbar } from "@/components/board/board-toolbar";
 import { Column } from "@/components/board/column";
@@ -1215,6 +1216,17 @@ function BoardWorkspace({
         onExport={handleExport}
         onImport={handleImport}
       />
+
+      {isReady ? (
+        <BirthdayPanel
+          mode={{
+            type: "board",
+            boardId: initialBoard.id,
+            slug,
+            timeZone: board?.time_zone ?? initialBoard.time_zone,
+          }}
+        />
+      ) : null}
 
       {!isReady ? (
         /* ── Loading: device detection in progress ── */

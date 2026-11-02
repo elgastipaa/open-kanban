@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { BirthdayPanel } from "@/components/birthdays/birthday-panel";
 import { CopyOccurrenceLinkAction } from "@/components/series/copy-occurrence-link-action";
 import { DeleteSeriesButton } from "@/components/series/delete-series-button";
 import { HistoricalTaskCopyAction } from "@/components/series/historical-task-copy-action";
@@ -402,6 +403,8 @@ export default async function SeriesPage({ searchParams }: SeriesPageProps) {
           Aplicar filtro
         </button>
       </form>
+
+      <BirthdayPanel mode={{ type: "series", boardId: selectedBoardId }} />
 
       <div className="mt-8 grid gap-8 lg:grid-cols-[minmax(16rem,0.75fr)_minmax(0,1.5fr)]">
         <aside

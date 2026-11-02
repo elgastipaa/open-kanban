@@ -81,7 +81,7 @@ REVOKE ALL ON FUNCTION public.board_export_package_ref_p(uuid, text, uuid)
   FROM PUBLIC, anon, authenticated, service_role;
 
 CREATE FUNCTION public.board_export_member_ref_p(
-  p_export_id uuid,
+  p_member_key bytea,
   p_email text,
   p_fallback text DEFAULT NULL
 )
@@ -90,19 +90,20 @@ LANGUAGE sql
 IMMUTABLE
 SET search_path = pg_catalog, extensions, pg_temp
 AS $$
-  SELECT 'member_' || pg_catalog.encode(extensions.digest(
+  SELECT 'member_' || pg_catalog.encode(extensions.hmac(
     pg_catalog.convert_to(
-      p_export_id::text || ':' || COALESCE(
+      COALESCE(
         NULLIF(pg_catalog.lower(pg_catalog.btrim(p_email)), ''),
         'id:' || p_fallback,
         'unknown'
       ),
       'UTF8'
     ),
+    p_member_key,
     'sha256'
   ), 'hex');
 $$;
-REVOKE ALL ON FUNCTION public.board_export_member_ref_p(uuid, text, text)
+REVOKE ALL ON FUNCTION public.board_export_member_ref_p(bytea, text, text)
   FROM PUBLIC, anon, authenticated, service_role;
 
 CREATE FUNCTION public.board_export_package_steps_p(
@@ -150,6 +151,7 @@ SET search_path = pg_catalog, public, auth, pg_temp
 AS $$
 DECLARE
   v_export_id uuid := pg_catalog.gen_random_uuid();
+  v_member_ref_key bytea := extensions.gen_random_bytes(32);
   v_board_id uuid;
   v_time_zone text;
   v_created_at timestamptz := pg_catalog.statement_timestamp();
@@ -276,7 +278,7 @@ BEGIN
         'updated_at', task.updated_at,
         'assignee_ref', CASE WHEN task.assignee_id IS NULL THEN NULL ELSE
           public.board_export_member_ref_p(
-            v_export_id, assignee.email, task.assignee_id::text
+            v_member_ref_key, assignee.email, task.assignee_id::text
           ) END
       ), NULL::text, NULL::bigint, NULL::text
     FROM live_tasks AS task
@@ -288,7 +290,7 @@ BEGIN
         'task_id', public.board_export_package_ref_p(v_export_id, 'task', comment.task_id),
         'author_name', CASE
           WHEN comment.author_name ~* '^[^[:space:]@]+@[^[:space:]@]+[.][^[:space:]@]+$'
-          THEN public.board_export_member_ref_p(v_export_id, comment.author_name)
+          THEN public.board_export_member_ref_p(v_member_ref_key, comment.author_name)
           ELSE comment.author_name
         END,
         'content', comment.content,
@@ -382,7 +384,7 @@ BEGIN
           'priority', series.template_snapshot->'priority',
           'assignee_ref', CASE WHEN series.template_snapshot->>'assignee_id' IS NULL THEN NULL
             ELSE public.board_export_member_ref_p(
-              v_export_id, template_assignee.email,
+              v_member_ref_key, template_assignee.email,
               series.template_snapshot->>'assignee_id'
             ) END,
           'steps', public.board_export_package_steps_p(
@@ -440,9 +442,10 @@ BEGIN
         'id', public.board_export_package_ref_p(v_export_id, 'activity', event.id),
         'task_id', public.board_export_package_ref_p(v_export_id, 'task', event.task_id),
         'actor_type', event.actor_type,
+        'category', event.category,
         'actor_name', CASE
           WHEN event.actor_name ~* '^[^[:space:]@]+@[^[:space:]@]+[.][^[:space:]@]+$'
-          THEN public.board_export_member_ref_p(v_export_id, event.actor_name)
+          THEN public.board_export_member_ref_p(v_member_ref_key, event.actor_name)
           ELSE event.actor_name
         END,
         'occurred_at', event.occurred_at,
@@ -450,7 +453,7 @@ BEGIN
           WHEN pg_catalog.jsonb_typeof(event.before_value) = 'string'
             AND event.before_value #>> '{}' ~* '^[^[:space:]@]+@[^[:space:]@]+[.][^[:space:]@]+$'
           THEN pg_catalog.to_jsonb(public.board_export_member_ref_p(
-            v_export_id, event.before_value #>> '{}'
+            v_member_ref_key, event.before_value #>> '{}'
           ))
           ELSE event.before_value
         END,
@@ -458,7 +461,7 @@ BEGIN
           WHEN pg_catalog.jsonb_typeof(event.after_value) = 'string'
             AND event.after_value #>> '{}' ~* '^[^[:space:]@]+@[^[:space:]@]+[.][^[:space:]@]+$'
           THEN pg_catalog.to_jsonb(public.board_export_member_ref_p(
-            v_export_id, event.after_value #>> '{}'
+            v_member_ref_key, event.after_value #>> '{}'
           ))
           ELSE event.after_value
         END

@@ -472,6 +472,7 @@ BEGIN
         (v_created->>'export_id')::uuid, 'activity',
         '84b00000-0000-4000-8000-000000000001'
       )
+        AND item->'payload'->>'category' = 'due_date'
     )
     OR EXISTS (
       SELECT 1 FROM jsonb_array_elements(v_page->'items') AS item
@@ -500,6 +501,21 @@ BEGIN
         AND NOT (item->'payload' ? 'created_by')
     ) THEN
     RAISE EXCEPTION 'A full active task or its package-local attribution was not exported: %', v_page;
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM jsonb_array_elements(v_page->'items') AS item
+    WHERE item->'payload'->>'assignee_ref' = 'member_' || pg_catalog.encode(
+      extensions.digest(
+        pg_catalog.convert_to(
+          (v_created->>'export_id') || ':issue42-collaborator@example.test',
+          'UTF8'
+        ),
+        'sha256'
+      ),
+      'hex'
+    )
+  ) THEN
+    RAISE EXCEPTION 'The public export ID is enough to guess a member reference: %', v_page;
   END IF;
   SELECT string_agg(item.payload::text, ' ')
   INTO v_all_payloads

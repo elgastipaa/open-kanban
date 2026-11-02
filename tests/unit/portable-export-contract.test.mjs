@@ -77,6 +77,46 @@ test("the server snapshot is allow-listed, pinned, paged, and expiring", async (
   assert.match(cleanupRoute, /cleanup_expired_board_export_snapshots_p/u);
 });
 
+test("activity snapshots preserve the event category", async () => {
+  const migration = await source(
+    "supabase/migrations/068_board_export_snapshots.sql",
+  );
+
+  assert.ok(
+    /'category', event\.category/u.test(migration),
+    "the activity payload must retain its category",
+  );
+});
+
+test("member references use a secret snapshot key, not the public export ID", async () => {
+  const migration = await source(
+    "supabase/migrations/068_board_export_snapshots.sql",
+  );
+  const helperStart = migration.indexOf(
+    "CREATE FUNCTION public.board_export_member_ref_p",
+  );
+  const helperEnd = migration.indexOf(
+    "REVOKE ALL ON FUNCTION public.board_export_member_ref_p",
+    helperStart,
+  );
+  const helper = migration.slice(helperStart, helperEnd);
+
+  assert.ok(
+    /v_member_ref_key bytea := extensions\.gen_random_bytes\(32\)/u.test(
+      migration,
+    ),
+    "each snapshot needs an independent HMAC key",
+  );
+  assert.ok(
+    /extensions\.hmac/u.test(helper),
+    "member references must be keyed hashes",
+  );
+  assert.ok(
+    !/p_export_id/u.test(helper),
+    "public export IDs must not key member references",
+  );
+});
+
 test("the export dialog warns about portable copies and starts a streamed download", async () => {
   const dialog = await source("src/components/board/board-export-dialog.tsx");
   const zip = await source("src/lib/portable-export-zip.ts");

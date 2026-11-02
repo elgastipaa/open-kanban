@@ -63,3 +63,56 @@ test("refresh nonce advances the request generation and drives the POST effect",
     "retry and focus revalidation must both schedule the POST effect",
   );
 });
+
+test("search preference controls are disabled while their save or conflict is unresolved", () => {
+  const componentSource = readFileSync(
+    new URL(
+      "../../src/components/search/unified-search-client.tsx",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+
+  assert.match(
+    componentSource,
+    /function isPreferenceBlocked\(key: string\)[\s\S]*?state\.saving\[key\][\s\S]*?state\.conflicts\[key\]/,
+  );
+  assert.match(
+    componentSource,
+    /function preferenceControlProps\(key: string\)[\s\S]*?disabled,[\s\S]*?"aria-busy"[\s\S]*?"aria-describedby"/,
+  );
+  for (const [id, key] of [
+    ["search-board-filter", "filter_board"],
+    ["search-priority", "filter_priority"],
+    ["search-due", "filter_due"],
+    ["search-assignee", "filter_responsibility"],
+  ]) {
+    assert.match(
+      componentSource,
+      new RegExp(
+        `id="${id}"[\\s\\S]*?\\{\\.\\.\\.preferenceControlProps\\("${key}"\\)\\}`,
+      ),
+    );
+  }
+  assert.match(
+    componentSource,
+    /checked=\{state\.includeCompleted\}[\s\S]*?\.\.\.preferenceControlProps\("include_completed"\)/,
+  );
+  assert.match(
+    componentSource,
+    /checked=\{state\.includeHistory\}[\s\S]*?\.\.\.preferenceControlProps\("include_history"\)/,
+  );
+  assert.match(
+    componentSource,
+    /\.\.\.preferenceControlProps\("filter_labels"\)/,
+  );
+  assert.match(
+    componentSource,
+    /value=\{state\.order\}[\s\S]*?\.\.\.preferenceControlProps\("order"\)/,
+  );
+  assert.match(componentSource, /isClearBlocked/);
+  assert.match(
+    componentSource,
+    /Guardando preferencias de búsqueda[\s\S]*?controles afectados están deshabilitados/,
+  );
+});

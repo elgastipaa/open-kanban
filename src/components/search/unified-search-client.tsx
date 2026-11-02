@@ -274,6 +274,45 @@ export function UnifiedSearchClient({
       ),
     [state.labelFilters],
   );
+  const isPreferenceSaving = (key: string) =>
+    Boolean(viewPreferences.state.saving[key]);
+  function isPreferenceBlocked(key: string): boolean {
+    return Boolean(
+      viewPreferences.state.saving[key] || viewPreferences.state.conflicts[key],
+    );
+  }
+  function preferenceControlProps(key: string) {
+    const disabled = isPreferenceBlocked(key);
+    return {
+      disabled,
+      "aria-busy": isPreferenceSaving(key),
+      "aria-describedby": disabled
+        ? "search-preference-control-status"
+        : undefined,
+    };
+  }
+  const hasSavingPreferences =
+    Object.keys(viewPreferences.state.saving).length > 0;
+  const hasPreferenceConflicts =
+    Object.keys(viewPreferences.state.conflicts).length > 0;
+  const preferenceControlStatusMessage =
+    hasSavingPreferences && hasPreferenceConflicts
+      ? "Hay preferencias guardándose y otras requieren revisión; los controles afectados están deshabilitados."
+      : hasSavingPreferences
+        ? "Guardando preferencias de búsqueda; los controles afectados están deshabilitados."
+        : hasPreferenceConflicts
+          ? "Revisa el conflicto de preferencias; los controles afectados están deshabilitados."
+          : "";
+  const clearPreferenceKeys = [
+    "filter_board",
+    "include_completed",
+    "include_history",
+    "filter_priority",
+    "filter_responsibility",
+    "filter_due",
+    "filter_labels",
+  ];
+  const isClearBlocked = clearPreferenceKeys.some(isPreferenceBlocked);
 
   useEffect(() => {
     queryInputRef.current?.focus();
@@ -635,6 +674,15 @@ export function UnifiedSearchClient({
           onRetryReset={viewPreferences.resetPreferences}
         />
       ) : null}
+      {preferenceControlStatusMessage ? (
+        <output
+          id="search-preference-control-status"
+          aria-live="polite"
+          className="mb-3 block text-sm text-text-secondary"
+        >
+          {preferenceControlStatusMessage}
+        </output>
+      ) : null}
 
       {accessUnavailable ? (
         <section className="rounded-2xl border border-border bg-surface-raised p-6">
@@ -756,10 +804,11 @@ export function UnifiedSearchClient({
             <select
               id="search-board-filter"
               value={state.filterBoardId ?? ""}
+              {...preferenceControlProps("filter_board")}
               onChange={(event) =>
                 updateState({ filterBoardId: event.target.value || null })
               }
-              className="min-h-11 w-full rounded-lg border border-border bg-surface-base px-3 text-sm"
+              className="min-h-11 w-full rounded-lg border border-border bg-surface-base px-3 text-sm disabled:opacity-50"
             >
               <option value="">Cualquier tablero accesible</option>
               {boards.map((board) => (
@@ -791,6 +840,7 @@ export function UnifiedSearchClient({
                 <input
                   type="checkbox"
                   checked={state.includeCompleted}
+                  {...preferenceControlProps("include_completed")}
                   onChange={(event) =>
                     updateState({ includeCompleted: event.target.checked })
                   }
@@ -801,6 +851,7 @@ export function UnifiedSearchClient({
                 <input
                   type="checkbox"
                   checked={state.includeHistory}
+                  {...preferenceControlProps("include_history")}
                   onChange={(event) =>
                     updateState({ includeHistory: event.target.checked })
                   }
@@ -818,13 +869,14 @@ export function UnifiedSearchClient({
             <select
               id="search-priority"
               value={state.priority ?? ""}
+              {...preferenceControlProps("filter_priority")}
               onChange={(event) =>
                 updateState({
                   priority: (event.target.value ||
                     null) as SearchUiState["priority"],
                 })
               }
-              className="min-h-11 w-full rounded-lg border border-border bg-surface-base px-3 text-sm"
+              className="min-h-11 w-full rounded-lg border border-border bg-surface-base px-3 text-sm disabled:opacity-50"
             >
               <option value="">Cualquier prioridad</option>
               <option value="urgent">Urgente</option>
@@ -842,13 +894,14 @@ export function UnifiedSearchClient({
             <select
               id="search-due"
               value={state.dueFilter ?? ""}
+              {...preferenceControlProps("filter_due")}
               onChange={(event) =>
                 updateState({
                   dueFilter: (event.target.value ||
                     null) as SearchUiState["dueFilter"],
                 })
               }
-              className="min-h-11 w-full rounded-lg border border-border bg-surface-base px-3 text-sm"
+              className="min-h-11 w-full rounded-lg border border-border bg-surface-base px-3 text-sm disabled:opacity-50"
             >
               <option value="">Cualquier fecha</option>
               <option value="today">Hoy (zona del tablero)</option>
@@ -868,13 +921,14 @@ export function UnifiedSearchClient({
                 <select
                   id="search-assignee"
                   value={state.assigneeId ?? ""}
+                  {...preferenceControlProps("filter_responsibility")}
                   onChange={(event) =>
                     updateState({
                       assigneeId: event.target.value || null,
                       unassigned: false,
                     })
                   }
-                  className="min-h-11 w-full rounded-lg border border-border bg-surface-base px-3 text-sm"
+                  className="min-h-11 w-full rounded-lg border border-border bg-surface-base px-3 text-sm disabled:opacity-50"
                 >
                   <option value="">Cualquier persona</option>
                   {assignees.map((assignee) => (
@@ -895,6 +949,7 @@ export function UnifiedSearchClient({
                   <input
                     type="checkbox"
                     checked={state.unassigned}
+                    {...preferenceControlProps("filter_responsibility")}
                     onChange={(event) =>
                       updateState({
                         unassigned: event.target.checked,
@@ -924,7 +979,8 @@ export function UnifiedSearchClient({
                             ),
                           })
                         }
-                        className="flex w-full items-center justify-between gap-2 rounded-lg border border-border px-2 py-2 text-left text-xs hover:bg-surface-hover"
+                        {...preferenceControlProps("filter_labels")}
+                        className="flex w-full items-center justify-between gap-2 rounded-lg border border-border px-2 py-2 text-left text-xs hover:bg-surface-hover disabled:opacity-50"
                       >
                         <span>
                           {filter.label_name ?? "Etiqueta guardada"} ·{" "}
@@ -977,15 +1033,16 @@ export function UnifiedSearchClient({
                 <button
                   type="button"
                   disabled={
-                    !state.query &&
-                    !state.filterBoardId &&
-                    !state.includeCompleted &&
-                    !state.includeHistory &&
-                    !state.priority &&
-                    !state.assigneeId &&
-                    !state.unassigned &&
-                    !state.dueFilter &&
-                    state.labelFilters.length === 0
+                    isClearBlocked ||
+                    (!state.query &&
+                      !state.filterBoardId &&
+                      !state.includeCompleted &&
+                      !state.includeHistory &&
+                      !state.priority &&
+                      !state.assigneeId &&
+                      !state.unassigned &&
+                      !state.dueFilter &&
+                      state.labelFilters.length === 0)
                   }
                   onClick={() => updateState(clearUnifiedSearchFilters(state))}
                   className="rounded-lg border border-border px-3 py-2 text-sm text-text-secondary hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-50"
@@ -1006,12 +1063,13 @@ export function UnifiedSearchClient({
                       Orden
                       <select
                         value={state.order}
+                        {...preferenceControlProps("order")}
                         onChange={(event) =>
                           updateState({
                             order: event.target.value as SearchUiState["order"],
                           })
                         }
-                        className="min-h-10 rounded-lg border border-border bg-surface-raised px-2"
+                        className="min-h-10 rounded-lg border border-border bg-surface-raised px-2 disabled:opacity-50"
                       >
                         <option value="due">Vencimiento</option>
                         <option value="created">Creación</option>
@@ -1128,8 +1186,9 @@ export function UnifiedSearchClient({
                                 <button
                                   type="button"
                                   onClick={() => toggleLabel(result)}
+                                  {...preferenceControlProps("filter_labels")}
                                   aria-pressed={labelSelected}
-                                  className="shrink-0 rounded-lg border border-border px-3 py-2 text-sm hover:bg-surface-hover"
+                                  className="shrink-0 rounded-lg border border-border px-3 py-2 text-sm hover:bg-surface-hover disabled:opacity-50"
                                 >
                                   {labelSelected
                                     ? "Quitar filtro"

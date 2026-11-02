@@ -616,6 +616,20 @@ GitHub #42 «Exportar un tablero completo en formato portable» está OPEN/`read
 - #42 permanece OPEN/`ready-for-human`, asignado a `elgastipaa`; AC1–4/AC6 están marcados y AC5 conserva gates de Storage/navegador y recorrido humano visual/accesible. `Blocked by #28/#29/#31/#36/#40` queda intacto. No se usaron Storage remoto, OAuth, datos/credenciales reales, SQL remoto, `main`, producción ni deploy.
 - PR #54 sigue OPEN/draft, base `main`, incluye #3–#42 y la evidencia de esta entrega. Se preservan `docs/VALIDATION.md` ajeno y `.scratch/` sin stage/commit.
 
-## Frontera siguiente LP-0.2 — #43 — 2026-11-02
+## Frontera previa LP-0.2 — #43 — 2026-11-02
 
 GitHub #43 «Importar un respaldo v1 con reemplazo seguro» está OPEN/`ready-for-agent`, sin asignación y con `Blocked by #42`. #42 tiene código revisado, evidencia automática y está integrado/publicado; sigue OPEN/`ready-for-human` por Storage/G04, navegador y aceptación humana. Conforme a la excepción secuencial LP-0.2, se puede implementar #43 con artefactos e identidades sintéticas en PostgreSQL descartable, manteniendo la arista y sin cerrar #43 ni declarar satisfechos gates de #42 o QA manual. Revalidar estado/labels/comentarios de #43, registrar kickoff y usar como base el HEAD actualizado de `codex/openkanban-1-0`.
+
+## Entrega integrada y publicada de #43 — 2026-11-02
+
+«Importar un respaldo v1 con reemplazo seguro» quedó integrado por fast-forward desde `codex/issue-43` en `codex/openkanban-1-0`. Base fija `97d21d450e42ef51606dda4f89f2bb58a6997cc3`; código verificado `3e34f368084e7f77d93232a41fa448c0f8a1182d`; HEAD final revisado/publicado de la rama ticket `fbd051fdf93011bdad00a3c953fed180ac5aba22`. Evidencia: [docs/validation/issue-43.md](../validation/issue-43.md); entrega en [issue #43](https://github.com/elgastipaa/open-kanban/issues/43#issuecomment-6590264056).
+
+- El lector v1 estricto solo importa columnas/tareas portables; no confía en IDs/permisos del archivo. Una generación `preparing` queda invisible y sin señales Realtime; el dueño ve la revisión actual, capacidad y vencimiento. La publicación revalida actor/contenido bajo lock y mueve el puntero atómicamente; conserva el contenido anterior siete días dentro de la cuota. Los recibos vencen en siete días y las dos rutinas de cleanup limitan cada lote. La UI reutiliza el ID al reconciliar timeout y muestra errores genéricos en español. La restauración de una copia previa sigue en #45.
+- Pasan DB focal/full (001–069), unit focal (7/7)/full, typegen/typecheck, build y Biome dirigido (9 archivos). En integración se repitieron focal DB/unit, typecheck y build. Reviews finales Spec y Standards/Privacy sobre el diff final: PASS sin hallazgos.
+- #43 permanece OPEN/`ready-for-human`, AC1/2/4/6 marcados; AC3 (Storage físico/G04) y AC5 (QA navegador/accesibilidad) quedan pendientes. `Blocked by #42` sigue intacto. Repetición SQL verifica la idempotencia tras commit, pero no hubo un corte HTTP real; también faltan verificación de cron externo y aceptación humana.
+- `pnpm lint` global informa 313 diagnósticos LF/CRLF en 313 archivos del checkout. Los nueve TS/TSX/MJS cambiados pasan Biome con finales CRLF. No se reformatearon archivos ajenos.
+- PR #54 sigue OPEN/draft, base `main`, incluye #3–#43 y la evidencia. Se preservan `docs/VALIDATION.md` ajeno y `.scratch/` sin stage/commit; no se usó Storage remoto, OAuth, datos/credenciales reales, SQL remoto, `main`, producción ni deploy.
+
+## Frontera siguiente LP-0.2 — #44 — 2026-11-02
+
+GitHub #44 «Importar un respaldo v2 completo» está OPEN/`ready-for-agent`, sin asignación ni comentarios y con `Blocked by #43`. #43 tiene implementación/evidencia sintética integrada, pero sigue OPEN/`ready-for-human` por Storage/G04, recorrido de navegador/aceptación y cron; se conserva la dependencia. La excepción secuencial LP-0.2 permite implementar #44 con archivos/objetos/actores sintéticos en servicios locales aislados, sin retirar la arista ni declarar resueltos los gates de #43. Revalidar issue/comentarios y blockers, registrar kickoff y basar `codex/issue-44` en el HEAD actualizado de `codex/openkanban-1-0`.

@@ -5,8 +5,14 @@ import { IconHistory, IconSearch, IconX } from "@tabler/icons-react";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ViewPreferenceStatus } from "@/components/preferences/view-preference-status";
+import { SavedViewsPanel } from "@/components/saved-views/saved-views-panel";
 import { useViewPreferences } from "@/hooks/use-view-preferences";
 import type { UnifiedSearchResult } from "@/lib/db/unified-search";
+import type {
+  SavedViewDefinition,
+  SavedViewReferenceField,
+  SavedViewsSnapshot,
+} from "@/lib/saved-view-state";
 import { createClient } from "@/lib/supabase/client";
 import { buildUnifiedSearchResultHref } from "@/lib/unified-search-navigation";
 import type {
@@ -73,6 +79,7 @@ interface UnifiedSearchClientProps {
   initialState: SearchUiState;
   preferenceContext: ViewPreferenceContext;
   initialViewPreferences: ViewPreferenceSnapshot | null;
+  initialSavedViews: SavedViewsSnapshot;
   initialViewPreferencesLoadFailed: boolean;
   initialPreferenceDrafts?: ViewPreferenceDrafts;
   initialScopeUnavailable: boolean;
@@ -156,6 +163,7 @@ export function UnifiedSearchClient({
   initialState,
   preferenceContext,
   initialViewPreferences,
+  initialSavedViews,
   initialViewPreferencesLoadFailed,
   initialPreferenceDrafts,
   initialScopeUnavailable,
@@ -265,6 +273,23 @@ export function UnifiedSearchClient({
   const queryInputRef = useRef<HTMLInputElement>(null);
 
   const selectedBoard = boards.find((board) => board.slug === state.boardSlug);
+  const currentSavedViewDefinition: SavedViewDefinition = {
+    query: state.query,
+    scope: state.scope,
+    boardId: state.scope === "board" ? (selectedBoard?.id ?? null) : null,
+    includeCompleted: state.includeCompleted,
+    includeHistory: state.includeHistory,
+    filterBoardId: state.filterBoardId,
+    dueFilter: state.dueFilter,
+    priority: state.priority,
+    assigneeId: state.assigneeId,
+    unassigned: state.unassigned,
+    labels: state.labelFilters.map(({ board_id, label_id }) => ({
+      boardId: board_id,
+      labelId: label_id,
+    })),
+    order: state.order,
+  };
   const selectedFilters = useMemo(
     () =>
       new Set(
@@ -563,7 +588,11 @@ export function UnifiedSearchClient({
     setNavigationState((current) => ({ ...current, ...navigationPatch }));
   }
 
-  function changeScope(scope: UnifiedSearchScope, boardSlug: string | null) {
+  function changeScope(
+    scope: UnifiedSearchScope,
+    boardSlug: string | null,
+    switchPreferences = true,
+  ) {
     setPageCursor(null);
     setHasMore(false);
     setNextCursor(null);
@@ -584,14 +613,77 @@ export function UnifiedSearchClient({
           ? { type: "search_board", boardId: board?.id ?? null }
           : { type: "search_all", boardId: null };
     if (
+      switchPreferences &&
       viewPreferences.state.contextKey !==
-      (nextContext.boardId
-        ? `${nextContext.type}:${nextContext.boardId.toLowerCase()}`
-        : nextContext.type)
+        (nextContext.boardId
+          ? `${nextContext.type}:${nextContext.boardId.toLowerCase()}`
+          : nextContext.type)
     ) {
       void viewPreferences.switchContext(nextContext);
     }
     setNavigationState((current) => ({ ...current, scope, boardSlug }));
+  }
+
+  async function applySavedView(
+    definition: SavedViewDefinition,
+    invalidReferences: SavedViewReferenceField[] = [],
+  ) {
+    const requestedBoard =
+      definition.scope === "board"
+        ? boards.find((board) => board.id === definition.boardId)
+        : null;
+    const scope: UnifiedSearchScope =
+      definition.scope === "board" &&
+      (!requestedBoard || invalidReferences.includes("boardId"))
+        ? "all"
+        : definition.scope;
+    const boardSlug = scope === "board" ? (requestedBoard?.slug ?? null) : null;
+    const nextPreferenceContext: ViewPreferenceContext =
+      scope === "my_tasks"
+        ? { type: "search_my_tasks", boardId: null }
+        : scope === "board"
+          ? { type: "search_board", boardId: requestedBoard?.id ?? null }
+          : { type: "search_all", boardId: null };
+    const nextContextKey = nextPreferenceContext.boardId
+      ? `${nextPreferenceContext.type}:${nextPreferenceContext.boardId.toLowerCase()}`
+      : nextPreferenceContext.type;
+    const contextLoad =
+      viewPreferences.state.contextKey === nextContextKey
+        ? Promise.resolve()
+        : viewPreferences.switchContext(nextPreferenceContext);
+    changeScope(scope, boardSlug, false);
+    await contextLoad;
+    updateState({
+      query: definition.query,
+      filterBoardId: invalidReferences.includes("filterBoardId")
+        ? null
+        : definition.filterBoardId,
+      includeCompleted: definition.includeCompleted,
+      includeHistory: definition.includeHistory,
+      priority: definition.priority,
+      assigneeId: invalidReferences.includes("assigneeId")
+        ? null
+        : definition.assigneeId,
+      unassigned: invalidReferences.includes("assigneeId")
+        ? false
+        : definition.unassigned,
+      dueFilter: definition.dueFilter,
+      labelFilters: invalidReferences.includes("labels")
+        ? []
+        : definition.labels.map(({ boardId, labelId }) => {
+            const knownLabel = labelNames.get(`${boardId}:${labelId}`);
+            return {
+              board_id: boardId,
+              label_id: labelId,
+              label_name: knownLabel?.label_name ?? null,
+              board_name:
+                knownLabel?.board_name ??
+                boards.find((board) => board.id === boardId)?.name ??
+                null,
+            };
+          }),
+      order: definition.order,
+    });
   }
 
   function toggleLabel(result: UnifiedSearchResult) {
@@ -683,6 +775,14 @@ export function UnifiedSearchClient({
           {preferenceControlStatusMessage}
         </output>
       ) : null}
+
+      <SavedViewsPanel
+        key={accountId}
+        context="search"
+        currentDefinition={currentSavedViewDefinition}
+        initialSnapshot={initialSavedViews}
+        onApply={applySavedView}
+      />
 
       {accessUnavailable ? (
         <section className="rounded-2xl border border-border bg-surface-raised p-6">

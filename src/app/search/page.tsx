@@ -4,7 +4,9 @@ import { UnifiedSearchClient } from "@/components/search/unified-search-client";
 import { resolveApplicationAccess } from "@/lib/auth";
 import { listBoardLabels } from "@/lib/db/board-labels";
 import { listAssignableBoardMembers } from "@/lib/db/my-tasks";
+import { listMySavedViews } from "@/lib/db/saved-views";
 import { getMyViewPreferences } from "@/lib/db/view-preferences";
+import type { SavedViewsSnapshot } from "@/lib/saved-view-state";
 import { createClient } from "@/lib/supabase/server";
 import type {
   ViewPreferenceContext,
@@ -61,6 +63,12 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
           typeof board.name === "string",
       )
     : [];
+  let initialSavedViews: SavedViewsSnapshot = { status: "error" };
+  try {
+    initialSavedViews = await listMySavedViews(supabase, "search");
+  } catch {
+    initialSavedViews = { status: "error" };
+  }
 
   const scopeValue = first(query.scope);
   const invalidScope =
@@ -145,15 +153,31 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
       ? [{ board_id: boardId, label_id: labelId }]
       : [];
   });
+  const labelLookupPairs = [
+    ...labelPairs,
+    ...(initialSavedViews.active_views ?? []).flatMap((view) =>
+      view.definition.labels.map(({ boardId, labelId }) => ({
+        board_id: boardId,
+        label_id: labelId,
+      })),
+    ),
+  ].filter(
+    (pair, index, pairs) =>
+      pairs.findIndex(
+        (candidate) =>
+          candidate.board_id === pair.board_id &&
+          candidate.label_id === pair.label_id,
+      ) === index,
+  );
   const labelNames = new Map<string, { name: string; board_name: string }>();
   await Promise.all(
-    [...new Set(labelPairs.map((pair) => pair.board_id))].map(
+    [...new Set(labelLookupPairs.map((pair) => pair.board_id))].map(
       async (boardId) => {
         const board = boards.find((entry) => entry.id === boardId);
         if (!board) return;
         try {
           const labels = await listBoardLabels(supabase, board.slug);
-          for (const pair of labelPairs.filter(
+          for (const pair of labelLookupPairs.filter(
             (item) => item.board_id === boardId,
           )) {
             const label = labels.find((entry) => entry.id === pair.label_id);
@@ -246,6 +270,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
       assignees={assignees}
       preferenceContext={preferenceContext}
       initialViewPreferences={initialViewPreferences}
+      initialSavedViews={initialSavedViews}
       initialViewPreferencesLoadFailed={initialViewPreferencesLoadFailed}
       initialPreferenceDrafts={initialPreferenceDrafts}
       initialScopeUnavailable={initialScopeUnavailable}

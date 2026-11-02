@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { ViewPreferenceStatus } from "@/components/preferences/view-preference-status";
+import { SavedViewsPanel } from "@/components/saved-views/saved-views-panel";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useOnlineStatus } from "@/hooks/use-online-status";
 import { useViewPreferences } from "@/hooks/use-view-preferences";
@@ -12,6 +13,10 @@ import { setTaskCompletion, TaskCompletionError } from "@/lib/db/tasks";
 import { getMyTaskCompletionControl } from "@/lib/my-task-completion-control";
 import { orderMyTaskEntries } from "@/lib/my-task-view";
 import { myTaskBoardHref } from "@/lib/my-tasks-navigation";
+import type {
+  SavedViewDefinition,
+  SavedViewsSnapshot,
+} from "@/lib/saved-view-state";
 import { createClient } from "@/lib/supabase/client";
 import { resolveTaskChecklistCompletionReview } from "@/lib/task-checklist-completion";
 import {
@@ -34,6 +39,7 @@ interface MyTasksListProps {
   entries: MyTaskEntry[];
   explicitOrder: MyTasksOrder | null;
   initialViewPreferences: ViewPreferenceSnapshot | null;
+  initialSavedViews: SavedViewsSnapshot;
   initialViewPreferencesLoadFailed: boolean;
   loadError: boolean;
 }
@@ -69,6 +75,7 @@ export function MyTasksList({
   entries,
   explicitOrder,
   initialViewPreferences,
+  initialSavedViews,
   initialViewPreferencesLoadFailed,
   loadError,
 }: MyTasksListProps) {
@@ -86,6 +93,20 @@ export function MyTasksList({
   const completedView = viewPreferences.state.values.completed_view as {
     expanded: boolean;
     visible: boolean;
+  };
+  const currentSavedViewDefinition: SavedViewDefinition = {
+    query: "",
+    scope: "my_tasks",
+    boardId: null,
+    includeCompleted: completedView.visible,
+    includeHistory: false,
+    filterBoardId: null,
+    dueFilter: null,
+    priority: null,
+    assigneeId: null,
+    unassigned: false,
+    labels: [],
+    order,
   };
   const orderedEntries = useMemo(
     () => orderMyTaskEntries(entries, order),
@@ -329,6 +350,20 @@ export function MyTasksList({
           resetFailed={viewPreferences.resetFailed}
           onResolveResetConflict={viewPreferences.resolveResetConflict}
           onRetryReset={viewPreferences.resetPreferences}
+        />
+
+        <SavedViewsPanel
+          key={actorId}
+          context="my_tasks"
+          currentDefinition={currentSavedViewDefinition}
+          initialSnapshot={initialSavedViews}
+          onApply={(definition) => {
+            viewPreferences.changePreference("order", definition.order);
+            viewPreferences.changePreference("completed_view", {
+              visible: definition.includeCompleted,
+              expanded: true,
+            });
+          }}
         />
 
         {!isOnline ? (

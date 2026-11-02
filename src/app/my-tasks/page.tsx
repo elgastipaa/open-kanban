@@ -3,7 +3,9 @@ import { redirect } from "next/navigation";
 import { MyTasksList } from "@/components/my-tasks/my-tasks-list";
 import { resolveApplicationAccess } from "@/lib/auth";
 import { getMyTasks } from "@/lib/db/my-tasks";
+import { listMySavedViews } from "@/lib/db/saved-views";
 import { getMyViewPreferences } from "@/lib/db/view-preferences";
+import type { SavedViewsSnapshot } from "@/lib/saved-view-state";
 import { createClient } from "@/lib/supabase/server";
 import type { MyTasksOrder } from "@/lib/types";
 import type { ViewPreferenceSnapshot } from "@/lib/view-preference-state";
@@ -38,6 +40,7 @@ export default async function MyTasksPage({ searchParams }: MyTasksPageProps) {
 
   let preferences: ViewPreferenceSnapshot | null = null;
   let preferencesLoadFailed = false;
+  let savedViews: SavedViewsSnapshot = { status: "error" };
   try {
     preferences = await getMyViewPreferences(supabase, {
       type: "my_tasks",
@@ -45,6 +48,11 @@ export default async function MyTasksPage({ searchParams }: MyTasksPageProps) {
     });
   } catch {
     preferencesLoadFailed = true;
+  }
+  try {
+    savedViews = await listMySavedViews(supabase, "my_tasks");
+  } catch {
+    savedViews = { status: "error" };
   }
   const savedOrder = preferences?.preferences?.order?.value;
   const order: MyTasksOrder =
@@ -58,6 +66,7 @@ export default async function MyTasksPage({ searchParams }: MyTasksPageProps) {
         entries={entries}
         explicitOrder={explicitOrder}
         initialViewPreferences={preferences}
+        initialSavedViews={savedViews}
         initialViewPreferencesLoadFailed={preferencesLoadFailed}
         loadError={false}
       />
@@ -69,6 +78,7 @@ export default async function MyTasksPage({ searchParams }: MyTasksPageProps) {
         entries={[]}
         explicitOrder={explicitOrder}
         initialViewPreferences={preferences}
+        initialSavedViews={savedViews}
         initialViewPreferencesLoadFailed={preferencesLoadFailed}
         loadError
       />

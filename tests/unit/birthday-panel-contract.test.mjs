@@ -35,6 +35,13 @@ const boardSource = await readFile(
   new URL("../../src/components/board/board.tsx", import.meta.url),
   "utf8",
 );
+const boardLabelFilterSource = await readFile(
+  new URL(
+    "../../src/components/labels/board-label-filter.tsx",
+    import.meta.url,
+  ),
+  "utf8",
+);
 
 test("birthday advance is capped at one annual window in validation and input", () => {
   assert.ok(
@@ -47,6 +54,36 @@ test("birthday advance is capped at one annual window in validation and input", 
     /id=\{advanceId\}[\s\S]*?min=\{0\}[\s\S]*?max=\{366\}/.test(panelSource),
     "the numeric input must expose the 366-day limit",
   );
+});
+
+test("a remembered label is only called unavailable after a successful catalog read", () => {
+  assert.match(
+    boardSource,
+    /setBoardLabelCatalogStatus\("loading"\);\s*try\s*\{/,
+  );
+  assert.match(
+    boardSource,
+    /boardLabelCatalogStatus === "available"\s*\? selectedLabelIds\.filter\([\s\S]*?\)\s*:\s*\[\]/,
+  );
+  assert.match(
+    boardSource,
+    /error instanceof BoardLabelsUnavailableError[\s\S]*?onAccessLost\(\)[\s\S]*?setBoardLabelCatalogStatus\("error"\)/,
+  );
+  assert.match(boardSource, /No se pudo comprobar el catálogo de etiquetas/);
+  assert.match(boardSource, /Reintentar lectura/);
+});
+
+test("label selection is disabled and announced while its preference is unresolved", () => {
+  assert.match(
+    boardSource,
+    /<BoardLabelFilter[\s\S]*?disabled=\{[\s\S]*?viewPreferences\.state\.saving\.labels/,
+  );
+  assert.match(
+    boardLabelFilterSource,
+    /<fieldset[\s\S]*?disabled=\{disabled\}/,
+  );
+  assert.match(boardLabelFilterSource, /aria-busy=\{isSaving\}/);
+  assert.match(boardSource, /Guardando preferencias de etiquetas/);
 });
 
 test("a board time-zone change triggers the existing birthday refresh effect", () => {

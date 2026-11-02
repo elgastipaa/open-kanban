@@ -6,20 +6,32 @@ export function BoardLabelFilter({
   labels,
   selectedIds,
   onChange,
+  disabled = false,
+  isSaving = false,
+  disabledMessage,
 }: {
   labels: BoardLabel[];
   selectedIds: string[];
   onChange: (ids: string[]) => void;
+  disabled?: boolean;
+  isSaving?: boolean;
+  disabledMessage?: string;
 }) {
-  if (labels.length === 0) return null;
+  if (labels.length === 0 && !disabledMessage) return null;
   const selected = new Set(selectedIds);
 
   return (
-    <fieldset className="flex shrink-0 flex-wrap items-center gap-2 border-border border-b bg-surface-base px-4 py-2 md:px-6">
+    <fieldset
+      disabled={disabled}
+      aria-busy={isSaving}
+      className="flex shrink-0 flex-wrap items-center gap-2 border-border border-b bg-surface-base px-4 py-2 disabled:opacity-70 md:px-6"
+    >
       <legend className="sr-only">Filtrar tarjetas por etiqueta</legend>
-      <span className="font-medium text-text-secondary text-xs">
-        Etiquetas:
-      </span>
+      {labels.length > 0 ? (
+        <span className="font-medium text-text-secondary text-xs">
+          Etiquetas:
+        </span>
+      ) : null}
       {labels.map((label) => {
         const active = selected.has(label.id);
         return (
@@ -55,6 +67,11 @@ export function BoardLabelFilter({
         >
           Limpiar filtro
         </Button>
+      ) : null}
+      {disabledMessage ? (
+        <output aria-live="polite" className="text-text-secondary text-xs">
+          {disabledMessage}
+        </output>
       ) : null}
     </fieldset>
   );

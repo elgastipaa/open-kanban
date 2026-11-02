@@ -40,6 +40,7 @@ import { hasBoardAuthorizationEpochChanged } from "@/lib/board-auth-epoch";
 import { columnDeletionSuccessMessage } from "@/lib/column-deletion-flow";
 import {
   type BoardLabelMutationResult,
+  BoardLabelsUnavailableError,
   listBoardLabels,
   setTaskLabels,
 } from "@/lib/db/board-labels";
@@ -387,15 +388,30 @@ function BoardWorkspace({
   const [openColumnFormSignal, setOpenColumnFormSignal] = useState(0);
   const labelSupabase = useMemo(() => createClient(), []);
   const [boardLabels, setBoardLabels] = useState<BoardLabel[]>([]);
+  const [boardLabelCatalogStatus, setBoardLabelCatalogStatus] = useState<
+    "loading" | "available" | "error"
+  >("loading");
   const [isLabelsDialogOpen, setIsLabelsDialogOpen] = useState(false);
   const [birthdayLabelRefreshSignal, setBirthdayLabelRefreshSignal] =
     useState(0);
   const refreshBoardLabels = useCallback(async () => {
-    const labels = await listBoardLabels(labelSupabase, slug);
-    setBoardLabels(labels);
-  }, [labelSupabase, slug]);
+    setBoardLabelCatalogStatus("loading");
+    try {
+      const labels = await listBoardLabels(labelSupabase, slug);
+      setBoardLabels(labels);
+      setBoardLabelCatalogStatus("available");
+    } catch (error) {
+      if (error instanceof BoardLabelsUnavailableError) {
+        onAccessLost();
+      } else {
+        setBoardLabelCatalogStatus("error");
+      }
+      throw error;
+    }
+  }, [labelSupabase, onAccessLost, slug]);
   const handleBoardLabelsChange = useCallback((labels: BoardLabel[]) => {
     setBoardLabels(labels);
+    setBoardLabelCatalogStatus("available");
   }, []);
   const changeCompletedView = useCallback(
     (columnId: string, visible: boolean, expanded: boolean) => {
@@ -609,9 +625,19 @@ function BoardWorkspace({
 
   const isLabelFilterActive = selectedLabelIds.length > 0;
   const activeBoardLabelIds = new Set(boardLabels.map((label) => label.id));
-  const unavailableSelectedLabelIds = selectedLabelIds.filter(
-    (id) => !activeBoardLabelIds.has(id),
+  const unavailableSelectedLabelIds =
+    boardLabelCatalogStatus === "available"
+      ? selectedLabelIds.filter((id) => !activeBoardLabelIds.has(id))
+      : [];
+  const isLabelPreferenceUnresolved = Boolean(
+    viewPreferences.state.saving.labels ||
+      viewPreferences.state.conflicts.labels,
   );
+  const labelFilterDisabledMessage = viewPreferences.state.saving.labels
+    ? "Guardando preferencias de etiquetas…"
+    : viewPreferences.state.conflicts.labels
+      ? "Revisá el conflicto de preferencias para seguir editando etiquetas."
+      : undefined;
   const displayedColumns = useMemo(() => {
     if (unavailableSelectedLabelIds.length > 0) {
       return columns.map((column) => ({ ...column, tasks: [] }));
@@ -1379,10 +1405,39 @@ function BoardWorkspace({
       />
 
       <BoardLabelFilter
-        labels={boardLabels}
+        labels={boardLabelCatalogStatus === "available" ? boardLabels : []}
         selectedIds={selectedLabelIds}
         onChange={(ids) => viewPreferences.changePreference("labels", ids)}
+        disabled={
+          isLabelPreferenceUnresolved || viewPreferences.state.accessLost
+        }
+        isSaving={Boolean(viewPreferences.state.saving.labels)}
+        disabledMessage={labelFilterDisabledMessage}
       />
+      {boardLabelCatalogStatus === "loading" ? (
+        <output
+          aria-live="polite"
+          className="block px-4 py-2 text-sm text-text-secondary"
+        >
+          Cargando catálogo de etiquetas…
+          {selectedLabelIds.length > 0 ? " Se conserva el filtro." : null}
+        </output>
+      ) : null}
+      {boardLabelCatalogStatus === "error" ? (
+        <output
+          aria-live="polite"
+          className="block px-4 py-2 text-sm text-text-secondary"
+        >
+          No se pudo comprobar el catálogo de etiquetas. Se conserva el filtro.
+          <button
+            type="button"
+            className="ml-2 rounded underline underline-offset-2 focus-visible:outline"
+            onClick={() => void refreshBoardLabels().catch(() => undefined)}
+          >
+            Reintentar lectura
+          </button>
+        </output>
+      ) : null}
       {unavailableSelectedLabelIds.length > 0 ? (
         <div
           role="alert"
@@ -1393,6 +1448,9 @@ function BoardWorkspace({
           <button
             type="button"
             className="ml-2 rounded underline underline-offset-2 focus-visible:outline"
+            disabled={
+              isLabelPreferenceUnresolved || viewPreferences.state.accessLost
+            }
             onClick={() =>
               viewPreferences.changePreference(
                 "labels",

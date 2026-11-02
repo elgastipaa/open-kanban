@@ -14,6 +14,7 @@ import type {
 import {
   clearUnifiedSearchFilters,
   isCurrentUnifiedSearchRequest,
+  postUnifiedSearch,
 } from "@/lib/unified-search-state";
 
 interface SearchBoardOption {
@@ -148,7 +149,7 @@ export function UnifiedSearchClient({
   const [nextCursor, setNextCursor] = useState<Record<string, unknown> | null>(
     null,
   );
-  const [_refreshNonce, setRefreshNonce] = useState(0);
+  const [refreshNonce, setRefreshNonce] = useState(0);
   const [pageCursor, setPageCursor] = useState<Record<string, unknown> | null>(
     null,
   );
@@ -225,7 +226,9 @@ export function UnifiedSearchClient({
   }, [state.query]);
 
   useEffect(() => {
-    const currentRequestId = ++requestId.current;
+    // Keep explicit refreshes in the same monotonically increasing stale guard.
+    requestId.current += refreshNonce + 1;
+    const currentRequestId = requestId.current;
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
       if (!state.query.trim()) {
@@ -240,12 +243,9 @@ export function UnifiedSearchClient({
       setLoading(true);
       setMessage("");
       try {
-        const response = await fetch("/api/search", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          cache: "no-store",
-          signal: controller.signal,
-          body: JSON.stringify({
+        const response = await postUnifiedSearch(
+          fetch,
+          {
             query: state.query,
             scope: state.scope,
             boardSlug: state.scope === "board" ? state.boardSlug : null,
@@ -263,8 +263,9 @@ export function UnifiedSearchClient({
             order: state.order,
             mode: state.mode,
             cursor: pageCursor,
-          }),
-        });
+          },
+          controller.signal,
+        );
         if (!response.ok) throw new Error("search-failed");
         const data = (await response.json()) as SearchResponse;
         if (
@@ -330,7 +331,7 @@ export function UnifiedSearchClient({
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [accountId, pageCursor, state]);
+  }, [accountId, pageCursor, state, refreshNonce]);
 
   function updateState(patch: Partial<SearchUiState>) {
     setPageCursor(null);

@@ -560,6 +560,14 @@ BEGIN
   IF v_series->>'status' IS DISTINCT FROM 'confirmed' THEN
     RAISE EXCEPTION 'Could not prepare the history search fixture series: %', v_series;
   END IF;
+  v_completion_result := public.set_task_completion_p(
+    '33300000-0000-4000-8000-000000000018', v_owner_board.slug,
+    (v_owner_task->>'task_id')::uuid, true, 1
+  );
+  IF v_completion_result->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Could not mark the history fixture occurrence complete: %',
+      v_completion_result;
+  END IF;
   v_comment := public.create_task_comment_p(
     '33300000-0000-4000-8000-000000000016', v_owner_board.slug,
     (v_owner_task->>'task_id')::uuid, 'Frase solo historial de reemplazo'
@@ -604,8 +612,13 @@ DECLARE
   v_history jsonb;
   v_title_default jsonb;
   v_title_history jsonb;
+  v_title_completed_no_history jsonb;
+  v_title_history_completed jsonb;
   v_task_list_default jsonb;
   v_task_list_history jsonb;
+  v_task_list_comment_history jsonb;
+  v_current_completed_history_off jsonb;
+  v_current_completed_history_on jsonb;
 BEGIN
   SELECT * INTO refs FROM issue33_history_refs;
   IF refs.occurrence_id IS NULL THEN
@@ -631,8 +644,9 @@ BEGIN
         AND row.value->>'occurrence_on' = refs.occurrence_on::text
         AND row.value->>'occurrence_state' = 'replaced'
         AND row.value->>'is_historical' = 'true'
+        AND row.value->>'is_completed' = 'true'
     ) THEN
-    RAISE EXCEPTION 'Explicit history search did not return the precise replaced comment: %',
+    RAISE EXCEPTION 'History search did not return the completed replaced comment: %',
       v_history;
   END IF;
 
@@ -652,9 +666,41 @@ BEGIN
       AND row.value->>'occurrence_id' = refs.occurrence_id::text
       AND row.value->>'occurrence_state' = 'replaced'
       AND row.value->>'is_historical' = 'true'
+      AND row.value->>'is_completed' = 'true'
   ) THEN
-    RAISE EXCEPTION 'Explicit history title search did not return the replaced occurrence: %',
+    RAISE EXCEPTION 'History title search did not return the completed replaced occurrence: %',
       v_title_history;
+  END IF;
+  v_title_completed_no_history := public.search_unified_p(
+    'peña', p_include_completed => true
+  );
+  IF EXISTS (
+    SELECT 1
+    FROM pg_catalog.jsonb_array_elements(
+      v_title_completed_no_history->'results'
+    ) AS row(value)
+    WHERE row.value->>'task_id' = refs.task_id::text
+      AND row.value->>'occurrence_state' = 'replaced'
+  ) THEN
+    RAISE EXCEPTION 'Completed inclusion enabled historical results without history: %',
+      v_title_completed_no_history;
+  END IF;
+  v_title_history_completed := public.search_unified_p(
+    'peña', p_include_history => true, p_include_completed => true
+  );
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_catalog.jsonb_array_elements(
+      v_title_history_completed->'results'
+    ) AS row(value)
+    WHERE row.value->>'task_id' = refs.task_id::text
+      AND row.value->>'occurrence_id' = refs.occurrence_id::text
+      AND row.value->>'occurrence_state' = 'replaced'
+      AND row.value->>'is_historical' = 'true'
+      AND row.value->>'is_completed' = 'true'
+  ) THEN
+    RAISE EXCEPTION 'History and completed enabled did not include the replaced occurrence: %',
+      v_title_history_completed;
   END IF;
 
   v_task_list_default := public.search_unified_p(
@@ -676,9 +722,54 @@ BEGIN
       AND row.value->>'occurrence_id' = refs.occurrence_id::text
       AND row.value->>'occurrence_state' = 'replaced'
       AND row.value->>'is_historical' = 'true'
+      AND row.value->>'is_completed' = 'true'
   ) THEN
-    RAISE EXCEPTION 'The task list omitted its explicitly requested replaced occurrence: %',
+    RAISE EXCEPTION 'The task list omitted its completed replaced occurrence: %',
       v_task_list_history;
+  END IF;
+
+  v_task_list_comment_history := public.search_unified_p(
+    'historial de reemplazo', p_mode => 'tasks', p_include_history => true
+  );
+  IF v_task_list_comment_history->>'status' IS DISTINCT FROM 'available'
+    OR NOT EXISTS (
+      SELECT 1 FROM pg_catalog.jsonb_array_elements(
+        v_task_list_comment_history->'results'
+      ) AS row(value)
+      WHERE row.value->>'task_id' = refs.task_id::text
+        AND row.value->>'occurrence_id' = refs.occurrence_id::text
+        AND row.value->>'occurrence_state' = 'replaced'
+        AND row.value->>'is_historical' = 'true'
+        AND row.value->>'is_completed' = 'true'
+    ) THEN
+    RAISE EXCEPTION 'Task list did not include a completed replaced comment match: %',
+      v_task_list_comment_history;
+  END IF;
+
+  v_current_completed_history_off := public.search_unified_p(
+    'asignado', p_include_history => true
+  );
+  IF v_current_completed_history_off->>'status' IS DISTINCT FROM 'available'
+    OR pg_catalog.jsonb_array_length(
+      v_current_completed_history_off->'results'
+    ) <> 0 THEN
+    RAISE EXCEPTION 'History option bypassed completed filtering for a current task: %',
+      v_current_completed_history_off;
+  END IF;
+  v_current_completed_history_on := public.search_unified_p(
+    'asignado', p_include_history => true, p_include_completed => true
+  );
+  IF v_current_completed_history_on->>'status' IS DISTINCT FROM 'available'
+    OR NOT EXISTS (
+      SELECT 1 FROM pg_catalog.jsonb_array_elements(
+        v_current_completed_history_on->'results'
+      ) AS row(value)
+      WHERE row.value->>'kind' = 'task'
+        AND row.value->>'is_completed' = 'true'
+        AND coalesce(row.value->>'is_historical', 'false') = 'false'
+    ) THEN
+    RAISE EXCEPTION 'Completed filter did not independently restore a current completed task: %',
+      v_current_completed_history_on;
   END IF;
 END;
 $$;

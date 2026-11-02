@@ -341,7 +341,6 @@ BEGIN
         AND (p_scope <> 'my_tasks' OR task.assignee_id = v_actor_id)
         AND (p_assignee_id IS NULL OR task.assignee_id = p_assignee_id)
         AND (NOT p_unassigned OR task.assignee_id IS NULL)
-        AND (p_include_completed OR NOT task.is_completed)
         AND (p_priority IS NULL OR task.priority = p_priority)
         AND (p_due_filter IS NULL
           OR (p_due_filter = 'today'
@@ -516,7 +515,6 @@ BEGIN
         AND (p_scope <> 'my_tasks' OR task.assignee_id = v_actor_id)
         AND (p_assignee_id IS NULL OR task.assignee_id = p_assignee_id)
         AND (NOT p_unassigned OR task.assignee_id IS NULL)
-        AND (p_include_completed OR NOT task.is_completed)
         AND (p_priority IS NULL OR task.priority = p_priority)
         AND (p_due_filter IS NULL
           OR (p_due_filter = 'today'
@@ -789,7 +787,6 @@ BEGIN
         AND (p_scope <> 'my_tasks' OR task.assignee_id = v_actor_id)
         AND (p_assignee_id IS NULL OR task.assignee_id = p_assignee_id)
         AND (NOT p_unassigned OR task.assignee_id IS NULL)
-        AND (p_include_completed OR NOT task.is_completed)
         AND (p_priority IS NULL OR task.priority = p_priority)
         AND (p_due_filter IS NULL
           OR (p_due_filter = 'today'
@@ -1049,7 +1046,6 @@ BEGIN
         AND (p_scope <> 'my_tasks' OR task.assignee_id = v_actor_id)
         AND (p_assignee_id IS NULL OR task.assignee_id = p_assignee_id)
         AND (NOT p_unassigned OR task.assignee_id IS NULL)
-        AND (p_include_completed OR NOT task.is_completed)
         AND (p_priority IS NULL OR task.priority = p_priority)
         AND (p_due_filter IS NULL
           OR (p_due_filter = 'today'

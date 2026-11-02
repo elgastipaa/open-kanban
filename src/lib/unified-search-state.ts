@@ -1,3 +1,22 @@
+export type UnifiedSearchFetch = (
+  input: RequestInfo | URL,
+  init?: RequestInit,
+) => Promise<Response>;
+
+export function postUnifiedSearch(
+  fetcher: UnifiedSearchFetch,
+  payload: Record<string, unknown>,
+  signal: AbortSignal,
+): Promise<Response> {
+  return fetcher("/api/search", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    cache: "no-store",
+    signal,
+    body: JSON.stringify(payload),
+  });
+}
+
 export function isCurrentUnifiedSearchRequest(
   requestId: number,
   currentRequestId: number,

@@ -21,7 +21,7 @@
     "test:db:issue-31-upgrade": "bash scripts/test-db-issue-31-upgrade.sh",
     "test:db:issue-32": "bash scripts/test-db-issue-32.sh",
     "test:db:issue-33": "bash scripts/test-db-issue-33.sh",
-    "test:unit:issue-33": "node --experimental-strip-types --test tests/unit/unified-search-navigation.test.mjs tests/unit/unified-search-state.test.mjs tests/unit/unified-search-request.test.mjs",
+    "test:unit:issue-33": "node --experimental-strip-types --test tests/unit/unified-search-navigation.test.mjs tests/unit/unified-search-state.test.mjs tests/unit/unified-search-request.test.mjs tests/unit/unified-search-refresh.test.mjs",
     "test:db:issue-26": "bash scripts/test-db-issue-26.sh",
     "test:db": "bash scripts/test-db.sh",
     "test:db:issue-23": "bash scripts/test-db-issue-23.sh",

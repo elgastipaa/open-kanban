@@ -131,6 +131,39 @@ export type TaskCommentPage =
       anchor_index?: number;
     };
 
+export type TaskActivityCategory =
+  | "assignee"
+  | "due_date"
+  | "column"
+  | "completion"
+  | "recovery";
+export type TaskActivityActorType = "user" | "system" | "imported";
+
+export interface TaskActivityEvent {
+  id: string;
+  category: TaskActivityCategory;
+  actor_type: TaskActivityActorType;
+  actor_name: string | null;
+  occurred_at: string;
+  before_value: string | boolean | null;
+  after_value: string | boolean | null;
+}
+
+export interface TaskActivityCursor {
+  occurred_at: string;
+  id: string;
+}
+
+export type TaskActivityPage =
+  | { status: "unavailable" }
+  | {
+      status: "available";
+      events: TaskActivityEvent[];
+      has_more: boolean;
+      next_cursor: TaskActivityCursor | null;
+      retention_days: 180;
+    };
+
 export interface TaskCommentMentionInput {
   user_id: string;
   start_char: number;

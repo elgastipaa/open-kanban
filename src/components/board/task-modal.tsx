@@ -10,6 +10,7 @@ import {
   IconTypography,
 } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { TaskActivity } from "@/components/board/task-activity";
 import { TaskConversation } from "@/components/board/task-conversation";
 import { TaskCopyAction } from "@/components/board/task-copy-action";
 import { TaskDueDate } from "@/components/board/task-due-date";
@@ -350,6 +351,7 @@ export function TaskModal({
       task ? preservationBaseVersionsFor(task, restoredDraft) : null,
     );
   const [showDetails, setShowDetails] = useState(openRepetitionEditor);
+  const [activityRefreshSignal, setActivityRefreshSignal] = useState(0);
   const [showAccountPreferences, setShowAccountPreferences] = useState(false);
   const [showDescription, setShowDescription] = useState(
     Boolean(task?.description),
@@ -667,6 +669,7 @@ export function TaskModal({
       }
       if (result.status === "confirmed") {
         setAssigneeNotice("Responsable actualizado.");
+        setActivityRefreshSignal((current) => current + 1);
       } else if (result.status === "conflict") {
         setAssigneeNotice(
           "El responsable cambió en otro momento. Actualizamos el valor actual; vuelve a elegir si quieres cambiarlo.",
@@ -865,6 +868,7 @@ export function TaskModal({
       setBaseTask(result.task);
       if (result.status === "confirmed") {
         setWorkflow(confirmTaskEditSave(draftFor(result.task)));
+        setActivityRefreshSignal((current) => current + 1);
         setCompletionNotice(
           command.is_completed ? "Tarea completada." : "Tarea reabierta.",
         );
@@ -1117,6 +1121,7 @@ export function TaskModal({
     try {
       const result = await onMoveTask(task.id, targetColumnId);
       if (result?.status === "confirmed") {
+        setActivityRefreshSignal((current) => current + 1);
         onClose();
       } else if (result?.status === "conflict") {
         setMoveNotice(
@@ -1224,6 +1229,9 @@ export function TaskModal({
       setBaseTask(result.task);
       const confirmedDraft = draftFor(result.task);
       setWorkflow(confirmTaskEditSave(confirmedDraft));
+      if (Object.hasOwn(operation.updates, "due_on")) {
+        setActivityRefreshSignal((current) => current + 1);
+      }
       setDraftPreservationBaseVersions(result.task.field_versions);
       setConflicts({});
       setExpiredOperation(null);
@@ -2092,6 +2100,16 @@ export function TaskModal({
               {completionNotice}
             </output>
           )}
+
+          <TaskActivity
+            slug={slug}
+            taskId={baseTask.id}
+            actorId={actorId}
+            timeZone={boardTimeZone}
+            refreshSignal={activityRefreshSignal}
+            isOnline={isOnline}
+            isSessionStale={isSessionStale}
+          />
 
           <TaskConversation
             slug={slug}

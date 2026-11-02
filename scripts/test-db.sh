@@ -327,6 +327,11 @@ if [[ "${TEST_DB_FOCUS:-}" == 'issue35' ]]; then
   printf 'Issue #35 database regression tests passed (disposable PostgreSQL).\n'
   exit 0
 fi
+if [[ "${TEST_DB_FOCUS:-}" == 'issue36' ]]; then
+  "${psql[@]}" -f "$repo_dir/tests/db/task_activity.sql"
+  printf 'Issue #36 database regression tests passed (disposable PostgreSQL).\n'
+  exit 0
+fi
 "${psql[@]}" -f "$repo_dir/tests/db/closed_access.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/authentication.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/realtime_epoch.sql"
@@ -3152,4 +3157,5 @@ echo 'PASS: concurrent admins cannot use a stale administrator authority.'
 bash "$repo_dir/scripts/test-db-issue-32-race.sh" \
   "$pg_bin/psql" "$test_dir" 55439 "$test_dir/issue32-copy-race"
 "${psql[@]}" -f "$repo_dir/tests/db/unified_search.sql"
+"${psql[@]}" -f "$repo_dir/tests/db/task_activity.sql"
 printf 'Database regression tests passed (disposable PostgreSQL).\n'

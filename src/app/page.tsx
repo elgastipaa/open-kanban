@@ -123,6 +123,12 @@ export default async function HomePage() {
             Mis tareas
           </Link>
           <Link
+            href="/notifications"
+            className="rounded-lg border border-border px-4 py-2 text-sm text-text-secondary transition hover:bg-surface-hover hover:text-text-primary"
+          >
+            Novedades
+          </Link>
+          <Link
             href="/series"
             className="rounded-lg border border-border px-4 py-2 text-sm text-text-secondary transition hover:bg-surface-hover hover:text-text-primary"
           >

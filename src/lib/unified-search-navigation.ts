@@ -20,6 +20,7 @@ const reservedPaths = new Set([
   "invite",
   "login",
   "my-tasks",
+  "notifications",
   "privacy",
   "search",
   "series",

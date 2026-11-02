@@ -6,7 +6,7 @@
 **Rama:** `codex/issue-42`.
 **HEAD de código revisado:** `9aa647c3722d8e838fd19e971f97aa1d4c5454eb` (implementación `c660630621f0315f1fca79a74f6c7d161a771920` más correcciones de review).
 **Reviews finales:** Spec y Standards/Privacy PASS sobre `50f1a2492d229f207cedce2cfebfe9a63d2d5a2f..9aa647c3722d8e838fd19e971f97aa1d4c5454eb`, sin hallazgos accionables.
-**Estado:** #42 permanece OPEN/`ready-for-human`, asignado a `elgastipaa`. `Blocked by #28/#29/#31/#36/#40` queda intacto. LP-0.2 habilita esta verificación sintética sin aceptar QA humana ni retirar dependencias.
+**Estado:** código revisado e integrado/publicado en `codex/openkanban-1-0` y `codex/issue-42` (checkpoint integrado `52c861f2efae7fbcd7fe1ec14048f841e6f132fa`). #42 permanece OPEN/`ready-for-human`, asignado a `elgastipaa`; AC1–4/AC6 verificados y AC5 pendiente. `Blocked by #28/#29/#31/#36/#40` queda intacto. LP-0.2 habilita esta verificación sintética sin aceptar QA humana ni retirar dependencias.
 
 ## Alcance implementado
 
@@ -61,4 +61,4 @@
 
 ## Próximo paso
 
-Registrar este resultado en `docs/agents/implementation-run.md`. Mantener #42 abierto/`ready-for-human`, todos los `Blocked by` originales y los gates G04/G06 hasta que una persona verifique Storage y navegador local.
+Mantener #42 abierto/`ready-for-human`, todos los `Blocked by` originales y los gates G04/G06 hasta que una persona verifique Storage y navegador local. #43 puede avanzar según la excepción secuencial LP-0.2 con fixture sintético y su propia base local aislada, conservando `Blocked by #42`; ni esta implementación ni las mediciones actuales satisfacen los gates de Storage o aceptación humana.

@@ -6,7 +6,7 @@ Rama `codex/issue-25`; base fija `1e05fec55d019b591383813ed852d77a096ec2e7`; wor
 
 La regla canónica agrega recurrencias mensuales y anuales por fecha, último día disponible y ordinal semanal. El cálculo usa el mismo calendario para preview, conteo, creación y worker. Los patrones quinto inexistentes se omiten sin consumir N; el 31 y el 29 de febrero conservan el valor original y se ajustan al último día disponible cuando corresponde. El ordinal «último» es una regla explícita, distinta del quinto.
 
-El cambio extiende el contrato común de #23/#24 y conserva intactos los cálculos diarios y semanales. #25 sigue abierto y conserva `Blocked by #23`; #23 continúa OPEN/`ready-for-human`. No se aceptó QA ni se cerró ningún blocker.
+El cambio extiende el contrato común de #23/#24 y conserva intactos los cálculos diarios y semanales. #25 permanece OPEN/`ready-for-human` tras integrar esta entrega parcial y conserva `Blocked by #23`; #23 continúa OPEN/`ready-for-human`. No se aceptó QA ni se cerró ningún blocker.
 
 ## Criterios y evidencia automática
 
@@ -36,4 +36,4 @@ Entorno: Node.js `v24.14.1`, pnpm `11.25.0`, Next.js `16.4.2`, PostgreSQL `16.15
 
 - **Manual:** falta un recorrido visual de la UI con un fixture de navegador local sintético y una comprobación con lector de pantalla/dispositivo. No se abrió una sesión real.
 - **Externo:** G03 global y la configuración/verificación de host/cron permanecen pendientes. Las pruebas demuestran funciones PostgreSQL locales; no se desplegó ni se afirmó ejecución autónoma en alojamiento.
-- **Límites:** no se usaron `.env.local`, credenciales, OAuth/bypass, usuarios reales, SQL remoto, `main`, producción ni deploy. No se publicó, integró ni cerró ningún issue.
+- **Límites:** no se usaron `.env.local`, credenciales, OAuth/bypass, usuarios reales, SQL remoto, `main`, producción ni deploy. No se cerró ningún issue.

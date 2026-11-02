@@ -5,7 +5,7 @@
 **Base fija:** `7029e249a23d7c47d900c94f3572892b8df54653`.
 **Commits de código:** `d50e2412c0499eca7d8db2bd1a8c0e9ca069ff58` (funcionalidad inicial) y `27adffd88fd9486a75e1009e69c4e8b9ec38b10b` (desglose global admin).
 **HEAD de código final:** `27adffd88fd9486a75e1009e69c4e8b9ec38b10b`, rama `codex/issue-41`. La revisión final del cambio de desglose fijó base `c0b1cc105a529c2337e5130fead17e9c5a30ce4c`; el código quedó congelado durante esas revisiones.
-**Estado:** implementación local, todavía no integrada. #41 no se cierra; `Blocked by #19/#37/#40` permanece intacto. La excepción LP-0.2 permite pruebas sintéticas; no acepta QA ni retira bloqueadores.
+**Estado:** integrado por fast-forward y publicado en `codex/openkanban-1-0` y `codex/issue-41`, ambas ramas en `70339acd92814077e7bd7ac4714264630b42fe55`. #41 permanece OPEN/`ready-for-human`; `Blocked by #19/#37/#40` está intacto. La excepción LP-0.2 permite pruebas sintéticas; no acepta QA ni retira bloqueadores.
 
 ## Alcance implementado
 
@@ -62,4 +62,4 @@ Windows local; PostgreSQL 16 descartable creado por `scripts/test-db.sh` en un d
 
 ## Próxima acción
 
-Integrar localmente `codex/issue-41` desde la base fija después de coordinación, repetir verificaciones aplicables y mantener issue/dependencias abiertos hasta satisfacer gates manuales/externos.
+El HEAD integrado `70339acd92814077e7bd7ac4714264630b42fe55` volvió a pasar `pnpm test:db:issue-41` y `pnpm test:unit:issue-41` (12/12) en el checkout de integración. La rama y la integración están publicadas por push ordinario; PR #54 sigue OPEN/draft e incluye #41. Siguiente ticket elegible: #42, con `Blocked by #28/#29/#31/#36/#40`; aplicar LP-0.2 sin retirar edges ni aceptar QA humana.

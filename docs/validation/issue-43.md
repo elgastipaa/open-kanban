@@ -3,6 +3,7 @@
 **Contrato:** P24/P21, C-92, CF-19, G06; trazabilidad P18/P24. La importación de este ticket lee el respaldo legado v1, reemplaza el tablero destino solo tras confirmación del dueño y conserva la generación sustituida siete días.
 
 **Base fija:** `97d21d450e42ef51606dda4f89f2bb58a6997cc3` (`codex/openkanban-1-0`).
+**Código validado:** `558855fb0ea19b4900823924434ae9043c189b3a`.
 **Rama:** `codex/issue-43`.
 **Estado:** #43 queda abierto. Se conserva `Blocked by #42`; las pruebas sintéticas no satisfacen Storage/G04 ni aceptación humana.
 

@@ -31,6 +31,18 @@ export async function POST(request: Request): Promise<NextResponse> {
   if (!hasValidSecret(request)) return json({ status: "unavailable" }, 404);
   try {
     const service = createTaskAttachmentServiceClient();
+    const { data: expiredExports, error: exportCleanupError } =
+      await service.rpc("cleanup_expired_board_export_snapshots_p", {
+        p_limit: 100,
+      });
+    if (
+      exportCleanupError ||
+      typeof expiredExports !== "number" ||
+      !Number.isSafeInteger(expiredExports)
+    ) {
+      return json({ status: "error" }, 503);
+    }
+
     const leaseId = crypto.randomUUID();
     const { data, error } = await service.rpc(
       "claim_expired_task_attachment_cleanup_p",
@@ -76,7 +88,13 @@ export async function POST(request: Request): Promise<NextResponse> {
       }
     }
 
-    return json({ status: "processed", claimed: data.length, purged, pending });
+    return json({
+      status: "processed",
+      export_snapshots_cleaned: expiredExports,
+      claimed: data.length,
+      purged,
+      pending,
+    });
   } catch {
     return json({ status: "error" }, 503);
   }

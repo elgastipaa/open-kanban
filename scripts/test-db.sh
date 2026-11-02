@@ -353,6 +353,14 @@ if [[ "${TEST_DB_FOCUS:-}" == 'issue41' ]]; then
   printf 'Issue #41 database regression tests passed (disposable PostgreSQL).\n'
   exit 0
 fi
+if [[ "${TEST_DB_FOCUS:-}" == 'issue42' ]]; then
+  "${psql[@]}" -f "$repo_dir/tests/db/board_export_snapshot.sql"
+  bash "$repo_dir/scripts/test-db-issue-42-race.sh" \
+    "$pg_bin/psql" "$test_dir" 55439 "$test_dir/issue42-export-edit-race"
+  "${psql[@]}" -q -c 'DROP TABLE public.issue42_export_fixture'
+  printf 'Issue #42 database regression tests passed (disposable PostgreSQL).\n'
+  exit 0
+fi
 "${psql[@]}" -f "$repo_dir/tests/db/closed_access.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/authentication.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/realtime_epoch.sql"
@@ -3182,4 +3190,8 @@ bash "$repo_dir/scripts/test-db-issue-32-race.sh" \
 "${psql[@]}" -f "$repo_dir/tests/db/task_notifications.sql" \
   -f "$repo_dir/tests/db/task_notification_batches.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/task_attachment_cleanup_capacity.sql"
+"${psql[@]}" -f "$repo_dir/tests/db/board_export_snapshot.sql"
+bash "$repo_dir/scripts/test-db-issue-42-race.sh" \
+  "$pg_bin/psql" "$test_dir" 55439 "$test_dir/issue42-export-edit-race"
+"${psql[@]}" -q -c 'DROP TABLE public.issue42_export_fixture'
 printf 'Database regression tests passed (disposable PostgreSQL).\n'

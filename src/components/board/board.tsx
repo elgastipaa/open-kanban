@@ -15,6 +15,7 @@ import {
 import { toast } from "sonner";
 import { BirthdayPanel } from "@/components/birthdays/birthday-panel";
 import { AddColumn } from "@/components/board/add-column";
+import { BoardExportDialog } from "@/components/board/board-export-dialog";
 import { BoardToolbar } from "@/components/board/board-toolbar";
 import { Column } from "@/components/board/column";
 import { ColumnDeletionDialog } from "@/components/board/column-deletion-dialog";
@@ -50,7 +51,6 @@ import {
   updateBoardTimeZone,
 } from "@/lib/db/boards";
 import { setTaskAssignee, TaskAssigneeError } from "@/lib/db/my-tasks";
-import { exportBoard } from "@/lib/export";
 import { importBoard } from "@/lib/import";
 import {
   abortPendingSessionRequests,
@@ -392,6 +392,7 @@ function BoardWorkspace({
     "loading" | "available" | "error"
   >("loading");
   const [isLabelsDialogOpen, setIsLabelsDialogOpen] = useState(false);
+  const [isExportDialogOpen, setIsExportDialogOpen] = useState(false);
   const [birthdayLabelRefreshSignal, setBirthdayLabelRefreshSignal] =
     useState(0);
   const refreshBoardLabels = useCallback(async () => {
@@ -1284,18 +1285,6 @@ function BoardWorkspace({
     if (result.restoreTaskFocus) restoreTaskFocus();
   }
 
-  // Export handler
-  function handleExport() {
-    try {
-      exportBoard(slug, columns);
-      toast.success("Board exported successfully");
-    } catch {
-      toast.error("Export failed", {
-        description: "Could not export the board. Please try again.",
-      });
-    }
-  }
-
   // Import handler
   async function handleImport() {
     const input = document.createElement("input");
@@ -1357,7 +1346,7 @@ function BoardWorkspace({
           boardDeleteOperationIdRef.current = generateUUID();
           setShowDeleteBoard(true);
         }}
-        onExport={handleExport}
+        onExport={() => setIsExportDialogOpen(true)}
         onImport={handleImport}
         onOpenLabels={() => setIsLabelsDialogOpen(true)}
       />
@@ -1630,6 +1619,12 @@ function BoardWorkspace({
           id: column.id,
           title: column.title,
         }))}
+      />
+
+      <BoardExportDialog
+        open={isExportDialogOpen}
+        slug={slug}
+        onClose={() => setIsExportDialogOpen(false)}
       />
 
       <ConfirmDialog

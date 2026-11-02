@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import {
   createTaskAttachmentServiceClient,
+  removeTaskAttachmentObjectAndConfirmAbsent,
   TASK_ATTACHMENT_BUCKET,
 } from "@/lib/supabase/task-attachment-storage";
 import { readTaskAttachmentBody } from "@/lib/task-attachment-http";
@@ -65,26 +66,11 @@ async function cleanupReservation(
     return;
   }
 
-  const storage = service.storage.from(TASK_ATTACHMENT_BUCKET);
-  const parts = claim.object_key.split("/");
-  const objectName = parts.pop();
-  const folder = parts.join("/");
-  let objectAbsent = false;
-  if (objectName) {
-    try {
-      const { error: removeError } = await storage.remove([claim.object_key]);
-      if (!removeError) {
-        const { data: items, error: listError } = await storage.list(folder, {
-          limit: 2,
-          search: objectName,
-        });
-        objectAbsent =
-          !listError && !items.some((item) => item.name === objectName);
-      }
-    } catch {
-      objectAbsent = false;
-    }
-  }
+  const objectAbsent = await removeTaskAttachmentObjectAndConfirmAbsent(
+    service,
+    attachmentId,
+    claim.object_key,
+  );
   await service.rpc("confirm_task_attachment_purge_p", {
     p_attachment_id: attachmentId,
     p_lease_id: leaseId,

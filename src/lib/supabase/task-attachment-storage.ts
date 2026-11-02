@@ -3,6 +3,8 @@ import "server-only";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 export const TASK_ATTACHMENT_BUCKET = "task-attachments";
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
 export function createTaskAttachmentServiceClient(): SupabaseClient {
   const url = process.env.NEXT_PUBLIC_SUPABASE_PUBLIC_URL;
@@ -18,4 +20,33 @@ export function createTaskAttachmentServiceClient(): SupabaseClient {
       persistSession: false,
     },
   });
+}
+
+export async function removeTaskAttachmentObjectAndConfirmAbsent(
+  service: SupabaseClient,
+  attachmentId: string,
+  objectKey: string,
+): Promise<boolean> {
+  if (
+    !UUID_PATTERN.test(attachmentId) ||
+    objectKey !== `attachments/${attachmentId}`
+  ) {
+    return false;
+  }
+  try {
+    const { error: removeError } = await service.storage
+      .from(TASK_ATTACHMENT_BUCKET)
+      .remove([objectKey]);
+    if (removeError) return false;
+    const { data: objects, error: listError } = await service.storage
+      .from(TASK_ATTACHMENT_BUCKET)
+      .list("attachments", { limit: 2, search: attachmentId });
+    return (
+      !listError &&
+      objects !== null &&
+      !objects.some((object) => object.name === attachmentId)
+    );
+  } catch {
+    return false;
+  }
 }

@@ -33,6 +33,18 @@ interface CleanupCandidate {
   expires_at: string | null;
 }
 
+interface CleanupCursor {
+  created_at: string;
+  attachment_id: string;
+}
+
+interface AdminAttachmentPage {
+  summary: StorageSummary;
+  items: CleanupCandidate[];
+  hasMore: boolean;
+  nextCursor: CleanupCursor | null;
+}
+
 type AdminAction = {
   item: CleanupCandidate;
   kind: "clean" | "restore";
@@ -99,6 +111,47 @@ function parseCandidate(value: unknown): CleanupCandidate | null {
   return value as unknown as CleanupCandidate;
 }
 
+function parseCursor(value: unknown): CleanupCursor | null {
+  if (
+    !isRecord(value) ||
+    typeof value.created_at !== "string" ||
+    typeof value.attachment_id !== "string"
+  ) {
+    return null;
+  }
+  return {
+    created_at: value.created_at,
+    attachment_id: value.attachment_id,
+  };
+}
+
+function parsePage(value: unknown): AdminAttachmentPage | null {
+  if (!isRecord(value) || value.status !== "ok") return null;
+  const summary = parseSummary(value.summary);
+  const items = Array.isArray(value.items)
+    ? value.items.map(parseCandidate)
+    : null;
+  const hasMore = value.has_more;
+  const nextCursor =
+    value.next_cursor === null ? null : parseCursor(value.next_cursor);
+  if (
+    !summary ||
+    !items ||
+    items.some((item) => item === null) ||
+    typeof hasMore !== "boolean" ||
+    (hasMore && !nextCursor) ||
+    (!hasMore && nextCursor)
+  ) {
+    return null;
+  }
+  return {
+    summary,
+    items: items as CleanupCandidate[],
+    hasMore,
+    nextCursor,
+  };
+}
+
 function formatDecimalMegabytes(bytes: number): string {
   return `${(bytes / 1_000_000).toLocaleString("es-AR", {
     maximumFractionDigits: 1,
@@ -133,8 +186,11 @@ function candidateState(item: CleanupCandidate): string {
 export function AdminTaskAttachmentStorage() {
   const [summary, setSummary] = useState<StorageSummary | null>(null);
   const [items, setItems] = useState<CleanupCandidate[]>([]);
+  const [hasMore, setHasMore] = useState(false);
+  const [nextCursor, setNextCursor] = useState<CleanupCursor | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [error, setError] = useState("");
   const [action, setAction] = useState<AdminAction | null>(null);
   const [isWorking, setIsWorking] = useState(false);
@@ -145,18 +201,14 @@ export function AdminTaskAttachmentStorage() {
       signal,
     });
     const payload: unknown = await response.json().catch(() => null);
-    if (!response.ok || !isRecord(payload) || payload.status !== "ok") {
+    const page = parsePage(payload);
+    if (!response.ok || !page) {
       throw new Error("No se pudo consultar el almacenamiento.");
     }
-    const nextSummary = parseSummary(payload.summary);
-    const nextItems = Array.isArray(payload.items)
-      ? payload.items.map(parseCandidate)
-      : null;
-    if (!nextSummary || !nextItems || nextItems.some((item) => item === null)) {
-      throw new Error("No se pudo consultar el almacenamiento.");
-    }
-    setSummary(nextSummary);
-    setItems(nextItems as CleanupCandidate[]);
+    setSummary(page.summary);
+    setItems(page.items);
+    setHasMore(page.hasMore);
+    setNextCursor(page.nextCursor);
     setError("");
   }, []);
 
@@ -182,6 +234,41 @@ export function AdminTaskAttachmentStorage() {
       setError("No se pudo consultar el almacenamiento.");
     } finally {
       setIsRefreshing(false);
+    }
+  }
+
+  async function loadMore() {
+    if (!hasMore || !nextCursor || isLoadingMore) return;
+    setIsLoadingMore(true);
+    try {
+      const search = new URLSearchParams({
+        cursor_created_at: nextCursor.created_at,
+        cursor_attachment_id: nextCursor.attachment_id,
+      });
+      const response = await fetch(
+        `/api/admin/task-attachments?${search.toString()}`,
+        { cache: "no-store" },
+      );
+      const payload: unknown = await response.json().catch(() => null);
+      const page = parsePage(payload);
+      if (!response.ok || !page) {
+        throw new Error("No se pudo consultar el almacenamiento.");
+      }
+      setSummary(page.summary);
+      setItems((current) => {
+        const known = new Set(current.map((item) => item.attachment_id));
+        return [
+          ...current,
+          ...page.items.filter((item) => !known.has(item.attachment_id)),
+        ];
+      });
+      setHasMore(page.hasMore);
+      setNextCursor(page.nextCursor);
+      setError("");
+    } catch {
+      setError("No se pudo consultar el almacenamiento.");
+    } finally {
+      setIsLoadingMore(false);
     }
   }
 
@@ -243,7 +330,7 @@ export function AdminTaskAttachmentStorage() {
         <Button
           size="sm"
           onClick={() => void reload()}
-          disabled={isRefreshing || isLoading}
+          disabled={isRefreshing || isLoading || isLoadingMore}
           aria-label="Actualizar capacidad y adjuntos"
         >
           <IconRefresh
@@ -392,6 +479,9 @@ export function AdminTaskAttachmentStorage() {
                             size="sm"
                             variant="danger"
                             onClick={() => startAction(item, "clean")}
+                            disabled={
+                              isWorking || isLoadingMore || isRefreshing
+                            }
                           >
                             Limpiar
                           </Button>
@@ -399,6 +489,9 @@ export function AdminTaskAttachmentStorage() {
                           <Button
                             size="sm"
                             onClick={() => startAction(item, "restore")}
+                            disabled={
+                              isWorking || isLoadingMore || isRefreshing
+                            }
                           >
                             Recuperar
                           </Button>
@@ -414,6 +507,23 @@ export function AdminTaskAttachmentStorage() {
               </table>
             </div>
           )}
+
+          {hasMore ? (
+            <div className="mt-4 flex flex-col items-start gap-2">
+              <Button
+                size="sm"
+                onClick={() => void loadMore()}
+                disabled={isLoadingMore}
+              >
+                {isLoadingMore ? "Cargando adjuntos…" : "Cargar más adjuntos"}
+              </Button>
+              {isLoadingMore ? (
+                <output className="text-sm text-text-muted">
+                  Consultando más referencias…
+                </output>
+              ) : null}
+            </div>
+          ) : null}
         </>
       ) : null}
 

@@ -858,3 +858,425 @@ $$;
 COMMIT;
 
 \echo 'PASS: selected admin cleanup is logged, notifies only the current owner, hides names, and restores only for a current admin.'
+
+-- An administrator cannot restore a cleaned file while its board is in the
+-- recovery window. The same operation can be retried once the board and its
+-- current owner are valid again.
+BEGIN;
+SET LOCAL ROLE service_role;
+DO $$
+DECLARE
+  v_fixture issue40_attachment_fixture%ROWTYPE;
+  v_deleted jsonb;
+BEGIN
+  SELECT * INTO STRICT v_fixture FROM issue40_attachment_fixture;
+  v_deleted := public.admin_delete_task_attachment_p(
+    '74000000-0000-4000-8000-000000000004',
+    v_fixture.attachment_id,
+    '77000000-0000-4000-8000-000000000021'
+  );
+  IF v_deleted->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'The admin cleanup fixture could not be prepared: %', v_deleted;
+  END IF;
+END;
+$$;
+COMMIT;
+
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '74000000-0000-4000-8000-000000000001', true);
+DO $$
+DECLARE
+  v_fixture issue40_attachment_fixture%ROWTYPE;
+  v_deleted jsonb;
+BEGIN
+  SELECT * INTO STRICT v_fixture FROM issue40_attachment_fixture;
+  v_deleted := public.delete_board_p(
+    '77000000-0000-4000-8000-000000000022',
+    v_fixture.board_slug,
+    v_fixture.board_id
+  );
+  IF v_deleted->>'status' IS DISTINCT FROM 'recoverable' THEN
+    RAISE EXCEPTION 'The board recovery fixture could not be prepared: %', v_deleted;
+  END IF;
+END;
+$$;
+COMMIT;
+
+BEGIN;
+SET LOCAL ROLE service_role;
+DO $$
+DECLARE
+  v_fixture issue40_attachment_fixture%ROWTYPE;
+  v_blocked jsonb;
+BEGIN
+  SELECT * INTO STRICT v_fixture FROM issue40_attachment_fixture;
+  v_blocked := public.admin_restore_task_attachment_p(
+    '74000000-0000-4000-8000-000000000004',
+    v_fixture.attachment_id,
+    '77000000-0000-4000-8000-000000000023'
+  );
+  IF v_blocked->>'status' IS DISTINCT FROM 'unavailable' THEN
+    RAISE EXCEPTION 'Admin restore ignored the board recovery state: %', v_blocked;
+  END IF;
+END;
+$$;
+COMMIT;
+
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '74000000-0000-4000-8000-000000000001', true);
+DO $$
+DECLARE
+  v_fixture issue40_attachment_fixture%ROWTYPE;
+  v_restored jsonb;
+BEGIN
+  SELECT * INTO STRICT v_fixture FROM issue40_attachment_fixture;
+  v_restored := public.restore_board_p(
+    '77000000-0000-4000-8000-000000000024', v_fixture.board_id, NULL
+  );
+  IF v_restored->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'The owner could not restore the attachment test board: %', v_restored;
+  END IF;
+END;
+$$;
+COMMIT;
+
+BEGIN;
+SET LOCAL ROLE service_role;
+DO $$
+DECLARE
+  v_fixture issue40_attachment_fixture%ROWTYPE;
+  v_restored jsonb;
+BEGIN
+  SELECT * INTO STRICT v_fixture FROM issue40_attachment_fixture;
+  v_restored := public.admin_restore_task_attachment_p(
+    '74000000-0000-4000-8000-000000000004',
+    v_fixture.attachment_id,
+    '77000000-0000-4000-8000-000000000023'
+  );
+  IF v_restored->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Admin restore did not work after board recovery: %', v_restored;
+  END IF;
+END;
+$$;
+COMMIT;
+
+\echo 'PASS: admin restore checks the current board and valid owner before recording the operation.'
+
+-- The admin queue must expose every eligible row across cursor pages.
+CREATE TEMP TABLE issue40_admin_page_fixture (expected_count integer NOT NULL);
+GRANT SELECT, INSERT ON issue40_admin_page_fixture TO service_role;
+INSERT INTO public.task_attachments(
+  board_id, task_id, uploaded_by, upload_operation_id, file_name, size_bytes,
+  sha256, object_key, state, created_at
+)
+SELECT fixture.board_id, gen_random_uuid(),
+  '74000000-0000-4000-8000-000000000002', gen_random_uuid(),
+  'paginado-' || series.n || '.txt', 1, decode(repeat('ab', 32), 'hex'),
+  'attachments/issue40-pagination/' || gen_random_uuid(), 'active',
+  clock_timestamp() + (series.n * interval '1 microsecond')
+FROM issue40_attachment_fixture AS fixture
+CROSS JOIN generate_series(1, 101) AS series(n);
+INSERT INTO issue40_admin_page_fixture(expected_count)
+SELECT count(*)::integer FROM public.task_attachments
+WHERE board_id = (SELECT board_id FROM issue40_attachment_fixture)
+  AND state IN ('active', 'recoverable');
+
+BEGIN;
+SET LOCAL ROLE service_role;
+DO $$
+DECLARE
+  v_expected_count integer;
+  v_first_page jsonb;
+  v_second_page jsonb;
+BEGIN
+  SELECT expected_count INTO STRICT v_expected_count
+  FROM issue40_admin_page_fixture;
+  v_first_page := public.list_admin_task_attachment_cleanup_p(
+    '74000000-0000-4000-8000-000000000004', 100, NULL, NULL
+  );
+  IF jsonb_array_length(v_first_page->'items') <> 100
+    OR v_first_page->>'has_more' IS DISTINCT FROM 'true'
+    OR v_first_page->'next_cursor' IS NULL
+    OR v_expected_count <= 100 THEN
+    RAISE EXCEPTION 'The first admin metadata page omitted its continuation cursor';
+  END IF;
+  v_second_page := public.list_admin_task_attachment_cleanup_p(
+    '74000000-0000-4000-8000-000000000004',
+    100,
+    (v_first_page->'next_cursor'->>'created_at')::timestamptz,
+    (v_first_page->'next_cursor'->>'attachment_id')::uuid
+  );
+  IF v_second_page->>'status' IS DISTINCT FROM 'ok'
+    OR v_second_page->>'has_more' IS DISTINCT FROM 'false'
+    OR v_second_page->'next_cursor' IS DISTINCT FROM 'null'::jsonb
+    OR jsonb_array_length(v_second_page->'items') + 100 <> v_expected_count
+    OR EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements(v_first_page->'items') AS first_item(item)
+      JOIN jsonb_array_elements(v_second_page->'items') AS second_item(item)
+        ON first_item.item->>'attachment_id' = second_item.item->>'attachment_id'
+    ) THEN
+    RAISE EXCEPTION 'The second admin metadata page omitted or repeated eligible rows';
+  END IF;
+END;
+$$;
+COMMIT;
+
+\echo 'PASS: admin metadata pagination reports a cursor when eligible rows exceed one page.'
+
+-- Task deletion gives active children the parent's seven-day recovery window;
+-- independently deleted children retain their own deadline, and parent restore
+-- reactivates only parent-deleted rows without applying a second quota charge.
+CREATE TEMP TABLE issue40_parent_delete_fixture (
+  parent_deleted_attachment_id uuid NOT NULL,
+  independently_deleted_attachment_id uuid NOT NULL,
+  independent_expires_at timestamptz NOT NULL,
+  task_expires_at timestamptz
+);
+GRANT SELECT, INSERT, UPDATE ON issue40_parent_delete_fixture TO service_role, authenticated;
+
+BEGIN;
+SET LOCAL ROLE service_role;
+DO $$
+DECLARE
+  v_fixture issue40_attachment_fixture%ROWTYPE;
+  v_reserved jsonb;
+  v_published jsonb;
+  v_deleted jsonb;
+  v_attachment_id uuid;
+  v_expires_at timestamptz;
+BEGIN
+  SELECT * INTO STRICT v_fixture FROM issue40_attachment_fixture;
+  v_reserved := public.reserve_task_attachment_p(
+    '74000000-0000-4000-8000-000000000002',
+    '77000000-0000-4000-8000-000000000025',
+    v_fixture.board_slug, v_fixture.task_id,
+    'recuperación independiente.md', 32, repeat('c', 64)
+  );
+  IF v_reserved->>'status' IS DISTINCT FROM 'reserved' THEN
+    RAISE EXCEPTION 'Could not create independent recovery attachment: %', v_reserved;
+  END IF;
+  v_attachment_id := (v_reserved->>'attachment_id')::uuid;
+  v_published := public.publish_task_attachment_p(
+    '74000000-0000-4000-8000-000000000002',
+    v_fixture.board_slug, v_fixture.task_id, v_attachment_id,
+    '77000000-0000-4000-8000-000000000025', 32, repeat('c', 64)
+  );
+  IF v_published->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Could not publish independent recovery attachment: %', v_published;
+  END IF;
+  v_deleted := public.delete_task_attachment_p(
+    '74000000-0000-4000-8000-000000000002',
+    v_fixture.board_slug, v_fixture.task_id, v_attachment_id,
+    '77000000-0000-4000-8000-000000000026'
+  );
+  IF v_deleted->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Could not independently delete the recovery attachment: %', v_deleted;
+  END IF;
+  v_expires_at := (v_deleted->>'expires_at')::timestamptz;
+  INSERT INTO issue40_parent_delete_fixture(
+    parent_deleted_attachment_id, independently_deleted_attachment_id,
+    independent_expires_at
+  ) VALUES (
+    (SELECT attachment_id FROM issue40_attachment_fixture),
+    v_attachment_id, v_expires_at
+  );
+END;
+$$;
+COMMIT;
+
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '74000000-0000-4000-8000-000000000001', true);
+DO $$
+DECLARE
+  v_fixture issue40_attachment_fixture%ROWTYPE;
+  v_deleted jsonb;
+BEGIN
+  SELECT * INTO STRICT v_fixture FROM issue40_attachment_fixture;
+  v_deleted := public.delete_task_p(
+    '77000000-0000-4000-8000-000000000027', v_fixture.board_slug, v_fixture.task_id
+  );
+  IF v_deleted->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Task deletion fixture could not be created: %', v_deleted;
+  END IF;
+  UPDATE issue40_parent_delete_fixture AS fixture
+  SET task_expires_at = deletion.expires_at
+  FROM public.list_deleted_tasks_p(v_fixture.board_slug) AS deletion
+  WHERE deletion.task_id = v_fixture.task_id;
+END;
+$$;
+COMMIT;
+
+BEGIN;
+SET LOCAL ROLE service_role;
+DO $$
+DECLARE
+  v_parent issue40_parent_delete_fixture%ROWTYPE;
+  v_page jsonb;
+  v_parent_child jsonb;
+  v_independent_child jsonb;
+BEGIN
+  SELECT * INTO STRICT v_parent FROM issue40_parent_delete_fixture;
+  v_page := public.list_admin_task_attachment_cleanup_p(
+    '74000000-0000-4000-8000-000000000004', 200, NULL, NULL
+  );
+  SELECT item INTO v_parent_child
+  FROM jsonb_array_elements(v_page->'items') AS result(item)
+  WHERE result.item->>'attachment_id' = v_parent.parent_deleted_attachment_id::text;
+  SELECT item INTO v_independent_child
+  FROM jsonb_array_elements(v_page->'items') AS result(item)
+  WHERE result.item->>'attachment_id' = v_parent.independently_deleted_attachment_id::text;
+  IF v_parent_child->>'state' IS DISTINCT FROM 'recoverable'
+    OR v_parent_child->>'deletion_cause' IS DISTINCT FROM 'parent_delete'
+    OR (v_parent_child->>'expires_at')::timestamptz IS DISTINCT FROM v_parent.task_expires_at
+    OR v_independent_child->>'state' IS DISTINCT FROM 'recoverable'
+    OR v_independent_child->>'deletion_cause' IS DISTINCT FROM 'author'
+    OR (v_independent_child->>'expires_at')::timestamptz IS DISTINCT FROM v_parent.independent_expires_at THEN
+    RAISE EXCEPTION 'Task delete did not cascade while preserving independently deleted children';
+  END IF;
+END;
+$$;
+COMMIT;
+
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '74000000-0000-4000-8000-000000000001', true);
+DO $$
+DECLARE
+  v_fixture issue40_attachment_fixture%ROWTYPE;
+  v_restored jsonb;
+BEGIN
+  SELECT * INTO STRICT v_fixture FROM issue40_attachment_fixture;
+  v_restored := public.restore_task_p(
+    '77000000-0000-4000-8000-000000000028',
+    v_fixture.board_slug, v_fixture.task_id, NULL
+  );
+  IF v_restored->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Task recovery fixture could not be restored: %', v_restored;
+  END IF;
+END;
+$$;
+COMMIT;
+
+BEGIN;
+SET LOCAL ROLE service_role;
+DO $$
+DECLARE
+  v_parent issue40_parent_delete_fixture%ROWTYPE;
+  v_page jsonb;
+  v_parent_child jsonb;
+  v_independent_child jsonb;
+  v_summary jsonb;
+BEGIN
+  SELECT * INTO STRICT v_parent FROM issue40_parent_delete_fixture;
+  v_page := public.list_admin_task_attachment_cleanup_p(
+    '74000000-0000-4000-8000-000000000004', 200, NULL, NULL
+  );
+  SELECT item INTO v_parent_child
+  FROM jsonb_array_elements(v_page->'items') AS result(item)
+  WHERE result.item->>'attachment_id' = v_parent.parent_deleted_attachment_id::text;
+  SELECT item INTO v_independent_child
+  FROM jsonb_array_elements(v_page->'items') AS result(item)
+  WHERE result.item->>'attachment_id' = v_parent.independently_deleted_attachment_id::text;
+  IF v_parent_child->>'state' IS DISTINCT FROM 'active'
+    OR v_parent_child->>'deletion_cause' IS NOT NULL
+    OR v_independent_child->>'state' IS DISTINCT FROM 'recoverable'
+    OR v_independent_child->>'deletion_cause' IS DISTINCT FROM 'author'
+    OR (v_independent_child->>'expires_at')::timestamptz IS DISTINCT FROM v_parent.independent_expires_at THEN
+    RAISE EXCEPTION 'Task restore did not revive only children deleted with the parent';
+  END IF;
+  v_summary := public.admin_task_attachment_storage_summary_p(
+    '74000000-0000-4000-8000-000000000004'
+  );
+  IF (v_summary->>'active_bytes')::bigint < 128
+    OR (v_summary->>'recoverable_bytes')::bigint < 32 THEN
+    RAISE EXCEPTION 'Task restore lost a quota charge or double-released independent child bytes: %', v_summary;
+  END IF;
+END;
+$$;
+COMMIT;
+
+\echo 'PASS: deleting/restoring a task synchronizes child attachments without reviving independent deletions.'
+
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '74000000-0000-4000-8000-000000000001', true);
+DO $$
+DECLARE
+  v_fixture issue40_attachment_fixture%ROWTYPE;
+  v_deleted jsonb;
+BEGIN
+  SELECT * INTO STRICT v_fixture FROM issue40_attachment_fixture;
+  v_deleted := public.delete_task_p(
+    '77000000-0000-4000-8000-000000000029', v_fixture.board_slug, v_fixture.task_id
+  );
+  IF v_deleted->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Second task deletion for purge verification failed: %', v_deleted;
+  END IF;
+END;
+$$;
+COMMIT;
+
+WITH expiry AS (
+  SELECT clock_timestamp() - interval '169 hours' AS deleted_at
+)
+UPDATE public.task_deletions AS deletion
+SET deleted_at = expiry.deleted_at,
+    expires_at = expiry.deleted_at + interval '168 hours'
+FROM expiry
+WHERE deletion.task_id = (SELECT task_id FROM issue40_attachment_fixture);
+UPDATE public.task_attachments AS attachment
+SET deleted_at = deletion.deleted_at,
+    expires_at = deletion.expires_at
+FROM public.task_deletions AS deletion
+WHERE deletion.task_id = (SELECT task_id FROM issue40_attachment_fixture)
+  AND attachment.task_id = deletion.task_id
+  AND attachment.state = 'recoverable'
+  AND attachment.deletion_cause = 'parent_delete';
+
+DO $$
+DECLARE
+  v_fixture issue40_attachment_fixture%ROWTYPE;
+  v_status text;
+BEGIN
+  SELECT * INTO STRICT v_fixture FROM issue40_attachment_fixture;
+  v_status := public.purge_expired_task_internal_p(v_fixture.task_id, clock_timestamp());
+  IF v_status IS DISTINCT FROM 'purged' THEN
+    RAISE EXCEPTION 'The expired parent task could not be purged: %', v_status;
+  END IF;
+END;
+$$;
+
+BEGIN;
+SET LOCAL ROLE service_role;
+DO $$
+DECLARE
+  v_fixture issue40_attachment_fixture%ROWTYPE;
+  v_parent issue40_parent_delete_fixture%ROWTYPE;
+  v_claimed integer;
+  v_summary jsonb;
+BEGIN
+  SELECT * INTO STRICT v_fixture FROM issue40_attachment_fixture;
+  SELECT * INTO STRICT v_parent FROM issue40_parent_delete_fixture;
+  SELECT count(*)::integer INTO v_claimed
+  FROM public.claim_expired_task_attachment_cleanup_p(
+    '77000000-0000-4000-8000-000000000030', 50
+  ) AS cleanup
+  WHERE cleanup.attachment_id = v_parent.parent_deleted_attachment_id;
+  v_summary := public.admin_task_attachment_storage_summary_p(
+    '74000000-0000-4000-8000-000000000004'
+  );
+  IF v_claimed <> 1
+    OR (v_summary->>'pending_bytes')::bigint < 128
+    OR (v_summary->>'used_bytes')::bigint < 261 THEN
+    RAISE EXCEPTION 'Task purge released child quota or did not queue confirmed Storage reconciliation: %',
+      v_summary;
+  END IF;
+END;
+$$;
+COMMIT;
+
+\echo 'PASS: purging a task leaves expired child quota held until the Storage cleanup worker confirms absence.'

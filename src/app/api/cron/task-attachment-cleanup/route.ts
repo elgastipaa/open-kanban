@@ -2,7 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import {
   createTaskAttachmentServiceClient,
-  TASK_ATTACHMENT_BUCKET,
+  removeTaskAttachmentObjectAndConfirmAbsent,
 } from "@/lib/supabase/task-attachment-storage";
 
 export const dynamic = "force-dynamic";
@@ -42,7 +42,6 @@ export async function POST(request: Request): Promise<NextResponse> {
 
     let purged = 0;
     let pending = 0;
-    const storage = service.storage.from(TASK_ATTACHMENT_BUCKET);
     for (const value of data) {
       if (
         typeof value !== "object" ||
@@ -50,37 +49,16 @@ export async function POST(request: Request): Promise<NextResponse> {
         !("attachment_id" in value) ||
         typeof value.attachment_id !== "string" ||
         !("object_key" in value) ||
-        typeof value.object_key !== "string" ||
-        !/^attachments\/[0-9a-f-]{36}$/iu.test(value.object_key)
+        typeof value.object_key !== "string"
       ) {
         pending += 1;
         continue;
       }
-      const parts = value.object_key.split("/");
-      const objectName = parts.pop();
-      const folder = parts.join("/");
-      let objectAbsent = false;
-      if (objectName) {
-        try {
-          const { error: removeError } = await storage.remove([
-            value.object_key,
-          ]);
-          if (!removeError) {
-            const { data: objects, error: listError } = await storage.list(
-              folder,
-              {
-                limit: 2,
-                search: objectName,
-              },
-            );
-            objectAbsent =
-              !listError &&
-              !objects.some((object) => object.name === objectName);
-          }
-        } catch {
-          objectAbsent = false;
-        }
-      }
+      const objectAbsent = await removeTaskAttachmentObjectAndConfirmAbsent(
+        service,
+        value.attachment_id,
+        value.object_key,
+      );
 
       const { data: confirmationData, error: confirmationError } =
         await service.rpc("confirm_task_attachment_purge_p", {

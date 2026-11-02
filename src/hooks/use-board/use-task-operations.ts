@@ -12,7 +12,7 @@ import {
   getFullBoard,
   getFullBoardForTaskEdit,
   mutateTaskChecklistStep,
-  previewDailyRepetition,
+  previewRepetition,
   reconcileTaskCreation,
   setTaskCompletion,
   TaskCaptureError,
@@ -716,7 +716,7 @@ export function useTaskOperations({
       }
       const sessionEpoch = getSessionEpoch();
       try {
-        const result = await previewDailyRepetition(
+        const result = await previewRepetition(
           supabase,
           slug,
           taskId,

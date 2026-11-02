@@ -119,7 +119,7 @@ function throwDailyRepetitionError(error: unknown): never {
   throw new DailyRepetitionError("uncertain");
 }
 
-export async function previewDailyRepetition(
+export async function previewRepetition(
   supabase: SupabaseClient,
   slug: string,
   taskId: string,

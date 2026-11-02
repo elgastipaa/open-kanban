@@ -226,6 +226,7 @@ export function TaskDailyRepetition({
   };
 
   function selectedPattern(): RepetitionPattern | null {
+    if (frequency === "daily") return { frequency, interval: 1 };
     const parsedInterval = Number(interval);
     if (
       !Number.isSafeInteger(parsedInterval) ||
@@ -234,15 +235,12 @@ export function TaskDailyRepetition({
     ) {
       return null;
     }
-    if (frequency === "weekly") {
-      if (weekdays.length === 0) return null;
-      return {
-        frequency,
-        interval: parsedInterval,
-        weekdays: [...weekdays].sort((left, right) => left - right),
-      };
-    }
-    return { frequency, interval: parsedInterval };
+    if (weekdays.length === 0) return null;
+    return {
+      frequency,
+      interval: parsedInterval,
+      weekdays: [...weekdays].sort((left, right) => left - right),
+    };
   }
 
   async function loadPreview() {
@@ -525,7 +523,13 @@ export function TaskDailyRepetition({
             </Button>
           ) : (
             <div className="space-y-4 rounded-md border border-border p-3">
-              <div className="grid gap-3 sm:grid-cols-2">
+              <div
+                className={
+                  frequency === "weekly"
+                    ? "grid gap-3 sm:grid-cols-2"
+                    : "grid gap-3"
+                }
+              >
                 <label
                   className="flex flex-col gap-1.5 font-semibold text-text-muted text-xs"
                   htmlFor="daily-repetition-start"
@@ -589,27 +593,29 @@ export function TaskDailyRepetition({
                     <option value="weekly">Semanal</option>
                   </select>
                 </label>
-                <label
-                  className="flex flex-col gap-1.5 font-semibold text-text-muted text-xs"
-                  htmlFor="daily-repetition-interval"
-                >
-                  Repetir cada · {frequency === "weekly" ? "semanas" : "días"}
-                  <input
-                    id="daily-repetition-interval"
-                    type="number"
-                    min={1}
-                    max={2147483647}
-                    step={1}
-                    value={interval}
-                    disabled={isWorking || Boolean(retryCommand)}
-                    onChange={(event) => {
-                      setInterval(event.target.value);
-                      setPreview(null);
-                      setNotice("");
-                    }}
-                    className="h-10 rounded-md border border-border bg-transparent px-3 text-sm text-text-primary outline-none focus:border-accent disabled:opacity-60"
-                  />
-                </label>
+                {frequency === "weekly" ? (
+                  <label
+                    className="flex flex-col gap-1.5 font-semibold text-text-muted text-xs"
+                    htmlFor="daily-repetition-interval"
+                  >
+                    Repetir cada · semanas
+                    <input
+                      id="daily-repetition-interval"
+                      type="number"
+                      min={1}
+                      max={2147483647}
+                      step={1}
+                      value={interval}
+                      disabled={isWorking || Boolean(retryCommand)}
+                      onChange={(event) => {
+                        setInterval(event.target.value);
+                        setPreview(null);
+                        setNotice("");
+                      }}
+                      className="h-10 rounded-md border border-border bg-transparent px-3 text-sm text-text-primary outline-none focus:border-accent disabled:opacity-60"
+                    />
+                  </label>
+                ) : null}
               </div>
               {frequency === "weekly" ? (
                 <fieldset

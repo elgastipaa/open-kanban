@@ -13,6 +13,7 @@ import type {
   SavedViewReferenceField,
   SavedViewsSnapshot,
 } from "@/lib/saved-view-state";
+import { removeSavedViewCondition } from "@/lib/saved-view-state";
 import { createClient } from "@/lib/supabase/client";
 import { buildUnifiedSearchResultHref } from "@/lib/unified-search-navigation";
 import type {
@@ -72,6 +73,12 @@ interface SearchResponse {
   next_cursor: Record<string, unknown> | null;
 }
 
+interface PendingSavedViewReview {
+  definition: SavedViewDefinition;
+  invalidReferences: SavedViewReferenceField[];
+  boardScopeNeedsReplacement: boolean;
+}
+
 interface UnifiedSearchClientProps {
   accountId: string;
   boards: SearchBoardOption[];
@@ -91,6 +98,21 @@ const groupLabels = {
   board: "Tableros",
   label: "Etiquetas para filtrar",
 } as const;
+
+function unavailableReferenceActionLabel(
+  field: SavedViewReferenceField,
+): string | null {
+  switch (field) {
+    case "filterBoardId":
+      return "Quitar el filtro de tablero de esta vista";
+    case "assigneeId":
+      return "Quitar el filtro de responsable de esta vista";
+    case "labels":
+      return "Quitar todos los filtros de etiquetas de esta vista";
+    case "boardId":
+      return null;
+  }
+}
 
 function toSearchParams(state: SearchUiState): URLSearchParams {
   const params = new URLSearchParams();
@@ -263,10 +285,8 @@ export function UnifiedSearchClient({
     null,
   );
   const [message, setMessage] = useState("");
-  const [pendingBoardScopeReview, setPendingBoardScopeReview] = useState<{
-    definition: SavedViewDefinition;
-    invalidReferences: SavedViewReferenceField[];
-  } | null>(null);
+  const [pendingSavedViewReview, setPendingSavedViewReview] =
+    useState<PendingSavedViewReview | null>(null);
   const [accessUnavailable, setAccessUnavailable] = useState(false);
   const [scopeUnavailable, setScopeUnavailable] = useState(
     initialScopeUnavailable,
@@ -312,7 +332,7 @@ export function UnifiedSearchClient({
   }
   function preferenceControlProps(key: string) {
     const disabled =
-      Boolean(pendingBoardScopeReview) || isPreferenceBlocked(key);
+      Boolean(pendingSavedViewReview) || isPreferenceBlocked(key);
     return {
       disabled,
       "aria-busy": isPreferenceSaving(key),
@@ -402,7 +422,7 @@ export function UnifiedSearchClient({
   useEffect(() => {
     if (!viewPreferences.state.accessLost) return;
     requestId.current += 1;
-    setPendingBoardScopeReview(null);
+    setPendingSavedViewReview(null);
     setResults([]);
     setHasMore(false);
     setNextCursor(null);
@@ -423,7 +443,7 @@ export function UnifiedSearchClient({
       if (
         accessUnavailable ||
         scopeUnavailable ||
-        pendingBoardScopeReview ||
+        pendingSavedViewReview ||
         viewPreferences.isLoading
       ) {
         setLoading(false);
@@ -477,7 +497,7 @@ export function UnifiedSearchClient({
           return;
         }
         if (data.status === "unavailable") {
-          setPendingBoardScopeReview(null);
+          setPendingSavedViewReview(null);
           setResults([]);
           setHasMore(false);
           setNextCursor(null);
@@ -534,7 +554,7 @@ export function UnifiedSearchClient({
     accessUnavailable,
     accountId,
     pageCursor,
-    pendingBoardScopeReview,
+    pendingSavedViewReview,
     refreshNonce,
     scopeUnavailable,
     state,
@@ -648,14 +668,20 @@ export function UnifiedSearchClient({
     const boardScopeNeedsReplacement =
       definition.scope === "board" &&
       (!requestedBoard || invalidReferences.includes("boardId"));
-    if (boardScopeNeedsReplacement) {
-      setPendingBoardScopeReview({ definition, invalidReferences });
+    if (boardScopeNeedsReplacement || invalidReferences.length > 0) {
+      setPendingSavedViewReview({
+        definition,
+        invalidReferences,
+        boardScopeNeedsReplacement,
+      });
       setResults([]);
       setHasMore(false);
       setNextCursor(null);
       setPageCursor(null);
       setMessage(
-        "El tablero de esta vista ya no está disponible. Elige un tablero específico y accesible en «Buscar en» para reemplazar su alcance; la búsqueda no se ampliará mientras tanto. La consulta y los filtros quedan pausados hasta resolver o cancelar la revisión.",
+        boardScopeNeedsReplacement
+          ? "El tablero de esta vista ya no está disponible. Elige un tablero específico y accesible en «Buscar en» para reemplazar su alcance; la búsqueda no se ampliará mientras tanto. La consulta y los filtros quedan pausados hasta resolver o cancelar la revisión."
+          : "Esta vista tiene condiciones que ya no están disponibles. No mostramos sus valores ni resultados. Elige qué condiciones quitar; la consulta y los filtros quedan pausados hasta resolver o cancelar la revisión.",
       );
       return;
     }
@@ -678,38 +704,65 @@ export function UnifiedSearchClient({
     await contextLoad;
     updateState({
       query: definition.query,
-      filterBoardId: invalidReferences.includes("filterBoardId")
-        ? null
-        : definition.filterBoardId,
+      filterBoardId: definition.filterBoardId,
       includeCompleted: definition.includeCompleted,
       includeHistory: definition.includeHistory,
       priority: definition.priority,
-      assigneeId: invalidReferences.includes("assigneeId")
-        ? null
-        : definition.assigneeId,
-      unassigned: invalidReferences.includes("assigneeId")
-        ? false
-        : definition.unassigned,
+      assigneeId: definition.assigneeId,
+      unassigned: definition.unassigned,
       dueFilter: definition.dueFilter,
-      labelFilters: invalidReferences.includes("labels")
-        ? []
-        : definition.labels.map(({ boardId, labelId }) => {
-            const knownLabel = labelNames.get(`${boardId}:${labelId}`);
-            return {
-              board_id: boardId,
-              label_id: labelId,
-              label_name: knownLabel?.label_name ?? null,
-              board_name:
-                knownLabel?.board_name ??
-                boards.find((board) => board.id === boardId)?.name ??
-                null,
-            };
-          }),
+      labelFilters: definition.labels.map(({ boardId, labelId }) => {
+        const knownLabel = labelNames.get(`${boardId}:${labelId}`);
+        return {
+          board_id: boardId,
+          label_id: labelId,
+          label_name: knownLabel?.label_name ?? null,
+          board_name:
+            knownLabel?.board_name ??
+            boards.find((board) => board.id === boardId)?.name ??
+            null,
+        };
+      }),
       order: definition.order,
     });
-    setPendingBoardScopeReview(null);
+    setPendingSavedViewReview(null);
     setScopeUnavailable(false);
     setMessage("");
+  }
+
+  async function removeUnavailableViewCondition(
+    field: SavedViewReferenceField,
+  ) {
+    const review = pendingSavedViewReview;
+    if (
+      !review ||
+      review.boardScopeNeedsReplacement ||
+      field === "boardId" ||
+      !review.invalidReferences.includes(field)
+    ) {
+      return;
+    }
+
+    const definition = removeSavedViewCondition(review.definition, field);
+    const invalidReferences = review.invalidReferences.filter(
+      (current) => current !== field,
+    );
+    if (invalidReferences.length > 0) {
+      setPendingSavedViewReview({
+        ...review,
+        definition,
+        invalidReferences,
+      });
+      setMessage(
+        "Quedan otras condiciones no disponibles. Elige cuáles quitar o cancela la revisión.",
+      );
+      return;
+    }
+
+    await applySavedView(definition);
+    setMessage(
+      "Quitaste las condiciones elegidas. Puedes agregar condiciones accesibles y revisar el resultado; pulsa «Confirmar revisión y actualizar» para guardar los cambios.",
+    );
   }
 
   function toggleLabel(result: UnifiedSearchResult) {
@@ -806,7 +859,7 @@ export function UnifiedSearchClient({
         key={accountId}
         context="search"
         currentDefinition={currentSavedViewDefinition}
-        canEditCurrentDefinition={!pendingBoardScopeReview}
+        canEditCurrentDefinition={!pendingSavedViewReview}
         initialSnapshot={initialSavedViews}
         onApply={applySavedView}
       />
@@ -825,7 +878,7 @@ export function UnifiedSearchClient({
             Ir al inicio
           </Link>
         </section>
-      ) : scopeUnavailable && !pendingBoardScopeReview ? (
+      ) : scopeUnavailable && !pendingSavedViewReview ? (
         <section className="rounded-2xl border border-border bg-surface-raised p-6">
           <h2 className="font-semibold text-lg">Tablero no disponible</h2>
           <p className="mt-2 text-sm text-text-secondary">
@@ -867,7 +920,7 @@ export function UnifiedSearchClient({
                 type="search"
                 maxLength={200}
                 value={state.query}
-                disabled={Boolean(pendingBoardScopeReview)}
+                disabled={Boolean(pendingSavedViewReview)}
                 onChange={(event) => updateState({ query: event.target.value })}
                 placeholder="Tarea, comentario o tablero"
                 className="min-h-12 w-full bg-transparent text-sm outline-none placeholder:text-text-muted"
@@ -875,7 +928,7 @@ export function UnifiedSearchClient({
               {state.query ? (
                 <button
                   type="button"
-                  disabled={Boolean(pendingBoardScopeReview)}
+                  disabled={Boolean(pendingSavedViewReview)}
                   onClick={() => updateState({ query: "" })}
                   aria-label="Borrar consulta"
                   className="rounded p-1 text-text-secondary hover:bg-surface-hover"
@@ -898,8 +951,12 @@ export function UnifiedSearchClient({
                   ? `board:${state.boardSlug ?? ""}`
                   : state.scope
               }
+              disabled={Boolean(
+                pendingSavedViewReview &&
+                  !pendingSavedViewReview.boardScopeNeedsReplacement,
+              )}
               onChange={(event) => {
-                if (pendingBoardScopeReview) {
+                if (pendingSavedViewReview?.boardScopeNeedsReplacement) {
                   if (event.target.value.startsWith("board:")) {
                     const replacementBoard = boards.find(
                       (board) =>
@@ -908,7 +965,7 @@ export function UnifiedSearchClient({
                     );
                     if (!replacementBoard) return;
                     const { definition, invalidReferences } =
-                      pendingBoardScopeReview;
+                      pendingSavedViewReview;
                     void applySavedView(
                       { ...definition, boardId: replacementBoard.id },
                       invalidReferences.filter((field) => field !== "boardId"),
@@ -917,6 +974,12 @@ export function UnifiedSearchClient({
                   }
                   setMessage(
                     "Para conservar el alcance limitado, elige un tablero específico y accesible.",
+                  );
+                  return;
+                }
+                if (pendingSavedViewReview) {
+                  setMessage(
+                    "Resuelve o cancela la revisión de condiciones antes de cambiar el alcance.",
                   );
                   return;
                 }
@@ -985,7 +1048,7 @@ export function UnifiedSearchClient({
             ) : null}
 
             <fieldset
-              disabled={Boolean(pendingBoardScopeReview)}
+              disabled={Boolean(pendingSavedViewReview)}
               className="mt-5 space-y-2 border-0 p-0"
             >
               <legend className="mb-2 font-medium text-sm">Incluir</legend>
@@ -1171,7 +1234,7 @@ export function UnifiedSearchClient({
                   onClick={viewPreferences.resetPreferences}
                   disabled={
                     viewPreferences.state.accessLost ||
-                    Boolean(pendingBoardScopeReview)
+                    Boolean(pendingSavedViewReview)
                   }
                   className="rounded-lg border border-border px-3 py-2 text-sm text-text-secondary hover:bg-surface-hover disabled:opacity-50"
                 >
@@ -1180,7 +1243,7 @@ export function UnifiedSearchClient({
                 {state.scope !== "all" ? (
                   <button
                     type="button"
-                    disabled={Boolean(pendingBoardScopeReview)}
+                    disabled={Boolean(pendingSavedViewReview)}
                     onClick={() => changeScope("all", null)}
                     className="rounded-lg border border-border px-3 py-2 text-sm text-text-secondary hover:bg-surface-hover"
                   >
@@ -1190,7 +1253,7 @@ export function UnifiedSearchClient({
                 <button
                   type="button"
                   disabled={
-                    Boolean(pendingBoardScopeReview) ||
+                    Boolean(pendingSavedViewReview) ||
                     isClearBlocked ||
                     (!state.query &&
                       !state.filterBoardId &&
@@ -1210,7 +1273,7 @@ export function UnifiedSearchClient({
                 {state.mode === "suggestions" ? (
                   <button
                     type="button"
-                    disabled={Boolean(pendingBoardScopeReview)}
+                    disabled={Boolean(pendingSavedViewReview)}
                     onClick={() => updateState({ mode: "tasks" })}
                     className="rounded-lg bg-accent px-3 py-2 font-medium text-accent-foreground text-sm hover:bg-accent-hover"
                   >
@@ -1236,7 +1299,7 @@ export function UnifiedSearchClient({
                     </label>
                     <button
                       type="button"
-                      disabled={Boolean(pendingBoardScopeReview)}
+                      disabled={Boolean(pendingSavedViewReview)}
                       onClick={() => updateState({ mode: "suggestions" })}
                       className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-surface-hover"
                     >
@@ -1267,17 +1330,41 @@ export function UnifiedSearchClient({
                 className="mb-3 block rounded-lg border border-border bg-surface-raised px-4 py-3 text-sm text-text-secondary"
               >
                 <span>{message}</span>
-                {pendingBoardScopeReview ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setPendingBoardScopeReview(null);
-                      setMessage("");
-                    }}
-                    className="ml-3 underline underline-offset-4"
-                  >
-                    Cancelar revisión
-                  </button>
+                {pendingSavedViewReview ? (
+                  <>
+                    {!pendingSavedViewReview.boardScopeNeedsReplacement ? (
+                      <span className="ml-3 inline-flex flex-wrap gap-2">
+                        {pendingSavedViewReview.invalidReferences.map(
+                          (field) => {
+                            const label =
+                              unavailableReferenceActionLabel(field);
+                            return label ? (
+                              <button
+                                key={field}
+                                type="button"
+                                onClick={() =>
+                                  void removeUnavailableViewCondition(field)
+                                }
+                                className="underline underline-offset-4"
+                              >
+                                {label}
+                              </button>
+                            ) : null;
+                          },
+                        )}
+                      </span>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPendingSavedViewReview(null);
+                        setMessage("");
+                      }}
+                      className="ml-3 underline underline-offset-4"
+                    >
+                      Cancelar revisión
+                    </button>
+                  </>
                 ) : null}
                 {message.startsWith("No se pudo buscar") ? (
                   <button
@@ -1389,7 +1476,7 @@ export function UnifiedSearchClient({
               <button
                 type="button"
                 disabled={
-                  loading || !nextCursor || Boolean(pendingBoardScopeReview)
+                  loading || !nextCursor || Boolean(pendingSavedViewReview)
                 }
                 onClick={() => setPageCursor(nextCursor)}
                 className="mt-3 min-h-11 w-full rounded-lg border border-border px-4 py-2 text-sm hover:bg-surface-hover disabled:opacity-60"

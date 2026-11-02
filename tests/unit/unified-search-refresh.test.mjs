@@ -51,7 +51,7 @@ test("refresh nonce advances the request generation and drives the POST effect",
   assert.match(componentSource, /requestId\.current \+= refreshNonce \+ 1;/);
   assert.match(
     componentSource,
-    /\}, \[\s*accessUnavailable,\s*accountId,\s*pageCursor,\s*pendingBoardScopeReview,\s*refreshNonce,\s*scopeUnavailable,[\s\S]*?state,[\s\S]*?viewPreferences\.isLoading,\s*\]\);/,
+    /\}, \[\s*accessUnavailable,\s*accountId,\s*pageCursor,\s*pendingSavedViewReview,\s*refreshNonce,\s*scopeUnavailable,[\s\S]*?state,[\s\S]*?viewPreferences\.isLoading,\s*\]\);/,
   );
   assert.equal(
     (

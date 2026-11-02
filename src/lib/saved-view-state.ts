@@ -5,6 +5,10 @@ export type SavedViewReferenceField =
   | "filterBoardId"
   | "labels"
   | "assigneeId";
+export type SavedViewRemovableCondition = Exclude<
+  SavedViewReferenceField,
+  "boardId"
+>;
 
 export interface SavedViewLabelReference {
   boardId: string;
@@ -84,6 +88,20 @@ export function detectSavedViewVersionChange(
   return current && latest && current.version !== latest.version
     ? latest
     : null;
+}
+
+export function removeSavedViewCondition(
+  definition: SavedViewDefinition,
+  field: SavedViewRemovableCondition,
+): SavedViewDefinition {
+  switch (field) {
+    case "filterBoardId":
+      return { ...definition, filterBoardId: null };
+    case "assigneeId":
+      return { ...definition, assigneeId: null, unassigned: false };
+    case "labels":
+      return { ...definition, labels: [] };
+  }
 }
 
 const uuidPattern =

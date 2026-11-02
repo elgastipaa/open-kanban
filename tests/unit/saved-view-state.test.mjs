@@ -5,6 +5,7 @@ import {
   isSavedViewDefinition,
   parseSavedViewReferenceFields,
   parseSavedViewsSnapshot,
+  removeSavedViewCondition,
   resolveSavedViewConflict,
 } from "../../src/lib/saved-view-state.ts";
 
@@ -154,4 +155,48 @@ test("an authorized refresh identifies a newer selected view version", () => {
     null,
   );
   assert.equal(detectSavedViewVersionChange([current], [latest], ""), null);
+});
+
+test("explicitly removing an unavailable board filter preserves unrelated conditions", () => {
+  const definition = {
+    ...searchDefinition,
+    filterBoardId: "c3500000-0000-4000-8000-000000000001",
+  };
+
+  assert.deepEqual(removeSavedViewCondition(definition, "filterBoardId"), {
+    ...definition,
+    filterBoardId: null,
+  });
+});
+
+test("explicitly removing an unavailable assignee also clears unassigned state", () => {
+  const definition = {
+    ...searchDefinition,
+    assigneeId: "c3500000-0000-4000-8000-000000000002",
+    unassigned: true,
+  };
+
+  assert.deepEqual(removeSavedViewCondition(definition, "assigneeId"), {
+    ...definition,
+    assigneeId: null,
+    unassigned: false,
+  });
+});
+
+test("explicitly removing unavailable labels clears the label condition only", () => {
+  const definition = {
+    ...searchDefinition,
+    labels: [
+      ...searchDefinition.labels,
+      {
+        boardId: "c3500000-0000-4000-8000-000000000001",
+        labelId: "c3500000-0000-4000-8000-000000000002",
+      },
+    ],
+  };
+
+  assert.deepEqual(removeSavedViewCondition(definition, "labels"), {
+    ...definition,
+    labels: [],
+  });
 });

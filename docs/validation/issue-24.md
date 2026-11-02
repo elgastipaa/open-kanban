@@ -6,7 +6,7 @@ Base fija: `88729397ac37345ff63e0e4ca03d4ac3e691c5bf`. Rama: `codex/issue-24`. W
 
 El cambio agrega la selección de semanas y días para la repetición semanal. El intervalo semanal es positivo y los días usan ISO lunes–domingo. La semana se ancla al lunes de la semana inicial; la tarea actual cuenta como primera fecha y no se generan fechas anteriores a ella. La opción Laborables selecciona lunes a viernes sin consultar ni excluir feriados. La repetición diaria existente conserva su intervalo de un día; UI y RPC rechazan intervalos diarios mayores. Preview, persistencia, reintentos y ejecución durable usan el mismo patrón canónico.
 
-El issue #24 sigue **OPEN**/`ready-for-agent`; esta entrega local no cambia su estado ni sustituye revisión humana. Se conserva `Blocked by #23`. El issue #23 sigue **OPEN**/`ready-for-human`, y no se aceptó su QA ni se modificó su bloqueo. No se agregan patrones mensuales, anuales ni ordinales de #25. No se declara completo G03 ni se afirma que un host/cron externo esté configurado.
+Al publicar esta entrega parcial, el issue #24 sigue **OPEN**/`ready-for-human` por aceptación manual pendiente. Se conserva `Blocked by #23`. El issue #23 sigue **OPEN**/`ready-for-human`, y no se aceptó su QA ni se modificó su bloqueo. No se agregan patrones mensuales, anuales ni ordinales de #25. No se declara completo G03 ni se afirma que un host/cron externo esté configurado.
 
 ## Criterios y evidencia
 
@@ -35,4 +35,4 @@ El issue #24 sigue **OPEN**/`ready-for-agent`; esta entrega local no cambia su e
 - **Manual pendiente:** no se abrió navegador autenticado ni se hizo recorrido visual, lector de pantalla o dispositivo. No había fixture de navegador local sintético listo para este flujo; la compilación y el markup semántico no sustituyen esa revisión.
 - **Host pendiente:** no se configuró ni verificó cron/worker fuera del clúster descartable. Las pruebas prueban el motor durable SQL local, no operación autónoma desplegada.
 - **G03 pendiente:** no se declara terminado el catálogo/calendario global, ni se prueba alcance de #25.
-- **Límites de ejecución:** no se usaron `.env.local`, credenciales, OAuth/bypass, usuarios/datos reales, SQL remoto, `main`, producción ni deploy. No se publicó ni se cerró ningún issue.
+- **Límites de ejecución:** no se usaron `.env.local`, credenciales, OAuth/bypass, usuarios/datos reales, SQL remoto, `main`, producción ni deploy. No se cerró ningún issue.

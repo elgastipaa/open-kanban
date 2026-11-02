@@ -1,8 +1,10 @@
 import type { Metadata } from "next";
 import { Bricolage_Grotesque, Inter } from "next/font/google";
+import { GlobalSearchLauncher } from "@/components/search/global-search-launcher";
 import { ThemePreferenceProvider } from "@/components/theme/theme-preference-provider";
 import { OfflineBanner } from "@/components/ui/offline-banner";
 import { ThemeAwareToaster } from "@/components/ui/theme-aware-toaster";
+import { resolveApplicationAccess } from "@/lib/auth";
 import {
   getMyThemePreference,
   ThemePreferenceError,
@@ -78,27 +80,50 @@ async function loadThemeBootstrap() {
     const supabase = await createClient();
     const { data: authData, error: authError } = await supabase.auth.getUser();
     if (authError || !authData.user) {
-      return { accountId: null, preference: systemTheme, loadFailed: false };
+      return {
+        accountId: null,
+        preference: systemTheme,
+        loadFailed: false,
+        searchEnabled: false,
+      };
     }
+    const access = await resolveApplicationAccess(supabase);
+    const searchEnabled = access.status === "active";
 
     try {
       const preference = await getMyThemePreference(supabase);
-      return { accountId: authData.user.id, preference, loadFailed: false };
+      return {
+        accountId: authData.user.id,
+        preference,
+        loadFailed: false,
+        searchEnabled,
+      };
     } catch (error) {
       if (
         error instanceof ThemePreferenceError &&
         error.reason === "access_denied"
       ) {
-        return { accountId: null, preference: systemTheme, loadFailed: false };
+        return {
+          accountId: null,
+          preference: systemTheme,
+          loadFailed: false,
+          searchEnabled,
+        };
       }
       return {
         accountId: authData.user.id,
         preference: systemTheme,
         loadFailed: true,
+        searchEnabled,
       };
     }
   } catch {
-    return { accountId: null, preference: systemTheme, loadFailed: false };
+    return {
+      accountId: null,
+      preference: systemTheme,
+      loadFailed: false,
+      searchEnabled: false,
+    };
   }
 }
 
@@ -139,6 +164,7 @@ export default async function RootLayout({
           loadFailed={themeBootstrap.loadFailed}
         >
           <OfflineBanner />
+          <GlobalSearchLauncher enabled={themeBootstrap.searchEnabled} />
           {children}
           <ThemeAwareToaster />
         </ThemePreferenceProvider>

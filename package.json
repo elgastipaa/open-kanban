@@ -34,7 +34,7 @@
     "test:unit:issue-37": "node --experimental-strip-types --test tests/unit/task-notification-state.test.mjs",
     "test:unit:issue-38": "node --experimental-strip-types --test tests/unit/task-notification-batch-state.test.mjs tests/unit/task-notification-batch-contract.test.mjs tests/unit/task-notification-batch-ui-contract.test.mjs",
     "test:unit:issue-39": "node --experimental-strip-types --test tests/unit/text-links.test.mjs tests/unit/text-links-ui-contract.test.mjs",
-    "test:unit:issue-40": "node --experimental-strip-types --test tests/unit/task-attachment-admin-cursor.test.mjs tests/unit/task-attachment-download.test.mjs tests/unit/task-attachment-validation.test.mjs tests/unit/task-attachment-http.test.mjs tests/unit/task-attachment-notice.test.mjs",
+    "test:unit:issue-40": "node --experimental-strip-types --test tests/unit/task-attachment-admin-candidate.test.mjs tests/unit/task-attachment-admin-cursor.test.mjs tests/unit/task-attachment-download.test.mjs tests/unit/task-attachment-validation.test.mjs tests/unit/task-attachment-http.test.mjs tests/unit/task-attachment-notice.test.mjs",
     "test:db:issue-26": "bash scripts/test-db-issue-26.sh",
     "test:db": "bash scripts/test-db.sh",
     "test:db:issue-23": "bash scripts/test-db-issue-23.sh",

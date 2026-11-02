@@ -4,6 +4,10 @@ import { IconRefresh } from "@tabler/icons-react";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import {
+  type AdminTaskAttachmentCleanupCandidate as CleanupCandidate,
+  parseAdminTaskAttachmentCleanupCandidate,
+} from "@/lib/task-attachment-admin-candidate";
 import { generateUUID } from "@/lib/utils";
 
 interface StorageSummary {
@@ -17,20 +21,6 @@ interface StorageSummary {
   recoverable_count: number;
   reserved_count: number;
   pending_count: number;
-}
-
-interface CleanupCandidate {
-  attachment_id: string;
-  board_reference: string;
-  task_reference: string;
-  owner_reference: string | null;
-  uploaded_by_reference: string;
-  size_bytes: number;
-  created_at: string;
-  state: string;
-  deletion_cause: string | null;
-  task_state: string;
-  expires_at: string | null;
 }
 
 interface CleanupCursor {
@@ -89,28 +79,6 @@ function parseSummary(value: unknown): StorageSummary | null {
   };
 }
 
-function parseCandidate(value: unknown): CleanupCandidate | null {
-  if (
-    !isRecord(value) ||
-    typeof value.attachment_id !== "string" ||
-    typeof value.board_reference !== "string" ||
-    typeof value.task_reference !== "string" ||
-    (value.owner_reference !== null &&
-      typeof value.owner_reference !== "string") ||
-    typeof value.uploaded_by_reference !== "string" ||
-    typeof value.size_bytes !== "number" ||
-    typeof value.created_at !== "string" ||
-    typeof value.state !== "string" ||
-    (value.deletion_cause !== null &&
-      typeof value.deletion_cause !== "string") ||
-    typeof value.task_state !== "string" ||
-    (value.expires_at !== null && typeof value.expires_at !== "string")
-  ) {
-    return null;
-  }
-  return value as unknown as CleanupCandidate;
-}
-
 function parseCursor(value: unknown): CleanupCursor | null {
   if (
     !isRecord(value) ||
@@ -129,7 +97,7 @@ function parsePage(value: unknown): AdminAttachmentPage | null {
   if (!isRecord(value) || value.status !== "ok") return null;
   const summary = parseSummary(value.summary);
   const items = Array.isArray(value.items)
-    ? value.items.map(parseCandidate)
+    ? value.items.map(parseAdminTaskAttachmentCleanupCandidate)
     : null;
   const hasMore = value.has_more;
   const nextCursor =

@@ -509,8 +509,9 @@ BEGIN
   IF v_admin_items->>'status' IS DISTINCT FROM 'ok'
     OR jsonb_array_length(v_admin_items->'items') <> 1
     OR v_admin_items->'items'->0 ? 'file_name'
-    OR v_admin_items->'items'->0 ? 'object_key' THEN
-    RAISE EXCEPTION 'Admin cleanup candidates disclosed a filename or Storage key: %', v_admin_items;
+    OR v_admin_items->'items'->0 ? 'object_key'
+    OR v_admin_items->'items'->0 ? 'uploaded_by_reference' THEN
+    RAISE EXCEPTION 'Admin cleanup candidates disclosed forbidden metadata: %', v_admin_items;
   END IF;
   v_outsider_summary := public.admin_task_attachment_storage_summary_p(
     '74000000-0000-4000-8000-000000000003'
@@ -1184,6 +1185,16 @@ BEGIN
     OR v_second_page->>'has_more' IS DISTINCT FROM 'false'
     OR v_second_page->'next_cursor' IS DISTINCT FROM 'null'::jsonb
     OR jsonb_array_length(v_second_page->'items') + 100 <> v_expected_count
+    OR EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements(v_first_page->'items') AS first_item(item)
+      WHERE first_item.item ? 'uploaded_by_reference'
+    )
+    OR EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements(v_second_page->'items') AS second_item(item)
+      WHERE second_item.item ? 'uploaded_by_reference'
+    )
     OR EXISTS (
       SELECT 1
       FROM jsonb_array_elements(v_first_page->'items') AS first_item(item)

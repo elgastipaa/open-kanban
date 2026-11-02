@@ -1029,7 +1029,6 @@ BEGIN
       'board_reference', attachment.board_id,
       'task_reference', attachment.task_id,
       'owner_reference', board.owner_id,
-      'uploaded_by_reference', attachment.uploaded_by,
       'size_bytes', attachment.size_bytes,
       'created_at', attachment.created_at,
       'state', attachment.state,

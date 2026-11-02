@@ -58,12 +58,54 @@ test("only a complete exact-key inventory confirms object absence", () => {
   );
 });
 
-test("confirms a missing object only after a successful exact-key inventory", () => {
+test("confirms a missing object after a 404 when the bucket exists despite stale object metadata", async () => {
   const object404 = {
     __isStorageError: true,
     name: "StorageApiError",
     status: 404,
     statusCode: "NoSuchKey",
+    message: "Object not found",
+  };
+  const staleMetadata = [{ name: "id-1" }];
+  let bucketLookups = 0;
+  let listCalls = 0;
+  const storage = {
+    async getBucket(bucketId) {
+      bucketLookups += 1;
+      return { data: { id: bucketId }, error: null };
+    },
+    from() {
+      return {
+        async list() {
+          listCalls += 1;
+          return { data: staleMetadata, error: null };
+        },
+      };
+    },
+  };
+
+  assert.equal(
+    staleMetadata.some((object) => object.name === "id-1"),
+    true,
+  );
+  assert.equal(
+    await isConfirmedMissingTaskAttachmentObject(
+      object404,
+      "task-attachments",
+      storage,
+    ),
+    true,
+  );
+  assert.equal(bucketLookups, 1);
+  assert.equal(listCalls, 0);
+});
+
+test("fails closed when the bucket lookup is absent, invalid, rejected, or times out", async () => {
+  const object404 = {
+    __isStorageError: true,
+    name: "StorageApiError",
+    status: 404,
+    statusCode: "404",
     message: "Object not found",
   };
   const bucket404 = {
@@ -73,99 +115,93 @@ test("confirms a missing object only after a successful exact-key inventory", ()
     statusCode: "NoSuchBucket",
     message: "Bucket not found",
   };
-  const sdkHttpOnly404 = { ...object404, statusCode: "404" };
+  const objectStorage = {
+    __isStorageError: true,
+    name: "StorageApiError",
+    status: 503,
+    statusCode: "503",
+  };
 
   assert.equal(
-    isConfirmedMissingTaskAttachmentObject(
+    await isConfirmedMissingTaskAttachmentObject(
+      bucket404,
+      "task-attachments",
+      { getBucket: async () => ({ data: null, error: bucket404 }) },
+    ),
+    false,
+  );
+  assert.equal(
+    await isConfirmedMissingTaskAttachmentObject(
       object404,
-      [],
-      null,
-      "attachments/id-1",
-    ),
-    true,
-  );
-  assert.equal(
-    isConfirmedMissingTaskAttachmentObject(
-      sdkHttpOnly404,
-      [],
-      null,
-      "attachments/id-1",
-    ),
-    true,
-  );
-  assert.equal(
-    isConfirmedMissingTaskAttachmentObject(
-      bucket404,
-      null,
-      bucket404,
-      "attachments/id-1",
+      "task-attachments",
+      { getBucket: async () => ({ data: null, error: bucket404 }) },
     ),
     false,
   );
   assert.equal(
-    isConfirmedMissingTaskAttachmentObject(
-      { ...bucket404, statusCode: "404" },
-      [],
-      null,
-      "attachments/id-1",
-    ),
-    false,
-  );
-  assert.equal(
-    isConfirmedMissingTaskAttachmentObject(
+    await isConfirmedMissingTaskAttachmentObject(
+      object404,
+      "task-attachments",
       {
-        name: "Error",
-        status: 404,
-        message: "network proxy returned 404",
+        getBucket: async () => ({
+          data: { id: "another-bucket" },
+          error: null,
+        }),
       },
-      [],
-      null,
-      "attachments/id-1",
     ),
     false,
   );
   assert.equal(
-    isConfirmedMissingTaskAttachmentObject(
+    await isConfirmedMissingTaskAttachmentObject(
       object404,
-      [{ name: "id-1" }],
-      null,
-      "attachments/id-1",
+      "task-attachments",
+      { getBucket: async () => ({ data: null, error: objectStorage }) },
     ),
     false,
   );
   assert.equal(
-    isConfirmedMissingTaskAttachmentObject(
+    await isConfirmedMissingTaskAttachmentObject(
       object404,
-      null,
-      null,
-      "attachments/id-1",
+      "task-attachments",
+      {
+        async getBucket() {
+          throw new Error("bucket lookup failed");
+        },
+      },
     ),
     false,
   );
   assert.equal(
-    isConfirmedMissingTaskAttachmentObject(
+    await isConfirmedMissingTaskAttachmentObject(
+      { name: "Error", status: 404, message: "proxy returned 404" },
+      "task-attachments",
+      {
+        getBucket: async () => ({
+          data: { id: "task-attachments" },
+          error: null,
+        }),
+      },
+    ),
+    false,
+  );
+  assert.equal(
+    await isConfirmedMissingTaskAttachmentObject(
       { ...object404, status: 503 },
-      [],
-      null,
-      "attachments/id-1",
+      "task-attachments",
+      {
+        getBucket: async () => ({
+          data: { id: "task-attachments" },
+          error: null,
+        }),
+      },
     ),
     false,
   );
   assert.equal(
-    isConfirmedMissingTaskAttachmentObject(
+    await isConfirmedMissingTaskAttachmentObject(
       object404,
-      [{ name: "id-1-other" }],
-      null,
-      "attachments/id-1",
-    ),
-    true,
-  );
-  assert.equal(
-    isConfirmedMissingTaskAttachmentObject(
-      object404,
-      [{ name: "id-1-other" }, { name: "another-id-1" }],
-      null,
-      "attachments/id-1",
+      "task-attachments",
+      { getBucket: () => new Promise(() => {}) },
     ),
     false,
   );

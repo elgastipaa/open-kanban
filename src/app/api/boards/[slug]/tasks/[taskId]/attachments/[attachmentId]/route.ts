@@ -7,7 +7,6 @@ import {
   isConfirmedMissingTaskAttachmentObject,
   isTaskAttachmentStorageNotFound,
   TASK_ATTACHMENT_MISSING_MESSAGE,
-  TASK_ATTACHMENT_OBJECT_INVENTORY_LIMIT,
 } from "@/lib/task-attachment-download";
 import {
   attachmentContentDisposition,
@@ -78,18 +77,12 @@ export async function GET(
       .from(TASK_ATTACHMENT_BUCKET)
       .download(metadata.object_key);
     if (isTaskAttachmentStorageNotFound(storageError)) {
-      const { data: listedObjects, error: inventoryError } =
-        await service.storage.from(TASK_ATTACHMENT_BUCKET).list("attachments", {
-          limit: TASK_ATTACHMENT_OBJECT_INVENTORY_LIMIT,
-          search: attachmentId,
-        });
       if (
-        !isConfirmedMissingTaskAttachmentObject(
+        !(await isConfirmedMissingTaskAttachmentObject(
           storageError,
-          listedObjects,
-          inventoryError,
-          `attachments/${attachmentId}`,
-        )
+          TASK_ATTACHMENT_BUCKET,
+          service.storage,
+        ))
       ) {
         return json(
           {

@@ -1,6 +1,7 @@
 export const TASK_ATTACHMENT_MISSING_MESSAGE =
   "El archivo ya no está disponible. Se ocultó y su limpieza se comprobará de forma segura.";
 export const TASK_ATTACHMENT_OBJECT_INVENTORY_LIMIT = 2;
+export const TASK_ATTACHMENT_BUCKET_LOOKUP_TIMEOUT_MS = 5_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -42,21 +43,44 @@ export function isTaskAttachmentObjectAbsentFromCompleteInventory(
   );
 }
 
-export function isConfirmedMissingTaskAttachmentObject(
+type TaskAttachmentStorageBucketLookup = {
+  getBucket(bucketId: string): Promise<{ data: unknown; error: unknown }>;
+};
+
+export async function isConfirmedMissingTaskAttachmentObject(
   downloadError: unknown,
-  listedObjects: unknown,
-  listError: unknown,
-  objectKey: string,
-): boolean {
-  return (
-    isTaskAttachmentStorageNotFound(downloadError) &&
-    !isTaskAttachmentStorageBucketNotFound(downloadError) &&
-    isTaskAttachmentObjectAbsentFromCompleteInventory(
-      listedObjects,
-      listError,
-      objectKey,
-    )
-  );
+  bucketId: string,
+  storage: TaskAttachmentStorageBucketLookup,
+): Promise<boolean> {
+  if (
+    !isTaskAttachmentStorageNotFound(downloadError) ||
+    isTaskAttachmentStorageBucketNotFound(downloadError)
+  ) {
+    return false;
+  }
+
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const lookup = storage.getBucket(bucketId);
+    const result = await Promise.race([
+      lookup,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error("Task attachment bucket lookup timed out.")),
+          TASK_ATTACHMENT_BUCKET_LOOKUP_TIMEOUT_MS,
+        );
+      }),
+    ]);
+    return (
+      result.error === null &&
+      isRecord(result.data) &&
+      result.data.id === bucketId
+    );
+  } catch {
+    return false;
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
 }
 
 export type TaskAttachmentDownloadResponse =

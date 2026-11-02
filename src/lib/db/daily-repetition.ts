@@ -41,6 +41,11 @@ export interface RepetitionPreview {
   current?: { task_id: string; due_on: string; is_existing_task: true };
   future_dates?: string[];
   appearance_dates?: string[];
+  first_future_due_on?: string | null;
+  first_appearance_on?: string | null;
+  current_due_on?: string | null;
+  appearance_compatible?: boolean;
+  appearance_conflict_message?: string | null;
   advance_days?: number;
   minimum_separation_days?: number;
   final_on?: string | null;
@@ -74,6 +79,7 @@ export interface RepetitionCreateResult {
   status:
     | "confirmed"
     | "confirmation_required"
+    | "appearance_conflict"
     | "conflict"
     | "unavailable"
     | "expired_unknown";
@@ -88,6 +94,11 @@ export interface RepetitionCreateResult {
   end_on?: string | null;
   advance_days?: number;
   appearance_on?: string | null;
+  first_future_due_on?: string | null;
+  first_appearance_on?: string | null;
+  current_due_on?: string | null;
+  appearance_compatible?: boolean;
+  appearance_conflict_message?: string | null;
   minimum_separation_days?: number;
   confirmation?: "change_current_due_date" | "new_series_from_stopped";
   existing_due_on?: string | null;
@@ -173,6 +184,9 @@ export interface RepetitionEditPreview {
   final_on?: string | null;
   future_dates?: string[];
   appearance_dates?: string[];
+  first_appearance_on?: string | null;
+  appearance_compatible?: boolean;
+  appearance_conflict_message?: string | null;
   advance_days?: number;
   minimum_separation_days?: number;
   pattern?: RepetitionPattern;
@@ -202,6 +216,7 @@ export type RepetitionEditResult = Omit<RepetitionEditPreview, "status"> & {
   status:
     | "confirmed"
     | "date_choice_required"
+    | "appearance_conflict"
     | "conflict"
     | "unavailable"
     | "expired_unknown";
@@ -345,6 +360,7 @@ export async function editRepetition(
     ![
       "confirmed",
       "date_choice_required",
+      "appearance_conflict",
       "conflict",
       "unavailable",
       "expired_unknown",

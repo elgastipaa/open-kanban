@@ -19,7 +19,8 @@
 | La plantilla de checklist se puede cambiar para próximas tarjetas sin cambiar la checklist de la actual | `tests/db/repetition_edit.sql` comprueba el snapshot en preview/edición, preserva los pasos marcados de la actual y genera la próxima tarjeta con pasos nuevos, sin marcar, posición y versión iniciales propias. `task-repetition.tsx` expone agregar, editar, reordenar y quitar pasos; `editPreviewCommand` los normaliza y los envía a preview/edit. El unit test de `RepetitionEditOperationStore` conserva pasos en el comando pendiente. | Automatizado en DB/unit y revisión estática; prueba manual de los controles pendiente |
 | Final `N` representa las próximas `N` ocurrencias, sin contar actual/pasadas; cambios ajenos a la serie no reinician el restante | Assertions de final/restantes en `tests/db/repetition_edit.sql`; edición ordinaria de título de la ocurrencia actual no altera snapshot ni cuenta. | Automatizado, DB real aislada |
 | Si la fecha inicial elegida no coincide con la regla, hace falta elegir/confirmar una fecha compatible | `selected_date_compatible` y `date_choice_required` cubiertos en `tests/db/repetition_edit.sql`; el componente muestra una elección explícita según el resultado del preview. | Automatizado en DB y revisión estática; recorrido manual pendiente |
-| La fecha de una excepción debe ser estrictamente anterior a la siguiente ocurrencia | `tests/db/repetition_edit.sql` acepta 2026-11-03, rechaza igualdad 2026-11-04 con el error C-110 y confirma que la excepción permitida queda en la actual después de generar la siguiente tarjeta. | Automatizado, DB real aislada |
+| La primera aparición anticipada debe ser estrictamente posterior al vencimiento actual al crear o editar | `tests/db/repetition_edit.sql`: actual 2026-11-20 y siguiente vencimiento 2026-11-24 con X=5 producen 2026-11-19; creación/edición devuelven `appearance_conflict` sin cambiar tarea, serie ni job. X=3 produce 2026-11-21; elegir 2026-12-01 con X=5 requiere confirmación y produce 2026-11-26. La UI muestra la incompatibilidad y pide fecha posterior o menor anticipación. | Automatizado en DB y revisión estática; recorrido manual pendiente |
+| La fecha de una excepción debe ser estrictamente anterior a la próxima aparición | `tests/db/repetition_edit.sql` acepta 2026-11-01, rechaza igualdad 2026-11-03 cuando el próximo vencimiento nominal es 2026-11-04 y X=1, devuelve DETAIL 2026-11-03 y conserva la excepción en la actual después de generar la siguiente tarjeta. | Automatizado, DB real aislada |
 | Un conflicto conserva el borrador para revisar o volver a previsualizar | La rama `conflict` mantiene el formulario y sus pasos en estado local y limpia solo el preview. El recorrido manual previo no incluyó los controles de checklist nuevos; no hay E2E persistente. | Revisión de código; verificación manual actual pendiente |
 | El worker y la edición usan el mismo orden de locks, y una edición concurrente invalida el job viejo sin mover ni duplicar la ocurrencia actual | `scripts/test-db-issue-26-race.sh` inicia con un job `queued`, ejecuta `run_daily_repetition_jobs_p(100)` en una segunda sesión mientras la edición tiene el lock del board y confirma que espera por board. Tras confirmar la edición, el scheduler no reclama el job viejo; assertions verifican revisión/fecha nuevas, job viejo `superseded`, una sola occurrence actual y sin tarea duplicada ni movimiento de actual. | Automatizado, PostgreSQL real aislado y dos sesiones concurrentes |
 | Reclamación revalida leases y conserva el tratamiento de jobs agotados | `tests/db/issue26_worker_claim.sql`: el lease expirado recibe token/attempt nuevos, token viejo devuelve `lease_lost`, job de revisión anterior devuelve `superseded` y lease agotado termina `dead_letter`; el bloque es rollback-only. | Automatizado, DB real aislada |
@@ -32,8 +33,8 @@ Comandos ejecutados desde la raíz del worktree:
 | Comando | Resultado |
 | --- | --- |
 | `corepack pnpm test:db:issue-26` | Exit `0`; runner focal, carrera de dos sesiones vía `run_daily_repetition_jobs_p` y pruebas de renovación/dead-letter; `Issue #26 database regression tests passed (disposable PostgreSQL).` |
-| `corepack pnpm test:db` | Exit `0`; migraciones `001–043`, regresiones de seguridad y concurrencia, y issue #26; `Database regression tests passed (disposable PostgreSQL).` |
-| `corepack pnpm test:db:issue-23` | Exit `3` tanto con HEAD #26 (migraciones 001–043) como en comparación de base (migraciones 001–042): `tests/db/daily_repetition.sql:721` hace SELECT directo a `daily_repetition_series` bajo `SET ROLE authenticated` y recibe `permission denied`. El runner general pasa porque no ejecuta `daily_repetition.sql`; la prueba C-110 dedicada de este ticket está en `repetition_edit.sql` y forma parte del foco/full #26. |
+| `corepack pnpm test:db` | Exit `0`; migraciones `001–044`, regresiones de seguridad y concurrencia, y issue #26; `Database regression tests passed (disposable PostgreSQL).` |
+| `corepack pnpm test:db:issue-23` | Exit `3` con HEAD de esta adenda (migraciones 001–044) y en la comparación previa de base fija (migraciones 001–042): `tests/db/daily_repetition.sql:721` hace SELECT directo a `daily_repetition_series` bajo `SET ROLE authenticated` y recibe `permission denied`. El runner general pasa porque no ejecuta `daily_repetition.sql`; la prueba C-110 dedicada de este ticket está en `repetition_edit.sql` y forma parte del foco/full #26. |
 | `corepack pnpm test:unit` | Exit `0`; `173` tests, `173` pass, `0` fail. Node informa advertencias no bloqueantes `MODULE_TYPELESS_PACKAGE_JSON` en módulos existentes. |
 | `corepack pnpm typecheck` | Exit `0`; `tsc --noEmit`, después de retirar la ruta temporal sintética. |
 | `corepack pnpm build` | Exit `0`; Next compiló, comprobó TypeScript y generó las páginas estáticas. |
@@ -48,3 +49,27 @@ La versión nueva de los controles de checklist no recibió recorrido manual con
 - Recorrido manual de la versión actual del formulario, en una aplicación real; la inspección sintética anterior no cubrió los nuevos controles de pasos.
 - Revisión humana en pantalla/dispositivo y lector de pantalla.
 - No hay dependencia de proveedor externo en esta funcionalidad; no se hizo validación contra servicios externos ni producción.
+
+## Adenda P2 — compatibilidad con el vencimiento actual
+
+- Rama de trabajo: codex/issue-26. Base fija: 2b3b1bdf49dbb2432bf14b4a7e95d0c1a41d748f. HEAD previo al arreglo: bc63149d281fd63bc59f472a7567db2cbc6e9b24.
+- Fecha de ejecución: 2026-11-02. Migración añadida: 044_repetition_appearance_deadline.sql.
+- Entorno: el mismo runner PostgreSQL 16.15 desechable y actores sintéticos del issue #26. Sin .env.local, servicios remotos, cuentas reales ni producción.
+
+### Criterio y resultado
+
+Con vencimiento actual 2026-11-20, primera fecha nominal futura 2026-11-24 y X=5, la primera aparición es 2026-11-19. El preview ahora la marca incompatible; los RPC de creación y edición responden appearance_conflict antes de cambiar la actual, serie o job. Crear con X=3 produce aparición 2026-11-21 y conserva tarea/columna actuales. En edición, seleccionar explícitamente 2026-12-01 con X=5 exige confirmar la fecha; la aparición 2026-11-26 resulta posterior al actual y la edición confirma sin moverlo.
+
+La confirmación de creación vuelve a revisar la relación con las filas de tablero/tarea bloqueadas y deshace la transacción si la invariante no se cumple. La confirmación de edición bloquea tablero, serie/ocurrencia y tarea, vuelve a ejecutar el preview y solo entonces delega la escritura. El guard de excepción usa la próxima aparición (vencimiento nominal menos X): acepta 2026-11-01 y rechaza 2026-11-03 cuando el vencimiento nominal siguiente es 2026-11-04 y X=1.
+
+La fila C-110 de la tabla anterior queda actualizada: la excepción debe ser estrictamente anterior a la próxima aparición, no solo al vencimiento nominal.
+
+### Verificación de esta adenda
+
+- Rojo inicial, test:db:issue-26 contra la migración 043: exit 1; el preview no señaló aparición 2026-11-19 anterior al vencimiento actual 2026-11-20.
+- Rojo de edición: el preview de servidor todavía no ofrecía appearance_compatible y la llamada de edición carecía de un resultado de conflicto por esa condición.
+- Rojo de C-110: el trigger anterior aceptó 2026-11-03, fecha igual a la aparición, aunque fuera anterior al vencimiento nominal 2026-11-04.
+- Verde focal y full después de 044: test:db:issue-26 y test:db terminaron con exit 0 en PostgreSQL aislado; se aplicaron migrations 001–044. El runner focal también ejecuta el race de dos sesiones y el wrapper run_daily_repetition_jobs_p.
+- test:unit terminó con 173/173; typecheck, build Next 16.4.2 y Biome dirigido a los dos TS/TSX modificados terminaron con exit 0.
+- test:db:issue-23 terminó con exit 3 en tests/db/daily_repetition.sql:721 por permission denied al leer directamente daily_repetition_series bajo authenticated. La misma falla ya había sido comparada contra la base fija 2b3b1bd con migrations 001–042; el full runner no ejecuta ese archivo standalone.
+- El recorrido visual/manual, teclado, lector de pantalla y dispositivo sigue pendiente; no se usó ruta sintética ni se afirmó aceptación manual.

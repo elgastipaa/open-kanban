@@ -545,6 +545,11 @@ export function TaskRepetition({
         setNotice(
           "La fecha elegida no coincide con la regla nueva. Confirma esa fecha o elige la fecha sugerida.",
         );
+      } else if (nextPreview.appearance_compatible === false) {
+        setNotice(
+          nextPreview.appearance_conflict_message ??
+            "La primera aparición debe ser posterior al vencimiento actual. Elige una fecha inicial posterior o reduce la anticipación.",
+        );
       }
     } catch (error) {
       setNotice(
@@ -610,6 +615,12 @@ export function TaskRepetition({
         return;
       }
       setPreview(nextPreview);
+      if (nextPreview.appearance_compatible === false) {
+        setNotice(
+          nextPreview.appearance_conflict_message ??
+            "La primera aparición debe ser posterior al vencimiento actual. Elige una fecha inicial posterior o reduce la anticipación.",
+        );
+      }
     } catch (error) {
       setNotice(
         error instanceof RepetitionError && error.reason === "rejected"
@@ -650,6 +661,7 @@ export function TaskRepetition({
       !editPreview ||
       editPreview.status !== "available" ||
       editPreview.requires_date_choice ||
+      editPreview.appearance_compatible !== true ||
       typeof editPreview.series_revision !== "number"
     ) {
       return null;
@@ -692,6 +704,14 @@ export function TaskRepetition({
                 null)
               : command.previous_series_id,
         });
+        return;
+      }
+      if (result.status === "appearance_conflict") {
+        operationIdRef.current = null;
+        setNotice(
+          result.appearance_conflict_message ??
+            "La primera aparición debe ser posterior al vencimiento actual. Elige una fecha inicial posterior o reduce la anticipación.",
+        );
         return;
       }
       if (result.status === "conflict") {
@@ -740,6 +760,7 @@ export function TaskRepetition({
 
   async function createSeries() {
     if (!isOnline || isDisabled || hasUnsavedChanges || !preview) return;
+    if (preview.appearance_compatible !== true) return;
     if (
       preview.requires_start_confirmation ||
       preview.requires_previous_series_confirmation
@@ -797,6 +818,19 @@ export function TaskRepetition({
         setConfirmDateChoice(false);
         setNotice(
           "Confirma la primera fecha futura para que coincida con la nueva regla.",
+        );
+        return;
+      }
+      if (result.status === "appearance_conflict") {
+        editOperationIdRef.current = null;
+        setEditPreview({
+          ...result,
+          status: "available",
+          appearance_compatible: false,
+        });
+        setNotice(
+          result.appearance_conflict_message ??
+            "La primera aparición debe ser posterior al vencimiento actual. Elige una fecha inicial posterior o reduce la anticipación.",
         );
         return;
       }
@@ -1656,6 +1690,20 @@ export function TaskRepetition({
                       .
                     </p>
                   ) : null}
+                  {preview.appearance_compatible === false ? (
+                    <p role="alert" className="mt-2 text-priority-medium">
+                      La primera próxima tarea aparecería el{" "}
+                      {formatTaskDueDate(preview.first_appearance_on ?? null) ??
+                        preview.first_appearance_on ??
+                        "—"}
+                      , antes o el mismo día del vencimiento actual (
+                      {formatTaskDueDate(preview.current_due_on ?? null) ??
+                        preview.current_due_on ??
+                        "—"}
+                      ). Elige una fecha inicial posterior o reduce la
+                      anticipación.
+                    </p>
+                  ) : null}
                   <p className="mt-1 text-text-secondary">
                     Zona del tablero: {preview.time_zone ?? boardTimeZone}.
                   </p>
@@ -1789,6 +1837,24 @@ export function TaskRepetition({
                           : "ninguna"}
                         .
                       </p>
+                      {editPreview.appearance_compatible === false ? (
+                        <p role="alert" className="text-priority-medium">
+                          La primera próxima tarea aparecería el{" "}
+                          {formatTaskDueDate(
+                            editPreview.first_appearance_on ?? null,
+                          ) ??
+                            editPreview.first_appearance_on ??
+                            "—"}
+                          , antes o el mismo día del vencimiento actual (
+                          {formatTaskDueDate(
+                            editPreview.current_due_on ?? null,
+                          ) ??
+                            editPreview.current_due_on ??
+                            "—"}
+                          ). Elige una fecha inicial posterior o reduce la
+                          anticipación.
+                        </p>
+                      ) : null}
                       <p className="text-text-muted text-xs">
                         {editPreview.final_mode === "count"
                           ? `${editPreview.future_count ?? 0} próximas repeticiones · nuevo final ${formatTaskDueDate(editPreview.final_on ?? null) ?? editPreview.final_on ?? "—"}.`
@@ -1839,7 +1905,8 @@ export function TaskRepetition({
                 </Button>
                 {editingSeries &&
                 editPreview &&
-                !editPreview.requires_date_choice ? (
+                !editPreview.requires_date_choice &&
+                editPreview.appearance_compatible === true ? (
                   <Button
                     type="button"
                     onClick={() => void saveEdit()}
@@ -1852,7 +1919,9 @@ export function TaskRepetition({
                   >
                     Guardar cambios de próximas repeticiones
                   </Button>
-                ) : !editingSeries && preview ? (
+                ) : !editingSeries &&
+                  preview &&
+                  preview.appearance_compatible === true ? (
                   <Button
                     type="button"
                     onClick={() => void createSeries()}

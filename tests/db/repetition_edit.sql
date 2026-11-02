@@ -56,18 +56,25 @@ DECLARE
   v_conflict jsonb;
   v_idempotent jsonb;
   v_task_before jsonb;
+  v_safety_preview jsonb;
+  v_safety_result jsonb;
+  v_series_before jsonb;
+  v_job_before jsonb;
+  v_safety_template jsonb := '{"title":"Tarea compatible","description":null,"priority":"medium","assignee_id":null,"steps":[]}'::jsonb;
   v_history_before jsonb;
   v_history_after jsonb;
   v_template jsonb := '{"title":"Plantilla futura","description":"Descripción futura","priority":"urgent","assignee_id":null}'::jsonb;
   v_new_pattern jsonb := '{"frequency":"weekly","interval":1,"weekdays":[2,4]}'::jsonb;
   v_task_id uuid;
   v_second_task_id uuid;
+  v_safety_series_id uuid;
   v_second_series_id uuid;
   v_new_task_id uuid;
   v_current_slots bigint;
   v_race_start_on date;
   v_edit_start_on date;
   v_pattern jsonb := '{"frequency":"weekly","interval":1,"weekdays":[1,3]}'::jsonb;
+  v_safety_pattern jsonb := '{"frequency":"weekly","interval":1,"weekdays":[2]}'::jsonb;
 BEGIN
   IF public.repetition_minimum_separation_internal_p(
       '2026-01-31', '{"frequency":"monthly","interval":"2","day_of_month":31}'::jsonb
@@ -105,6 +112,173 @@ BEGIN
   );
   IF v_due_edit->>'status' IS DISTINCT FROM 'confirmed' THEN
     RAISE EXCEPTION 'Synthetic task date setup failed: %', v_due_edit;
+  END IF;
+
+  v_created := public.create_task_p(
+    '26000000-0000-4000-8000-000000000040', v_board.id,
+    v_origin_column, 'Compatibilidad de aparición', NULL, 'medium'
+  );
+  v_second_task_id := (v_created->>'task_id')::uuid;
+  v_due_edit := public.edit_task_fields_p(
+    '26000000-0000-4000-8000-000000000041', v_board.slug, v_second_task_id,
+    '{"due_on":"2026-11-20"}'::jsonb, '{"due_on":1}'::jsonb
+  );
+  IF v_due_edit->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Synthetic compatibility date setup failed: %', v_due_edit;
+  END IF;
+  SELECT pg_catalog.to_jsonb(task) INTO v_task_before
+  FROM public.tasks AS task WHERE task.id = v_second_task_id;
+
+  v_safety_preview := public.preview_repetition_with_advance_p(
+    v_board.slug, v_second_task_id, '2026-11-20', NULL, 3,
+    v_safety_pattern, 5
+  );
+  IF v_safety_preview->>'status' IS DISTINCT FROM 'available'
+    OR v_safety_preview->'future_dates' IS DISTINCT FROM
+      '["2026-11-24","2026-12-01"]'::jsonb
+    OR v_safety_preview->'appearance_dates' IS DISTINCT FROM
+      '["2026-11-19","2026-11-26"]'::jsonb
+    OR v_safety_preview->>'first_appearance_on' IS DISTINCT FROM '2026-11-19'
+    OR v_safety_preview->>'appearance_compatible' IS DISTINCT FROM 'false'
+    OR v_safety_preview->>'existing_due_on' IS DISTINCT FROM '2026-11-20' THEN
+    RAISE EXCEPTION 'Preview did not flag an appearance before the current deadline: %',
+      v_safety_preview;
+  END IF;
+
+  v_safety_result := public.create_repetition_with_advance_p(
+    '26000000-0000-4000-8000-000000000042', v_board.slug, v_second_task_id,
+    '2026-11-20', NULL, 3, 2, false, NULL, v_safety_pattern, 5,
+    v_appearance_column
+  );
+  SELECT pg_catalog.to_jsonb(task) INTO v_created
+  FROM public.tasks AS task WHERE task.id = v_second_task_id;
+  IF v_safety_result->>'status' IS DISTINCT FROM 'appearance_conflict'
+    OR v_created IS DISTINCT FROM v_task_before
+    OR EXISTS (
+      SELECT 1 FROM public.daily_repetition_occurrences AS occurrence
+      WHERE occurrence.task_id = v_second_task_id
+    )
+    OR EXISTS (
+      SELECT 1 FROM public.daily_repetition_jobs AS job
+      JOIN public.daily_repetition_series AS series ON series.id = job.series_id
+      WHERE series.origin_task_id = v_second_task_id
+    ) THEN
+    RAISE EXCEPTION 'An incompatible initial appearance changed the task or created a series/job: %, %',
+      v_safety_result, v_created;
+  END IF;
+
+  v_safety_result := public.create_repetition_with_advance_p(
+    '26000000-0000-4000-8000-000000000043', v_board.slug, v_second_task_id,
+    '2026-11-20', NULL, 3, 2, false, NULL, v_safety_pattern, 3,
+    v_appearance_column
+  );
+  v_safety_series_id := (v_safety_result->>'series_id')::uuid;
+  SELECT series.* INTO v_series FROM public.daily_repetition_series AS series
+  WHERE series.id = v_safety_series_id;
+  SELECT job.* INTO v_job FROM public.daily_repetition_jobs AS job
+  WHERE job.series_id = v_safety_series_id AND job.job_kind = 'advance'
+    AND job.series_revision = v_series.revision;
+  IF v_safety_result->>'status' IS DISTINCT FROM 'confirmed'
+    OR v_safety_result->>'appearance_on' IS DISTINCT FROM '2026-11-21'
+    OR v_series.next_due_on IS DISTINCT FROM '2026-11-24'::date
+    OR v_series.current_occurrence_id IS NULL
+    OR v_job.available_at IS DISTINCT FROM '2026-11-21 03:00:00+00'::timestamptz
+    OR (SELECT task.due_on FROM public.tasks AS task WHERE task.id = v_second_task_id)
+      IS DISTINCT FROM '2026-11-20'::date
+    OR (SELECT task.column_id FROM public.tasks AS task WHERE task.id = v_second_task_id)
+      IS DISTINCT FROM v_origin_column THEN
+    RAISE EXCEPTION 'A smaller compatible anticipation did not preserve the current task and schedule: %, %, %',
+      v_safety_result, v_series, v_job;
+  END IF;
+
+  v_task_before := (SELECT pg_catalog.to_jsonb(task)
+    FROM public.tasks AS task WHERE task.id = v_second_task_id);
+  v_series_before := pg_catalog.to_jsonb(v_series);
+  v_job_before := pg_catalog.to_jsonb(v_job);
+  v_safety_preview := public.preview_repetition_edit_p(
+    v_board.slug, v_second_task_id, '2026-11-24', 'count', 2, NULL,
+    v_safety_pattern, 5, v_appearance_column, v_safety_template, false
+  );
+  IF v_safety_preview->>'status' IS DISTINCT FROM 'available'
+    OR v_safety_preview->>'first_appearance_on' IS DISTINCT FROM '2026-11-19'
+    OR v_safety_preview->>'current_due_on' IS DISTINCT FROM '2026-11-20'
+    OR v_safety_preview->>'appearance_compatible' IS DISTINCT FROM 'false' THEN
+    RAISE EXCEPTION 'Edit preview did not flag an appearance before the current deadline: %',
+      v_safety_preview;
+  END IF;
+  v_safety_result := public.edit_repetition_p(
+    '26000000-0000-4000-8000-000000000044', v_board.slug, v_second_task_id,
+    v_series.revision, '2026-11-24', 'count', 2, NULL,
+    v_safety_pattern, 5, v_appearance_column, v_safety_template, false
+  );
+  SELECT series.* INTO v_series FROM public.daily_repetition_series AS series
+  WHERE series.id = v_safety_series_id;
+  SELECT job.* INTO v_job FROM public.daily_repetition_jobs AS job
+  WHERE job.series_id = v_safety_series_id AND job.job_kind = 'advance'
+    AND job.series_revision = v_series.revision;
+  IF v_safety_result->>'status' IS DISTINCT FROM 'appearance_conflict'
+    OR v_safety_result->>'appearance_compatible' IS DISTINCT FROM 'false'
+    OR v_series.revision IS DISTINCT FROM (v_series_before->>'revision')::bigint
+    OR v_series.next_due_on IS DISTINCT FROM '2026-11-24'::date
+    OR pg_catalog.to_jsonb(v_series) IS DISTINCT FROM v_series_before
+    OR pg_catalog.to_jsonb(v_job) IS DISTINCT FROM v_job_before
+    OR (SELECT pg_catalog.to_jsonb(task) FROM public.tasks AS task
+        WHERE task.id = v_second_task_id) IS DISTINCT FROM v_task_before
+    OR (SELECT count(*) FROM public.daily_repetition_occurrences AS occurrence
+        WHERE occurrence.series_id = v_safety_series_id AND occurrence.state = 'current') <> 1 THEN
+    RAISE EXCEPTION 'An incompatible edit changed state: result %, task unchanged %, series unchanged %, job unchanged %, current count %',
+      v_safety_result,
+      (SELECT pg_catalog.to_jsonb(task) FROM public.tasks AS task
+       WHERE task.id = v_second_task_id) IS NOT DISTINCT FROM v_task_before,
+      pg_catalog.to_jsonb(v_series) IS NOT DISTINCT FROM v_series_before,
+      pg_catalog.to_jsonb(v_job) IS NOT DISTINCT FROM v_job_before,
+      (SELECT count(*) FROM public.daily_repetition_occurrences AS occurrence
+       WHERE occurrence.series_id = v_safety_series_id AND occurrence.state = 'current');
+  END IF;
+
+  v_safety_preview := public.preview_repetition_edit_p(
+    v_board.slug, v_second_task_id, '2026-12-01', 'count', 2, NULL,
+    v_safety_pattern, 5, v_appearance_column, v_safety_template, false
+  );
+  IF v_safety_preview->>'requires_date_choice' IS DISTINCT FROM 'true'
+    OR v_safety_preview->>'selected_date_compatible' IS DISTINCT FROM 'true'
+    OR v_safety_preview->>'proposed_start_on' IS DISTINCT FROM '2026-11-24' THEN
+    RAISE EXCEPTION 'A later compatible start date did not require explicit selection: %',
+      v_safety_preview;
+  END IF;
+  v_safety_preview := public.preview_repetition_edit_p(
+    v_board.slug, v_second_task_id, '2026-12-01', 'count', 2, NULL,
+    v_safety_pattern, 5, v_appearance_column, v_safety_template, true
+  );
+  IF v_safety_preview->>'requires_date_choice' IS DISTINCT FROM 'false'
+    OR v_safety_preview->>'first_appearance_on' IS DISTINCT FROM '2026-11-26'
+    OR v_safety_preview->>'appearance_compatible' IS DISTINCT FROM 'true' THEN
+    RAISE EXCEPTION 'Preview did not approve the explicitly chosen later appearance: %',
+      v_safety_preview;
+  END IF;
+  v_safety_result := public.edit_repetition_p(
+    '26000000-0000-4000-8000-000000000045', v_board.slug, v_second_task_id,
+    (v_series_before->>'revision')::bigint, '2026-12-01', 'count', 2, NULL,
+    v_safety_pattern, 5, v_appearance_column, v_safety_template, true
+  );
+  SELECT series.* INTO v_series FROM public.daily_repetition_series AS series
+  WHERE series.id = v_safety_series_id;
+  SELECT job.* INTO v_job FROM public.daily_repetition_jobs AS job
+  WHERE job.series_id = v_safety_series_id AND job.job_kind = 'advance'
+    AND job.series_revision = v_series.revision;
+  IF v_safety_result->>'status' IS DISTINCT FROM 'confirmed'
+    OR v_series.revision IS DISTINCT FROM (v_series_before->>'revision')::bigint + 1
+    OR v_series.next_due_on IS DISTINCT FROM '2026-12-01'::date
+    OR v_series.advance_days IS DISTINCT FROM 5
+    OR v_series.current_occurrence_id IS DISTINCT FROM (v_series_before->>'current_occurrence_id')::uuid
+    OR v_job.scheduled_on IS DISTINCT FROM '2026-12-01'::date
+    OR v_job.available_at IS DISTINCT FROM '2026-11-26 03:00:00+00'::timestamptz
+    OR (SELECT task.due_on FROM public.tasks AS task WHERE task.id = v_second_task_id)
+      IS DISTINCT FROM '2026-11-20'::date
+    OR (SELECT task.column_id FROM public.tasks AS task WHERE task.id = v_second_task_id)
+      IS DISTINCT FROM v_origin_column THEN
+    RAISE EXCEPTION 'An explicitly selected later date was not committed without moving the current task: %, %, %',
+      v_safety_result, v_series, v_job;
   END IF;
 
   v_created := public.create_task_p(
@@ -179,27 +353,27 @@ BEGIN
 
   v_due_edit := public.edit_task_fields_p(
     '26000000-0000-4000-8000-000000000024', v_board.slug, v_task_id,
-    '{"due_on":"2026-11-03"}'::jsonb, '{"due_on":2}'::jsonb
+    '{"due_on":"2026-11-01"}'::jsonb, '{"due_on":2}'::jsonb
   );
   IF v_due_edit->>'status' IS DISTINCT FROM 'confirmed'
     OR (SELECT occurrence.due_on_override
         FROM public.daily_repetition_occurrences AS occurrence
         WHERE occurrence.id = v_series.current_occurrence_id)
-      IS DISTINCT FROM '2026-11-03'::date THEN
-    RAISE EXCEPTION 'An exception strictly before the next occurrence was not accepted: %', v_due_edit;
+      IS DISTINCT FROM '2026-11-01'::date THEN
+    RAISE EXCEPTION 'An exception strictly before the next appearance was not accepted: %', v_due_edit;
   END IF;
   BEGIN
     PERFORM public.edit_task_fields_p(
       '26000000-0000-4000-8000-000000000025', v_board.slug, v_task_id,
-      '{"due_on":"2026-11-04"}'::jsonb, '{"due_on":3}'::jsonb
+      '{"due_on":"2026-11-03"}'::jsonb, '{"due_on":3}'::jsonb
     );
-    RAISE EXCEPTION 'An exception on the next occurrence date was accepted';
+    RAISE EXCEPTION 'An exception on the next appearance date was accepted';
   EXCEPTION WHEN SQLSTATE 'P2301' THEN
     GET STACKED DIAGNOSTICS
       v_exception_message = MESSAGE_TEXT,
       v_exception_detail = PG_EXCEPTION_DETAIL;
     IF v_exception_message NOT LIKE 'La fecha excepcional debe ser anterior%'
-      OR v_exception_detail IS DISTINCT FROM '2026-11-04' THEN
+      OR v_exception_detail IS DISTINCT FROM '2026-11-03' THEN
       RAISE EXCEPTION 'The strict exception boundary returned the wrong diagnostic: %, %',
         v_exception_message, v_exception_detail;
     END IF;
@@ -227,7 +401,7 @@ BEGIN
     OR (SELECT task.column_id FROM public.tasks AS task WHERE task.id = v_task_id)
       IS DISTINCT FROM v_origin_column
     OR (SELECT task.due_on FROM public.tasks AS task WHERE task.id = v_task_id)
-      IS DISTINCT FROM '2026-11-03'::date
+      IS DISTINCT FROM '2026-11-01'::date
     OR (SELECT task.column_id FROM public.tasks AS task WHERE task.id = v_new_task_id)
       IS DISTINCT FROM v_appearance_column
     OR (SELECT task.due_on FROM public.tasks AS task WHERE task.id = v_new_task_id)

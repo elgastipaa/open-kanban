@@ -1,62 +1,65 @@
 # Issue #41 — Evidencia de implementación
 
-**Contrato:** `CIERRE-MVP-1.0.md` C-65, CF-16.1 y C111-AC58; `PANTALLAS-MVP-1.0.md` UI-13/UI-15; `MATRIZ-PERMISOS-MVP-1.0.md` F-05–F-10/A-05; `DISENO-TECNICO-MVP-1.0.md` G04. Se conservaron todas las P/E. La evidencia de este archivo corresponde a fixtures sintéticos locales y no declara QA humana ni cierre de G04.
+**Contrato:** `CIERRE-MVP-1.0.md` C-65, CF-16.1 y C111-AC58; `PANTALLAS-MVP-1.0.md` UI-13/UI-15; `MATRIZ-PERMISOS-MVP-1.0.md` F-05–F-10/A-05; `DISENO-TECNICO-MVP-1.0.md` G04. Se conservaron todas las P/E. La evidencia usa fixtures sintéticos locales y no declara QA humana ni cierre de G04.
 
 **Base fija:** `7029e249a23d7c47d900c94f3572892b8df54653`.
-**HEAD de código revisado:** `d50e2412c0499eca7d8db2bd1a8c0e9ca069ff58` (`feat: clean completed task attachments and warn on capacity (#41)`, rama `codex/issue-41`). El código se revisó antes de crear este documento; las dos revisiones aplican a ese HEAD. Este archivo y el checkpoint del run se registran en un commit documental separado.
-**Estado:** implementación local, todavía no integrada. #41 no se cierra; `Blocked by #19/#37/#40` permanece intacto. La excepción LP-0.2 habilita evidencia sintética, no acepta QA ni retira bloqueadores.
+**Commits de código:** `d50e2412c0499eca7d8db2bd1a8c0e9ca069ff58` (funcionalidad inicial) y `27adffd88fd9486a75e1009e69c4e8b9ec38b10b` (desglose global admin).
+**HEAD de código final:** `27adffd88fd9486a75e1009e69c4e8b9ec38b10b`, rama `codex/issue-41`. La revisión final del cambio de desglose fijó base `c0b1cc105a529c2337e5130fead17e9c5a30ce4c`; el código quedó congelado durante esas revisiones.
+**Estado:** implementación local, todavía no integrada. #41 no se cierra; `Blocked by #19/#37/#40` permanece intacto. La excepción LP-0.2 permite pruebas sintéticas; no acepta QA ni retira bloqueadores.
 
 ## Alcance implementado
 
-- Quien posee actualmente un tablero ve el consumo de adjuntos de su tablero, separado por activos/recuperables y con fechas de vencimiento, junto a la cuota global, límite y umbrales. La vista no presenta 200 MB como cuota del tablero. El desglose global administrativo continúa bajo UI-15 y limitado a metadatos agregados/mínimos.
-- La limpieza del propietario filtra y pagina adjuntos de tareas completadas. Cada archivo requiere previsualización y confirmación explícitas. El servidor vuelve a verificar propietario, tarea completada y adjunto vigente en la confirmación; una tarea reabierta o un contexto revocado invalida el cambio. La limpieza es borrado recuperable: mantiene su causa, ventana de recuperación y consumo de cuota hasta la purga.
-- Administración fuera de un tablero no habilita lectura/listado de archivos ni de contenido de tarea. La restauración administrativa conserva la condición de causa administrativa; no restaura un archivo eliminado por limpieza del propietario. El propietario aún puede restaurar su propia limpieza dentro de la ventana y con acceso actual.
-- Los avisos globales se crean para cada propietario activo y administrador, deduplicados por persona y nivel: 160.000.000 bytes (80 %) y 200.000.000 bytes. El nivel vuelve a armarse solo tras bajar del umbral y cruzarlo nuevamente después de 24 horas; permanecer arriba o cruzar durante el enfriamiento no difiere un aviso. La carga que supera la cuota sigue rechazándose inmediatamente según el contrato de #40, independientemente del ciclo de avisos.
+- La persona propietaria actual ve consumo y categorías únicamente de su tablero, con cuota global explicada como compartida. La respuesta para ese panel solo da el total, límite y aviso global; no revela el desglose de otros tableros.
+- La pantalla UI-15 de administración global separa **activos**, **en recuperación**, **reservas** y **limpieza pendiente**, mostrando bytes y cantidades por categoría. El resumen global es agregado y mínimo; no incluye nombres, contenido, claves Storage, referencias de tarea/archivo ni uploader. La API y RPC verifican que el actor sea administrador habilitado.
+- El propietario filtra/pagina adjuntos de tareas completadas. Cada limpieza requiere preview y confirmación explícitas; el servidor vuelve a comprobar propietario, estado completado y adjunto vigente al confirmar. Borrar conserva causa y ventana recuperable; el ledger no libera cuota hasta la purga.
+- Administración no miembro no gana acceso a metadatos de contenido del tablero. La restauración administrativa sigue limitada a archivos borrados por causa `admin_cleanup`; no restaura una limpieza del propietario. El dueño con acceso vigente sí puede restaurar su propia limpieza dentro del plazo.
+- Los avisos se crean para propietarios activos y administradores al cruzar 160.000.000 bytes (80 %) y 200.000.000 bytes. Se deduplican por persona/nivel y solo se rearman después de bajar y volver a cruzar tras 24 horas. Permanecer encima o cruzar dentro del período no difiere aviso; una carga excedida se rechaza inmediatamente según el contrato existente de #40.
 
-## Matriz de criterios y evidencia
+## Criterios y evidencia automática
 
 | Criterio | Resultado automático | Evidencia y límite |
 | --- | --- | --- |
-| Consumo propio y global, estados activos/recuperables/reservados/pendientes, unidades exactas y explicación de cuota compartida | PASS en DB y UI/build | `tests/db/task_attachment_cleanup_capacity.sql` valida agregados y metadatos permitidos; `src/components/board/task-attachment-storage.tsx` muestra el resumen propio y cuota global. La interfaz compiló; no se hizo recorrido visual en navegador. |
-| Limpieza solo de adjuntos de tareas completadas, con preview, confirmación e invalidación al cambiar estado/contexto | PASS en PostgreSQL descartable y helpers unitarios | El contrato DB previsualiza el adjunto, reabre la tarea antes de confirmar y espera `unavailable`; luego vuelve a completarla, confirma la limpieza e inspecciona el recibo idempotente. Los helpers `task-attachment-board-cleanup` prueban parsers acotados. No reemplaza una sesión real de Auth/browser. |
-| Permisos de propietario y administrador ajeno; privacidad de metadatos/contenido | PASS en PostgreSQL descartable y rutas/helpers unitarios | Fixtures aislados de propietario, miembro, administrador y persona ajena comprueban que solo el dueño lista/limpia su tablero; el administrador ajeno no recibe filas y una persona sin membresía no obtiene preview. Avisos son propios y no incluyen nombres/clave/contenido. Restauración administrativa de causa de limpieza del dueño se rechaza. No se usaron cuentas reales. |
-| Retención de cuota hasta purga y reglas de restauración por causa | PASS en PostgreSQL descartable | Tras el borrado recuperable, el resumen mantiene los 24.000 bytes en recuperables; miembro/uploader y administrador no restauran una limpieza del dueño, y el dueño con acceso actual sí. Los tests no ejecutan purga contra Storage físico. |
-| Umbrales 80 %/200 MB, deduplicación persona+nivel, rearme por cruce y aviso sin diferimiento | PASS con reloj DB controlado y trigger de ledger | Pruebas con timestamps sintéticos comprueban cruce, permanencia de 25 h, baja/recross dentro de 24 h, rearme tras 24 h, niveles independientes y audiencia. Una inserción real de adjunto en el PostgreSQL de prueba cruza 160 MB en el ledger y produce avisos agregados. No se envía correo/push. |
-| Carga sobre cuota rechazada de forma inmediata | PASS por regresión existente de #40 | `pnpm test:db:issue-40` confirma el resultado `quota` para exceso; #41 no introduce espera ni aviso diferido en esa ruta. No se contactó Storage. |
+| Capacidad admin global: activos, recuperables, reservas y limpieza pendiente, con bytes y conteos diferenciados | PASS en PostgreSQL descartable, helpers unitarios y contrato UI | `tests/db/task_attachment_cleanup_capacity.sql` añade filas sintéticas de 7/11/13/17 bytes y exige deltas independientes de bytes/conteos, total +48 y claves exactas del resumen agregado. Un admin ajeno al tablero obtiene el agregado; un no-admin recibe `unavailable`. `task-attachment-admin-summary.test.mjs` verifica el parseo y las tarjetas por separado. No se realizó recorrido visual de navegador. |
+| Privacidad: detalle global cross-board solo para administración | PASS en DB y unitarias | La prueba DB comprueba shape agregado sin campos de archivo/tarea/uploader y denegación del no-admin; las pruebas #40 cubren allowlist de filas administrativas. La vista del dueño conserva breakdown de `board_usage` y solo `used/limit/threshold` global. No se usaron cuentas reales. |
+| Consumo propio, estados recuperables/reservados/pendientes, unidades exactas y cuota compartida | PASS en DB y UI/build | Contrato DB valida ledger y retención; UI de dueño muestra su propio tablero y comunica el total global. La interfaz compiló, sin recorrido visual. |
+| Limpieza solo de adjuntos de tareas completadas, preview, confirmación e invalidación por cambio de estado/contexto | PASS en PostgreSQL descartable y helpers unitarios | El contrato DB previsualiza, reabre la tarea antes de confirmar y espera `unavailable`; tras completarla nuevamente confirma y revisa recibo idempotente. Helpers prueban parsers acotados. No sustituye Auth/browser real. |
+| Retención de cuota hasta purga y reglas de restauración por causa | PASS en PostgreSQL descartable | Tras el borrado recuperable el resumen conserva 24.000 bytes; el miembro/uploader y el administrador no restauran limpieza del dueño, mientras el propietario con acceso actual sí. No se ejecutó purga contra Storage físico. |
+| Umbrales, deduplicación persona+nivel, rearme y aviso inmediato al cruzar | PASS con reloj DB controlado y trigger de ledger | Pruebas sintéticas verifican cruce, permanencia 25 h, recross dentro de 24 h, rearme posterior, independencia de niveles y audiencia. Una inserción cruza 160 MB en el ledger real de la DB descartable. No se envía correo/push. |
+| Exceso de cuota de carga | PASS por regresión #40 | `pnpm test:db:issue-40` ya confirmó el rechazo inmediato con resultado `quota`; #41 no introduce espera ni aviso diferido. |
 
-Los archivos de contrato y rutas nuevas están en `supabase/migrations/067_task_attachment_cleanup_and_capacity_notices.sql`, `src/app/api/boards/[slug]/task-attachments/route.ts` y `src/app/api/task-attachment-capacity-notices/route.ts`. Las verificaciones DB y unitarias focales están en `tests/db/task_attachment_cleanup_capacity.sql` y `tests/unit/task-attachment-board-cleanup.test.mjs` / `tests/unit/task-attachment-capacity-notice.test.mjs`.
+El resumen global usado por `/api/admin/task-attachments` proviene de `admin_task_attachment_storage_summary_p`; sus campos agregados ya separan bytes/conteos. La corrección `27adffd` extrae y valida ese contrato en `src/lib/admin-task-attachment-storage-summary.ts` y deja de sumar reservas con limpieza pendiente en `src/components/admin/task-attachment-storage.tsx`. La vista normal permanece en `src/components/board/task-attachment-storage.tsx`.
 
 ## Revisión de código
 
-Las revisiones Spec y Standards/Privacy corrieron en paralelo y fueron de solo lectura sobre `d50e2412c0499eca7d8db2bd1a8c0e9ca069ff58`.
+La revisión inicial del candidato `d50e241` detectó dos P2: evidencia por criterio ausente y el breakdown UI-15 presentado como total combinado. El primero se registró en el commit documental previo `c0b1cc1`; el segundo queda corregido por `27adffd`.
 
-- **Spec:** una observación P2 pidió esta matriz de evidencia; queda atendida por este documento, sin cambiar el HEAD de código revisado. La observación sobre desglose global se evaluó contra los contratos: UI-13 expone desglose de consumo propio y explica la cuota global; UI-15 reserva activos/recuperables/reservas globales al administrador. No se amplió el acceso de una persona dueña a otros tableros; el desglose administrativo está en la pantalla admin existente de #40.
-- **Standards/Privacy:** PASS, sin infracciones de privacidad ni hallazgos accionables. Se anotaron señales heurísticas no bloqueantes de duplicación en la comprobación del recibo idempotente bajo lock y en un helper JSON repetido, consistente con los Route Handlers ya existentes del repositorio.
+Reviews finales del diff `c0b1cc105a529c2337e5130fead17e9c5a30ce4c..27adffd88fd9486a75e1009e69c4e8b9ec38b10b`, en paralelo y de solo lectura:
+
+- **Spec: PASS, sin hallazgos.** UI-15 muestra activos/recuperables/reservas separados y limpieza pendiente aparte; la vista de dueño conserva el alcance del tablero. La prueba confirma el breakdown y shape de metadatos mínimo.
+- **Standards/Privacy: PASS, sin hallazgos.** El parser reconstruye únicamente campos agregados permitidos. La RPC valida admin habilitado; el nuevo contrato DB confirma que admin ajeno recibe el agregado mínimo y un no-admin no ve totales globales.
 
 ## Entorno y verificaciones
 
-Verificación local sobre PostgreSQL 16 descartable creado por `scripts/test-db.sh` en un directorio temporal propio. El script usa `initdb`/`pg_ctl`/`psql` locales y elimina solo ese directorio; no consume `DATABASE_URL`, `PGHOST` ni SQL remoto. Actores, identidad y contenido fueron sintéticos (`*.example.test`). Next.js local: 16.4.2. No se usaron OAuth/Auth reales, Storage remoto, credenciales, datos de usuario, producción ni deploy.
+Windows local; PostgreSQL 16 descartable creado por `scripts/test-db.sh` en un directorio temporal propio (`initdb`/`pg_ctl`/`psql` locales, sin `DATABASE_URL`, `PGHOST` ni SQL remoto). Actores e identidades sintéticos (`*.example.test`). Next.js 16.4.2. No se usaron OAuth/Auth reales, Storage remoto, credenciales, datos de usuario, producción ni deploy.
 
 | Comando | Resultado |
 | --- | --- |
-| `pnpm test:db:issue-41` | PASS; limpieza, permisos, revalidación, recibo, cuota retenida y ciclo de avisos. |
-| `pnpm test:db:issue-40` | PASS; regresión de reservas/cuota y rechazo inmediato al exceder el límite. |
-| `pnpm test:db` | PASS con las migraciones 001–067 y regresiones previas. |
-| `pnpm test:unit:issue-41` | PASS, 8/8. |
+| `pnpm test:db:issue-41` | PASS; limpieza, permisos, revalidación, recibo, cuota/avisos y breakdown admin agregado. |
+| `pnpm test:db` | PASS, migraciones 001–067 y suite completa de regresiones en PostgreSQL descartable. |
+| `pnpm test:unit:issue-41` | PASS, 12/12, incluidos breakdown admin, parseo y límite de vista de dueño. |
 | `pnpm test:unit` | PASS, suite unitaria completa. |
-| `pnpm typecheck` | PASS después de `pnpm exec next typegen`. |
-| `pnpm build` | PASS con Next.js 16.4.2; incluye las rutas nuevas. |
-| `pnpm exec biome check` dirigido a los archivos modificados de código/pruebas | PASS, sin aplicar formato automático. |
-| `bash -n scripts/test-db.sh` y `bash -n scripts/test-db-issue-41.sh` | PASS. |
-| `git diff --check` | PASS en el candidato de código. |
-| `pnpm lint` | No pasa globalmente: Biome informa diferencias CRLF/LF en el checkout/base, fuera de los archivos modificados. El chequeo dirigido de los archivos de #41 sí pasa; no se reformateó código ajeno. |
+| `pnpm typecheck` | PASS. |
+| `pnpm build` | PASS; incluye `/admin/access` y rutas nuevas. |
+| `pnpm exec biome check` dirigido a los tres archivos TS/JS nuevos/modificados | PASS, sin cambios automáticos. |
+| `git diff --check` / `git show --check` | PASS. |
+| `pnpm lint` | No pasa globalmente por diferencias CRLF/LF preexistentes fuera del diff; el chequeo Biome dirigido pasa y no se reformateó código ajeno. |
 
 ## Gates pendientes
 
-- **Storage/G04:** el servicio local de Storage no pudo levantarse porque Windows denegó iniciar `com.docker.service`; no se intentó elevar permisos. No se validaron upload/download/objeto privado, ACK de eliminación física ni purga real. La suite de PostgreSQL prueba contratos de ledger/transiciones solamente.
-- **Navegador/Auth y aceptación humana:** no se realizó recorrido de UI con sesión autorizada, revisión visual desktop/móvil/responsive ni auditoría manual de teclado/lector de pantalla/foco. Typecheck/build y helpers no sustituyen esos gates.
-- No se verificó worker/cron desplegado ni se alteró el tracker tras el kickoff. No se afirma que #19/#37/#40 tengan aceptación humana ni que `Blocked by #19/#37/#40` se haya resuelto.
+- **Storage/G04:** Storage local no pudo levantarse porque Windows denegó iniciar `com.docker.service`; no se intentó elevar permisos. No se validaron upload/download/objeto privado, confirmación física de borrado ni purga real. DB prueba contratos del ledger/transiciones, no bytes físicos.
+- **Navegador/Auth y aceptación humana:** sin sesión real ni recorrido visual de UI. Siguen pendientes revisión desktop/móvil/responsive, teclado/lector/foco y aceptación manual.
+- No se verificó worker/cron desplegado ni se actualizó el tracker tras el kickoff. No se afirma que #19/#37/#40 hayan recibido aceptación humana ni que `Blocked by #19/#37/#40` se haya resuelto.
 
 ## Próxima acción
 
-Integrar localmente la rama `codex/issue-41` desde la base fija después de la coordinación correspondiente, manteniendo el issue abierto y sus dependencias. Repetir las verificaciones aplicables en la integración y dejar Storage/G04, worker/cron y QA manual como gates explícitos hasta contar con entorno y aceptación autorizados.
+Integrar localmente `codex/issue-41` desde la base fija después de coordinación, repetir verificaciones aplicables y mantener issue/dependencias abiertos hasta satisfacer gates manuales/externos.

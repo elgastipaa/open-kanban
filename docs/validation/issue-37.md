@@ -49,4 +49,4 @@ Las pruebas unitarias emiten la advertencia de Node `MODULE_TYPELESS_PACKAGE_JSO
 - No se verificó un cron/worker desplegado. La fixture verifica procesamiento separado, idempotente y reintentable en PostgreSQL local.
 - La acción de lectura implementada en #37 es individual, como expresa AC3. El marcado por lote de C-99/E07 pertenece al issue #38, que está bloqueado por #37; no se adelanta en esta candidata.
 - Se conservan las aristas `Blocked by #13/#16/#23`; ninguna dependencia ni aceptación humana se marca cumplida. El issue debe seguir abierto mientras queden gates humanos.
-- La revisión dual Spec/Standards del SHA candidato está pendiente.
+- Revisión dual Spec/Standards realizada sobre `670dece86d889a3fc73896382d265a0aea3490f9` (`8ea69504ce149c6aac86443616768e12431cdc45`): sin hallazgos; los gates manuales anteriores siguen pendientes.

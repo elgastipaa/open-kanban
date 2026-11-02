@@ -11,6 +11,7 @@ import {
 } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { TaskActivity } from "@/components/board/task-activity";
+import { TaskAttachments } from "@/components/board/task-attachments";
 import { TaskConversation } from "@/components/board/task-conversation";
 import { TaskCopyAction } from "@/components/board/task-copy-action";
 import { TaskDueDate } from "@/components/board/task-due-date";
@@ -2147,6 +2148,14 @@ export function TaskModal({
             actorId={actorId}
             timeZone={boardTimeZone}
             refreshSignal={activityRefreshSignal}
+            isOnline={isOnline}
+            isSessionStale={isSessionStale}
+          />
+
+          <TaskAttachments
+            key={baseTask.id}
+            slug={slug}
+            taskId={baseTask.id}
             isOnline={isOnline}
             isSessionStale={isSessionStale}
           />

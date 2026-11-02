@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
+import { AdminTaskAttachmentStorage } from "@/components/admin/task-attachment-storage";
 import { AccessManager } from "@/components/auth/access-manager";
 import { SignOutButton } from "@/components/auth/sign-out-button";
 import { AdminBoardRecovery } from "@/components/board/admin-board-recovery";
@@ -63,6 +64,7 @@ export default async function AccessAdminPage() {
         boards={recoverableBoards}
         loadError={recoveryLoadError}
       />
+      <AdminTaskAttachmentStorage />
     </main>
   );
 }

@@ -1,4 +1,5 @@
 export type TaskNotificationReason =
+  | "attachment_cleanup"
   | "assignment"
   | "comment"
   | "due_date"
@@ -43,6 +44,7 @@ const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const slugPattern = /^[a-z0-9-]{1,100}$/i;
 const reasons = new Set<TaskNotificationReason>([
+  "attachment_cleanup",
   "assignment",
   "comment",
   "due_date",
@@ -210,6 +212,8 @@ export async function openTaskNotificationTarget(
 export function taskNotificationReasonLabel(
   reasons: TaskNotificationReason[],
 ): string {
+  if (reasons.includes("attachment_cleanup"))
+    return "Se limpió un archivo de esta tarea";
   if (reasons.includes("mention")) return "Te mencionaron en un comentario";
   if (reasons.includes("comment"))
     return "Nuevo comentario en una tarea asignada";

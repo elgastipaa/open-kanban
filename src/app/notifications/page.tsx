@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { TaskAttachmentCapacityNotices } from "@/components/notifications/task-attachment-capacity-notices";
 import { TaskNotificationsInbox } from "@/components/notifications/task-notifications-inbox";
 import { resolveApplicationAccess } from "@/lib/auth";
 import { listMyTaskNotifications } from "@/lib/db/task-notifications";
@@ -46,6 +47,7 @@ export default async function NotificationsPage() {
           Volver a tus tableros
         </Link>
       </header>
+      <TaskAttachmentCapacityNotices />
       <TaskNotificationsInbox
         initialPage={initialPage}
         initialLoadFailed={initialLoadFailed}

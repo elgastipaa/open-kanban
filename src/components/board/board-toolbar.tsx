@@ -18,6 +18,7 @@ import { BoardDepartureDialog } from "@/components/board/board-departure-dialog"
 import { BoardInvitationsDialog } from "@/components/board/board-invitations-dialog";
 import { BoardMembersDialog } from "@/components/board/board-members-dialog";
 import { BoardTimeZoneDialog } from "@/components/board/board-time-zone-dialog";
+import { TaskAttachmentStorage } from "@/components/board/task-attachment-storage";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -88,6 +89,7 @@ export function BoardToolbar({
   const [isInvitationsDialogOpen, setIsInvitationsDialogOpen] = useState(false);
   const [isMembersDialogOpen, setIsMembersDialogOpen] = useState(false);
   const [isDepartureDialogOpen, setIsDepartureDialogOpen] = useState(false);
+  const [isAttachmentStorageOpen, setIsAttachmentStorageOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const isSavingRef = useRef(false);
@@ -288,6 +290,12 @@ export function BoardToolbar({
                     <IconUsers size={16} aria-hidden="true" />
                     Invitaciones
                   </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => setIsAttachmentStorageOpen(true)}
+                    className="cursor-pointer"
+                  >
+                    Archivos y almacenamiento
+                  </DropdownMenuItem>
                 </>
               ) : null}
             </DropdownMenuContent>
@@ -306,6 +314,11 @@ export function BoardToolbar({
               open={isInvitationsDialogOpen}
               onClose={() => setIsInvitationsDialogOpen(false)}
               slug={slug}
+            />
+            <TaskAttachmentStorage
+              slug={slug}
+              open={isAttachmentStorageOpen}
+              onClose={() => setIsAttachmentStorageOpen(false)}
             />
           </>
         ) : null}

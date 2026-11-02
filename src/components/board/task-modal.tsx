@@ -11,7 +11,7 @@ import {
 } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { TaskConversation } from "@/components/board/task-conversation";
-import { TaskDailyRepetition } from "@/components/board/task-daily-repetition";
+import { TaskRepetition } from "@/components/board/task-daily-repetition";
 import { TaskDueDate } from "@/components/board/task-due-date";
 import { ThemePreferenceControl } from "@/components/theme/theme-preference-provider";
 import { Button } from "@/components/ui/button";
@@ -23,13 +23,13 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Modal } from "@/components/ui/modal";
-import type { DailyRepetitionOperationStore } from "@/lib/daily-repetition-state";
+import type { RepetitionOperationStore } from "@/lib/daily-repetition-state";
 import type {
-  DailyRepetitionCreateCommand,
-  DailyRepetitionCreateResult,
-  DailyRepetitionPreview,
-  DailyRepetitionStatus,
+  RepetitionCreateCommand,
+  RepetitionCreateResult,
   RepetitionPattern,
+  RepetitionPreview,
+  RepetitionStatus,
 } from "@/lib/db/daily-repetition";
 import { TaskChecklistError, TaskEditError } from "@/lib/db/tasks";
 import { resolveTaskChecklistCompletionReview } from "@/lib/task-checklist-completion";
@@ -117,18 +117,18 @@ interface TaskModalProps {
   onSetTaskAssignee: (
     command: TaskAssigneeCommand,
   ) => Promise<TaskAssigneeResult>;
-  onGetDailyRepetition: (taskId: string) => Promise<DailyRepetitionStatus>;
-  onPreviewDailyRepetition: (
+  onGetRepetition: (taskId: string) => Promise<RepetitionStatus>;
+  onPreviewRepetition: (
     taskId: string,
     startOn: string,
     endOn: string | null,
     occurrenceLimit: number | null,
     pattern: RepetitionPattern,
-  ) => Promise<DailyRepetitionPreview>;
-  onCreateDailyRepetition: (
-    command: DailyRepetitionCreateCommand,
-  ) => Promise<DailyRepetitionCreateResult>;
-  dailyRepetitionOperations: DailyRepetitionOperationStore;
+  ) => Promise<RepetitionPreview>;
+  onCreateRepetition: (
+    command: RepetitionCreateCommand,
+  ) => Promise<RepetitionCreateResult>;
+  dailyRepetitionOperations: RepetitionOperationStore;
   onSetTaskCompletion: (
     command: TaskCompletionCommand,
   ) => Promise<TaskCompletionResult>;
@@ -276,9 +276,9 @@ export function TaskModal({
   onSave,
   assignableMembers,
   onSetTaskAssignee,
-  onGetDailyRepetition,
-  onPreviewDailyRepetition,
-  onCreateDailyRepetition,
+  onGetRepetition,
+  onPreviewRepetition,
+  onCreateRepetition,
   dailyRepetitionOperations,
   onSetTaskCompletion,
   checklistAddOperations,
@@ -1650,7 +1650,7 @@ export function TaskModal({
                   )}
                 </div>
                 {task && baseTask ? (
-                  <TaskDailyRepetition
+                  <TaskRepetition
                     task={baseTask}
                     slug={slug}
                     boardToday={boardToday}
@@ -1659,9 +1659,9 @@ export function TaskModal({
                     isDisabled={isWorking || isSessionStale}
                     hasUnsavedChanges={dirty}
                     operations={dailyRepetitionOperations}
-                    onLoad={onGetDailyRepetition}
-                    onPreview={onPreviewDailyRepetition}
-                    onCreate={onCreateDailyRepetition}
+                    onLoad={onGetRepetition}
+                    onPreview={onPreviewRepetition}
+                    onCreate={onCreateRepetition}
                   />
                 ) : null}
                 <div className="flex flex-col gap-2">

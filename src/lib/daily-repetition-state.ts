@@ -1,8 +1,8 @@
-import type { DailyRepetitionCreateCommand } from "./db/daily-repetition";
+import type { RepetitionCreateCommand } from "./db/daily-repetition";
 
 /** Keeps an uncertain conversion intent stable while its board stays open. */
-export class DailyRepetitionOperationStore {
-  private readonly commands = new Map<string, DailyRepetitionCreateCommand>();
+export class RepetitionOperationStore {
+  private readonly commands = new Map<string, RepetitionCreateCommand>();
   private readonly actorId: string;
   private readonly boardSlug: string;
 
@@ -15,15 +15,15 @@ export class DailyRepetitionOperationStore {
     return `${this.actorId}:${this.boardSlug}:${taskId}`;
   }
 
-  get(taskId: string): DailyRepetitionCreateCommand | null {
+  get(taskId: string): RepetitionCreateCommand | null {
     return this.commands.get(this.key(taskId)) ?? null;
   }
 
-  set(command: DailyRepetitionCreateCommand): void {
+  set(command: RepetitionCreateCommand): void {
     this.commands.set(this.key(command.task_id), command);
   }
 
-  clear(taskId: string): DailyRepetitionCreateCommand | null {
+  clear(taskId: string): RepetitionCreateCommand | null {
     const key = this.key(taskId);
     const command = this.commands.get(key) ?? null;
     this.commands.delete(key);

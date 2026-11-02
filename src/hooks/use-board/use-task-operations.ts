@@ -1,18 +1,18 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { useCallback, useEffect, useRef } from "react";
 import { toast } from "sonner";
-import { DailyRepetitionOperationStore } from "@/lib/daily-repetition-state";
+import { RepetitionOperationStore } from "@/lib/daily-repetition-state";
 import {
   createColumn,
-  createDailyRepetition,
+  createRepetition,
   createTask,
-  DailyRepetitionError,
   deleteTask as dbDeleteTask,
-  getDailyRepetition,
   getFullBoard,
   getFullBoardForTaskEdit,
+  getRepetition,
   mutateTaskChecklistStep,
   previewRepetition,
+  RepetitionError,
   reconcileTaskCreation,
   setTaskCompletion,
   TaskCaptureError,
@@ -25,11 +25,11 @@ import {
   updateTaskPositions,
 } from "@/lib/db";
 import type {
-  DailyRepetitionCreateCommand,
-  DailyRepetitionCreateResult,
-  DailyRepetitionPreview,
-  DailyRepetitionStatus,
+  RepetitionCreateCommand,
+  RepetitionCreateResult,
   RepetitionPattern,
+  RepetitionPreview,
+  RepetitionStatus,
 } from "@/lib/db/daily-repetition";
 import { getSessionEpoch } from "@/lib/supabase/client";
 import { TaskChecklistAddOperationStore } from "@/lib/task-checklist-state";
@@ -134,7 +134,7 @@ export function useTaskOperations({
   const dailyRepetitionOperationsRef = useRef<{
     actorId: string;
     slug: string;
-    store: DailyRepetitionOperationStore;
+    store: RepetitionOperationStore;
   } | null>(null);
   if (
     !dailyRepetitionOperationsRef.current ||
@@ -144,7 +144,7 @@ export function useTaskOperations({
     dailyRepetitionOperationsRef.current = {
       actorId,
       slug,
-      store: new DailyRepetitionOperationStore(actorId, slug),
+      store: new RepetitionOperationStore(actorId, slug),
     };
   }
   const dailyRepetitionOperations = dailyRepetitionOperationsRef.current.store;
@@ -678,11 +678,11 @@ export function useTaskOperations({
     ],
   );
 
-  const getTaskDailyRepetition = useCallback(
-    async (taskId: string): Promise<DailyRepetitionStatus> => {
+  const getTaskRepetition = useCallback(
+    async (taskId: string): Promise<RepetitionStatus> => {
       const sessionEpoch = getSessionEpoch();
       try {
-        const result = await getDailyRepetition(supabase, slug, taskId);
+        const result = await getRepetition(supabase, slug, taskId);
         if (sessionEpoch !== getSessionEpoch()) {
           throw new Error(
             "The session changed while loading daily repetition.",
@@ -692,8 +692,7 @@ export function useTaskOperations({
       } catch (error) {
         if (
           sessionEpoch !== getSessionEpoch() ||
-          (error instanceof DailyRepetitionError &&
-            error.reason === "access_denied")
+          (error instanceof RepetitionError && error.reason === "access_denied")
         ) {
           onAccessLost();
         }
@@ -703,14 +702,14 @@ export function useTaskOperations({
     [supabase, slug, onAccessLost],
   );
 
-  const previewTaskDailyRepetition = useCallback(
+  const previewTaskRepetition = useCallback(
     async (
       taskId: string,
       startOn: string,
       endOn: string | null,
       occurrenceLimit: number | null,
       pattern: RepetitionPattern,
-    ): Promise<DailyRepetitionPreview> => {
+    ): Promise<RepetitionPreview> => {
       if (!isPersistedRef.current || taskId.startsWith("local-")) {
         return { status: "unavailable" };
       }
@@ -734,8 +733,7 @@ export function useTaskOperations({
       } catch (error) {
         if (
           sessionEpoch !== getSessionEpoch() ||
-          (error instanceof DailyRepetitionError &&
-            error.reason === "access_denied")
+          (error instanceof RepetitionError && error.reason === "access_denied")
         ) {
           onAccessLost();
         }
@@ -745,16 +743,16 @@ export function useTaskOperations({
     [supabase, slug, isPersistedRef, onAccessLost],
   );
 
-  const createTaskDailyRepetition = useCallback(
+  const createTaskRepetition = useCallback(
     async (
-      command: DailyRepetitionCreateCommand,
-    ): Promise<DailyRepetitionCreateResult> => {
+      command: RepetitionCreateCommand,
+    ): Promise<RepetitionCreateResult> => {
       if (!isPersistedRef.current || command.task_id.startsWith("local-")) {
         return { status: "unavailable", operation_id: command.operation_id };
       }
       const sessionEpoch = getSessionEpoch();
       try {
-        const result = await createDailyRepetition(supabase, command);
+        const result = await createRepetition(supabase, command);
         if (sessionEpoch !== getSessionEpoch()) {
           throw new Error(
             "The session changed while creating daily repetition.",
@@ -778,8 +776,7 @@ export function useTaskOperations({
       } catch (error) {
         if (
           sessionEpoch !== getSessionEpoch() ||
-          (error instanceof DailyRepetitionError &&
-            error.reason === "access_denied")
+          (error instanceof RepetitionError && error.reason === "access_denied")
         ) {
           onAccessLost();
         }
@@ -1341,9 +1338,9 @@ export function useTaskOperations({
     refreshTaskForEdit,
     removeTask,
     moveTask,
-    getTaskDailyRepetition,
-    previewTaskDailyRepetition,
-    createTaskDailyRepetition,
+    getTaskRepetition,
+    previewTaskRepetition,
+    createTaskRepetition,
     dailyRepetitionOperations,
   };
 }

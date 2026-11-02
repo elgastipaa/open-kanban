@@ -1286,12 +1286,14 @@ COMMIT;
 -- Issue #24: local calendar days differ by zone, and invalid patterns are
 -- rejected through the public preview RPC before durable state is created.
 BEGIN;
+SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);
 DO $$
 DECLARE
   v_ref issue23_refs%ROWTYPE;
   v_now timestamptz := '2027-01-01 01:00:00+00'::timestamptz;
   v_invalid_intervals_rejected boolean := false;
+  v_daily_interval_rejected boolean := false;
   v_empty_days_rejected boolean := false;
   v_null_day_rejected boolean := false;
 BEGIN
@@ -1314,6 +1316,14 @@ BEGIN
   BEGIN
     PERFORM public.preview_repetition_p(
       v_ref.slug, v_ref.task_id, '2026-12-28'::date, NULL, 3,
+      '{"frequency":"daily","interval":2}'::jsonb
+    );
+  EXCEPTION WHEN SQLSTATE '22023' THEN
+    v_daily_interval_rejected := true;
+  END;
+  BEGIN
+    PERFORM public.preview_repetition_p(
+      v_ref.slug, v_ref.task_id, '2026-12-28'::date, NULL, 3,
       '{"frequency":"weekly","interval":1,"weekdays":[]}'::jsonb
     );
   EXCEPTION WHEN SQLSTATE '22023' THEN
@@ -1327,9 +1337,9 @@ BEGIN
   EXCEPTION WHEN SQLSTATE '22023' THEN
     v_null_day_rejected := true;
   END;
-  IF NOT v_invalid_intervals_rejected OR NOT v_empty_days_rejected
+  IF NOT v_invalid_intervals_rejected OR NOT v_daily_interval_rejected OR NOT v_empty_days_rejected
     OR NOT v_null_day_rejected THEN
-    RAISE EXCEPTION 'Weekly pattern validation accepted a nonpositive interval or invalid weekday selection';
+    RAISE EXCEPTION 'Repetition validation accepted a nonpositive or out-of-scope interval or invalid weekday selection';
   END IF;
 END;
 $$;

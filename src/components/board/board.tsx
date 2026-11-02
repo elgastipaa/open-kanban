@@ -484,9 +484,9 @@ function BoardWorkspace({
     applyBoardSettings,
     removeTask,
     moveTask,
-    getTaskDailyRepetition,
-    previewTaskDailyRepetition,
-    createTaskDailyRepetition,
+    getTaskRepetition,
+    previewTaskRepetition,
+    createTaskRepetition,
     dailyRepetitionOperations,
     moveColumn,
     removeBoard,
@@ -1316,9 +1316,9 @@ function BoardWorkspace({
         onMutateChecklist={mutateChecklistStep}
         assignableMembers={assignableMembers}
         onSetTaskAssignee={assignTask}
-        onGetDailyRepetition={getTaskDailyRepetition}
-        onPreviewDailyRepetition={previewTaskDailyRepetition}
-        onCreateDailyRepetition={createTaskDailyRepetition}
+        onGetRepetition={getTaskRepetition}
+        onPreviewRepetition={previewTaskRepetition}
+        onCreateRepetition={createTaskRepetition}
         dailyRepetitionOperations={dailyRepetitionOperations}
         onMoveTask={moveTaskFromEditor}
         onDelete={handleRequestEditorTaskDelete}

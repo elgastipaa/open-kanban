@@ -4,7 +4,7 @@ export type RepetitionPattern =
   | { frequency: "daily"; interval: number }
   | { frequency: "weekly"; interval: number; weekdays: number[] };
 
-export interface DailyRepetitionPreview {
+export interface RepetitionPreview {
   status: "available" | "unavailable";
   board_id?: string;
   task_id?: string;
@@ -28,7 +28,7 @@ export interface DailyRepetitionPreview {
   requires_previous_series_confirmation?: boolean;
 }
 
-export interface DailyRepetitionCreateCommand {
+export interface RepetitionCreateCommand {
   operation_id: string;
   slug: string;
   task_id: string;
@@ -41,7 +41,7 @@ export interface DailyRepetitionCreateCommand {
   previous_series_id: string | null;
 }
 
-export interface DailyRepetitionCreateResult {
+export interface RepetitionCreateResult {
   status:
     | "confirmed"
     | "confirmation_required"
@@ -66,7 +66,7 @@ export interface DailyRepetitionCreateResult {
   task?: Record<string, unknown>;
 }
 
-export interface DailyRepetitionStatus {
+export interface RepetitionStatus {
   status: "available" | "not_repeating" | "unavailable";
   series_id?: string;
   state?: "active" | "stopped" | "finished";
@@ -93,15 +93,12 @@ export interface DailyRepetitionStatus {
   } | null;
 }
 
-export type DailyRepetitionErrorReason =
-  | "uncertain"
-  | "rejected"
-  | "access_denied";
+export type RepetitionErrorReason = "uncertain" | "rejected" | "access_denied";
 
-export class DailyRepetitionError extends Error {
-  constructor(readonly reason: DailyRepetitionErrorReason) {
+export class RepetitionError extends Error {
+  constructor(readonly reason: RepetitionErrorReason) {
     super("No se pudo confirmar la repetición.");
-    this.name = "DailyRepetitionError";
+    this.name = "RepetitionError";
   }
 }
 
@@ -109,14 +106,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function throwDailyRepetitionError(error: unknown): never {
+function throwRepetitionError(error: unknown): never {
   const code =
     isRecord(error) && typeof error.code === "string" ? error.code : "";
-  if (code === "42501") throw new DailyRepetitionError("access_denied");
+  if (code === "42501") throw new RepetitionError("access_denied");
   if (code.startsWith("22") || code === "23514") {
-    throw new DailyRepetitionError("rejected");
+    throw new RepetitionError("rejected");
   }
-  throw new DailyRepetitionError("uncertain");
+  throw new RepetitionError("uncertain");
 }
 
 export async function previewRepetition(
@@ -127,7 +124,7 @@ export async function previewRepetition(
   endOn: string | null,
   occurrenceLimit: number | null,
   pattern: RepetitionPattern,
-): Promise<DailyRepetitionPreview> {
+): Promise<RepetitionPreview> {
   const { data, error } = await supabase.rpc("preview_repetition_p", {
     p_slug: slug,
     p_task_id: taskId,
@@ -136,20 +133,20 @@ export async function previewRepetition(
     p_occurrence_limit: occurrenceLimit,
     p_pattern: pattern,
   });
-  if (error) throwDailyRepetitionError(error);
+  if (error) throwRepetitionError(error);
   if (
     !isRecord(data) ||
     !["available", "unavailable"].includes(String(data.status))
   ) {
-    throw new DailyRepetitionError("uncertain");
+    throw new RepetitionError("uncertain");
   }
-  return data as unknown as DailyRepetitionPreview;
+  return data as unknown as RepetitionPreview;
 }
 
-export async function createDailyRepetition(
+export async function createRepetition(
   supabase: SupabaseClient,
-  command: DailyRepetitionCreateCommand,
-): Promise<DailyRepetitionCreateResult> {
+  command: RepetitionCreateCommand,
+): Promise<RepetitionCreateResult> {
   const { data, error } = await supabase.rpc("create_repetition_p", {
     p_operation_id: command.operation_id,
     p_slug: command.slug,
@@ -162,28 +159,28 @@ export async function createDailyRepetition(
     p_confirm_start_change: command.confirm_start_change,
     p_previous_series_id: command.previous_series_id,
   });
-  if (error) throwDailyRepetitionError(error);
+  if (error) throwRepetitionError(error);
   if (!isRecord(data) || typeof data.status !== "string") {
-    throw new DailyRepetitionError("uncertain");
+    throw new RepetitionError("uncertain");
   }
-  return data as unknown as DailyRepetitionCreateResult;
+  return data as unknown as RepetitionCreateResult;
 }
 
-export async function getDailyRepetition(
+export async function getRepetition(
   supabase: SupabaseClient,
   slug: string,
   taskId: string,
-): Promise<DailyRepetitionStatus> {
+): Promise<RepetitionStatus> {
   const { data, error } = await supabase.rpc("get_repetition_p", {
     p_slug: slug,
     p_task_id: taskId,
   });
-  if (error) throwDailyRepetitionError(error);
+  if (error) throwRepetitionError(error);
   if (
     !isRecord(data) ||
     !["available", "not_repeating", "unavailable"].includes(String(data.status))
   ) {
-    throw new DailyRepetitionError("uncertain");
+    throw new RepetitionError("uncertain");
   }
-  return data as unknown as DailyRepetitionStatus;
+  return data as unknown as RepetitionStatus;
 }

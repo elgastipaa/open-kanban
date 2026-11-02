@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { DailyRepetitionOperationStore } from "../../src/lib/daily-repetition-state.ts";
+import { RepetitionOperationStore } from "../../src/lib/daily-repetition-state.ts";
 
 const command = (
   taskId,
@@ -21,8 +21,8 @@ const command = (
 });
 
 test("uncertain daily creation keeps the exact operation by task and board actor", () => {
-  const ownerStore = new DailyRepetitionOperationStore("owner", "daily-board");
-  const collaboratorStore = new DailyRepetitionOperationStore(
+  const ownerStore = new RepetitionOperationStore("owner", "daily-board");
+  const collaboratorStore = new RepetitionOperationStore(
     "collaborator",
     "daily-board",
   );
@@ -38,7 +38,7 @@ test("uncertain daily creation keeps the exact operation by task and board actor
 });
 
 test("a later command does not overwrite another task's uncertain result", () => {
-  const operations = new DailyRepetitionOperationStore("owner", "daily-board");
+  const operations = new RepetitionOperationStore("owner", "daily-board");
   const first = command("task-1", "operation-1", "2026-11-05", {
     frequency: "weekly",
     interval: 2,

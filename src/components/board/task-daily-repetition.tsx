@@ -4,20 +4,20 @@ import { IconRepeat } from "@tabler/icons-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
-import type { DailyRepetitionOperationStore } from "@/lib/daily-repetition-state";
+import type { RepetitionOperationStore } from "@/lib/daily-repetition-state";
 import type {
-  DailyRepetitionCreateCommand,
-  DailyRepetitionCreateResult,
-  DailyRepetitionPreview,
-  DailyRepetitionStatus,
+  RepetitionCreateCommand,
+  RepetitionCreateResult,
   RepetitionPattern,
+  RepetitionPreview,
+  RepetitionStatus,
 } from "@/lib/db/daily-repetition";
-import { DailyRepetitionError } from "@/lib/db/daily-repetition";
+import { RepetitionError } from "@/lib/db/daily-repetition";
 import { formatTaskDueDate } from "@/lib/task-date";
 import type { Task } from "@/lib/types";
 import { generateUUID } from "@/lib/utils";
 
-interface TaskDailyRepetitionProps {
+interface TaskRepetitionProps {
   task: Task;
   slug: string;
   boardToday: string;
@@ -25,18 +25,18 @@ interface TaskDailyRepetitionProps {
   isOnline: boolean;
   isDisabled: boolean;
   hasUnsavedChanges: boolean;
-  operations: DailyRepetitionOperationStore;
-  onLoad: (taskId: string) => Promise<DailyRepetitionStatus>;
+  operations: RepetitionOperationStore;
+  onLoad: (taskId: string) => Promise<RepetitionStatus>;
   onPreview: (
     taskId: string,
     startOn: string,
     endOn: string | null,
     occurrenceLimit: number | null,
     pattern: RepetitionPattern,
-  ) => Promise<DailyRepetitionPreview>;
+  ) => Promise<RepetitionPreview>;
   onCreate: (
-    command: DailyRepetitionCreateCommand,
-  ) => Promise<DailyRepetitionCreateResult>;
+    command: RepetitionCreateCommand,
+  ) => Promise<RepetitionCreateResult>;
 }
 
 type FinalMode = "count" | "date" | "none";
@@ -98,7 +98,7 @@ function stateLabel(state: string) {
 }
 
 function confirmationText(
-  preview: DailyRepetitionPreview | null,
+  preview: RepetitionPreview | null,
   pending: {
     changeStart: boolean;
     previousSeriesId: string | null;
@@ -119,7 +119,7 @@ function confirmationText(
   return details.join(" ");
 }
 
-export function TaskDailyRepetition({
+export function TaskRepetition({
   task,
   slug,
   boardToday,
@@ -131,8 +131,8 @@ export function TaskDailyRepetition({
   onLoad,
   onPreview,
   onCreate,
-}: TaskDailyRepetitionProps) {
-  const [status, setStatus] = useState<DailyRepetitionStatus | null>(null);
+}: TaskRepetitionProps) {
+  const [status, setStatus] = useState<RepetitionStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isWorking, setIsWorking] = useState(false);
   const [showSetup, setShowSetup] = useState(false);
@@ -145,7 +145,7 @@ export function TaskDailyRepetition({
   const [finalMode, setFinalMode] = useState<FinalMode>("count");
   const [occurrenceCount, setOccurrenceCount] = useState("3");
   const [endOn, setEndOn] = useState("");
-  const [preview, setPreview] = useState<DailyRepetitionPreview | null>(null);
+  const [preview, setPreview] = useState<RepetitionPreview | null>(null);
   const [notice, setNotice] = useState("");
   const [pendingConfirmation, setPendingConfirmation] = useState<{
     changeStart: boolean;
@@ -153,7 +153,7 @@ export function TaskDailyRepetition({
     startOn: string;
   } | null>(null);
   const [retryCommand, setRetryCommand] =
-    useState<DailyRepetitionCreateCommand | null>(null);
+    useState<RepetitionCreateCommand | null>(null);
   const operationIdRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -295,7 +295,7 @@ export function TaskDailyRepetition({
   function commandFor(
     confirmStartChange: boolean,
     previousSeriesId: string | null,
-  ): DailyRepetitionCreateCommand | null {
+  ): RepetitionCreateCommand | null {
     const final = finalSelection();
     const pattern = selectedPattern();
     if (!final || !pattern) return null;
@@ -314,7 +314,7 @@ export function TaskDailyRepetition({
     };
   }
 
-  async function submitCreate(command: DailyRepetitionCreateCommand) {
+  async function submitCreate(command: RepetitionCreateCommand) {
     setIsWorking(true);
     setNotice("");
     try {
@@ -361,10 +361,7 @@ export function TaskDailyRepetition({
       );
       setStatus(await onLoad(task.id));
     } catch (error) {
-      if (
-        error instanceof DailyRepetitionError &&
-        error.reason === "rejected"
-      ) {
+      if (error instanceof RepetitionError && error.reason === "rejected") {
         setNotice(
           "No se guardó la repetición. Revisa las fechas y vuelve a preparar la vista previa.",
         );
@@ -372,7 +369,7 @@ export function TaskDailyRepetition({
         operations.clear(task.id);
         operationIdRef.current = null;
       } else if (
-        error instanceof DailyRepetitionError &&
+        error instanceof RepetitionError &&
         error.reason === "access_denied"
       ) {
         setNotice(

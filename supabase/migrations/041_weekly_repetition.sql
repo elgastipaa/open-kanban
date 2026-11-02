@@ -41,6 +41,9 @@ BEGIN
   IF v_interval > 2147483647 THEN
     RAISE EXCEPTION 'El intervalo supera el calendario admitido' USING ERRCODE = '22023';
   END IF;
+  IF v_frequency = 'daily' AND v_interval <> 1 THEN
+    RAISE EXCEPTION 'La repetición diaria mantiene un intervalo de un día' USING ERRCODE = '22023';
+  END IF;
 
   v_expected_keys := CASE WHEN v_frequency = 'weekly' THEN 3 ELSE 2 END;
   IF (SELECT pg_catalog.count(*) FROM pg_catalog.jsonb_object_keys(p_pattern))

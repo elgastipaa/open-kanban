@@ -4,7 +4,7 @@
 
 **Base fija:** `db5d3490163cc8f71c577b015c8f6705b57060d9`.
 **Commit de código candidato:** `8044c08c6079ec78a76a13bf736a4dce027b26ba` (`fix: preview description links in task detail (#39)`).
-**Estado:** código final `8044c08c6079ec78a76a13bf736a4dce027b26ba`; reviews Spec/Standards dieron PASS sobre el árbol `91607d24efb2d7e0697449c963076959c82e6784`. La actualización posterior es solo documental y no cambia código. Sigue aislado en `codex/issue-39`, sin integración ni publicación. El issue permanece abierto; se conservaron las aristas `Blocked by #15/#16` y PR #54 sigue en borrador.
+**HEAD final revisado/integrado:** `fb8453a61609ca23cc5c9cbf3b166bd6393dec8f`; reviews Spec/Standards PASS sobre ese HEAD. Se integró por fast-forward desde `codex/issue-39` a `codex/openkanban-1-0`, con base fija `db5d3490163cc8f71c577b015c8f6705b57060d9`; la rama quedó publicada. El issue sigue OPEN/ready-for-human; `Blocked by #15/#16` y PR #54 OPEN/draft se conservan.
 
 ## Alcance implementado
 
@@ -43,7 +43,7 @@ Entorno de desarrollo local Windows/PowerShell, Node `v24.14.1`, pnpm `11.25.0`,
 
 ## Gates pendientes
 
-- Reviews finales Spec y Standards: PASS sobre el código `91607d24efb2d7e0697449c963076959c82e6784`; el commit posterior de evidencia solo registra la vista previa y el resultado de esas revisiones, sin cambios de código.
+- Reviews finales Spec y Standards sobre el mismo HEAD `fb8453a61609ca23cc5c9cbf3b166bd6393dec8f`: PASS, sin hallazgos accionables.
 - Prueba manual en navegador con teclado, clic en tarjeta y enlace, vista móvil y lector de pantalla; QA humana pendiente.
 - No se probó Auth real ni navegación externa desde una sesión real. Esos recorridos no se infieren de los tests sintéticos.
-- No se actualizó ni cerró el issue y no se integró/publicó el commit. Los estados de #15/#16 y PR #54 no se modificaron.
+- GitHub #39 permanece OPEN/ready-for-human: AC1–3 y AC6 marcados; AC4 conserva pruebas manuales de teclado/móvil y AC5 conserva evidencia/aceptación humana. `Blocked by #15/#16` intacto. PR #54 permanece OPEN/draft; no se usó Auth real, datos reales, SQL remoto, `main` ni producción.

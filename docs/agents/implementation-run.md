@@ -363,3 +363,16 @@ Lectura de GitHub tras publicar #23: #24 «Repetir por semanas y días elegidos�
 ## Frontera siguiente LP-0.2 — #25 — 2026-11-01
 
 Lectura de GitHub tras publicar #24: #25 «Repetir por meses, años y ordinales» está OPEN/`ready-for-agent`, sin asignación ni comentarios. Conserva `Blocked by #23`; #23 continúa OPEN/`ready-for-human`, pero su código/evidencia y la extensión semanal #24 están integrados. LP-0.2 permite seguir con calendario/actores sintéticos sobre la base integrada, sin retirar la arista ni cerrar #23/#25 antes de criterios y aceptaciones humanas. #25 amplía meses/años/ordinales; no se modifica #23/#24 ni se declara completo G03/host-cron. La siguiente rama deberá partir del HEAD resultante de este checkpoint documental de integración.
+
+## Entrega integrada y publicada de #25 — 2026-11-01
+
+«Repetir por meses, años y ordinales» quedó integrado por fast-forward y publicado en `codex/openkanban-1-0`. Base/merge-base fija `1e05fec55d019b591383813ed852d77a096ec2e7`; HEAD funcional final revisado `842b5879913a6d37eea76fa81089c4038e0dc091`, rama `codex/issue-25`. La evidencia reproducible es [docs/validation/issue-25.md](../validation/issue-25.md); commit de evidencia/estado humano `e4d0418a473b0dcaee668ff58ed6c8f274fac6fc`; comentario de entrega [issue #25](https://github.com/elgastipaa/open-kanban/issues/25#issuecomment-6566994103).
+
+- Migración 042 agrega patrones por fecha/ordinal mensuales y anuales. Preview/worker conservan 31 y 29-feb como anclas, omiten ordinales inexistentes sin consumir N y mantienen intervalo grande exacto en JSON/PostgreSQL bigint.
+- Verificación: `scripts/test-db.sh` completo (migraciones 001–042) y focal PostgreSQL descartable PASS; `pnpm test:unit` 171/171; Next typegen, `pnpm typecheck`, `pnpm build` Next 16.4.2, Biome dirigido y `git diff --check` PASS. Revisiones Spec y Standards del HEAD final sin hallazgos pendientes.
+- GitHub #25 sigue OPEN/`ready-for-human`, asignado a `elgastipaa`; AC1–3 y AC5 están marcados, AC4 queda abierto por recorrido visual con lector/dispositivo y por verificación externa de host/cron/G03. `Blocked by #23` permanece intacto; no se acepta QA humana ni se cierra #23/#25.
+- PR #54 sigue OPEN/draft, base `main`, título #3–#25 y evidencia de #25. Integración y rama remota coinciden con `e4d0418`. `main` conserva `46c94139bac67aaca1d491b29afc3bc999fc288f`; no OAuth/bypass, datos reales, SQL remoto, deploy ni cambios de producción. Se preservan `docs/VALIDATION.md` y `.scratch/` locales.
+
+## Frontera siguiente LP-0.2 — #26 — 2026-11-01
+
+Lectura de GitHub tras publicar #25: #26 «Anticipar y editar próximas repeticiones» está OPEN/`ready-for-agent`, sin asignación. Conserva `Blocked by #24` y `#25`; ambos issues continúan OPEN/`ready-for-human`, pero sus entregas/código/evidencia están integrados. LP-0.2 permite avanzar con calendario, tareas y actores sintéticos en entornos locales aislados, sin retirar las aristas ni cerrar/aceptar QA de #24–#26. Implementar la edición de plantilla exclusivamente sobre ocurrencias futuras, con previsualización, preservación de actual/pasado/exclusiones, conflictos y revisión de jobs obsoletos según el ticket. La siguiente rama debe partir del HEAD resultante de este checkpoint documental.

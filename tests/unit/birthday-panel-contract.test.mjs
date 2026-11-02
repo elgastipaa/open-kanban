@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import {
+  createBoardLabelDraft,
+  isBoardLabelDraftDirty,
+  reconcileBoardLabelDrafts,
+  resolveBoardLabelDraftConflict,
+} from "../../src/lib/board-label-edit-state.ts";
+import { reconcileRestoreSelection } from "../../src/lib/board-label-restore-state.ts";
 
 const panelSource = await readFile(
   new URL("../../src/components/birthdays/birthday-panel.tsx", import.meta.url),
@@ -78,6 +85,141 @@ test("label restore explains tombstone capacity and the explicit recovery path",
     labelsDialogSource,
     /Recupera primero desde Series las tareas o cumpleaños en papelera[\s\S]*?desmarca cualquier elemento que ya tenga 10 etiquetas activas/,
     "owners must be told to recover the item and explicitly omit only the over-limit association",
+  );
+});
+
+test("a refreshed label restore preview preserves prior choices and leaves new relations unselected", () => {
+  assert.deepEqual(
+    reconcileRestoreSelection(
+      ["kept-task", "kept-birthday"],
+      ["kept-task", "new-over-limit-task", "kept-birthday", "new-task"],
+      true,
+    ),
+    ["kept-task", "kept-birthday"],
+  );
+  assert.deepEqual(
+    reconcileRestoreSelection([], ["first-task", "first-birthday"], false),
+    ["first-task", "first-birthday"],
+    "the initial preview keeps the existing select-all behavior",
+  );
+
+  assert.match(
+    labelsDialogSource,
+    /setSelectedTasks\(\(current\) =>\s*reconcileRestoreSelection\([\s\S]*?preserveSelections[\s\S]*?\)\)/,
+    "a refreshed task preview must reapply only IDs selected before refresh",
+  );
+  assert.match(
+    labelsDialogSource,
+    /setSelectedBirthdays\(\(current\) =>\s*reconcileRestoreSelection\([\s\S]*?preserveSelections[\s\S]*?\)\)/,
+    "a refreshed birthday preview must reapply only IDs selected before refresh",
+  );
+});
+
+test("stale label restore requires review against the fresh version before another confirmation", () => {
+  const restoreFunction = labelsDialogSource.match(
+    /async function confirmRestore\(\) \{([\s\S]*?)\n {2}\}/,
+  );
+  assert.ok(restoreFunction);
+  assert.match(
+    restoreFunction[1],
+    /expectedVersion:\s*preview\.label(?:\?\.|\.)version/,
+    "restore must use the version from the latest preview",
+  );
+  assert.doesNotMatch(
+    restoreFunction[1],
+    /expectedVersion:\s*restoreTarget\.version/,
+    "the deleted-label list version is stale after a preview conflict",
+  );
+  assert.match(
+    restoreFunction[1],
+    /const staleVersion = result\.reason === "stale_version"[\s\S]*?loadPreview\(restoreTarget, restoreName,[\s\S]*?requireReview:\s*staleVersion \|\| restoreNeedsReview/,
+    "a conflict loads fresh state and blocks confirmation until review",
+  );
+  assert.match(
+    labelsDialogSource,
+    /restoreNeedsReview[\s\S]*?Versión actual:[\s\S]*?Tu propuesta:[\s\S]*?Revisar estado actual y conservar mi propuesta/,
+    "the owner can compare the current label with the proposal and explicitly review",
+  );
+  assert.match(
+    labelsDialogSource,
+    /!restoreNeedsReview/,
+    "another restore must remain disabled until the explicit review action",
+  );
+  assert.match(
+    labelsDialogSource,
+    /loadPreview\(restoreTarget, restoreName, \{\s*preserveSelections:\s*true,\s*requireReview:\s*restoreNeedsReview/,
+    "updating the preview must not bypass the explicit review action",
+  );
+});
+
+test("catalog refresh keeps drafts and offers explicit current-version or keep-draft resolution", () => {
+  const firstLabel = {
+    id: "label-one",
+    board_id: "board-one",
+    name: "Versión actual uno",
+    color: "green",
+    version: 4,
+  };
+  const secondLabel = {
+    id: "label-two",
+    board_id: "board-one",
+    name: "Versión actual dos",
+    color: "purple",
+    version: 7,
+  };
+  const firstDraft = {
+    name: "Mi propuesta uno",
+    color: "red",
+    baseName: "Versión inicial uno",
+    baseColor: "blue",
+    baseVersion: 2,
+  };
+  const secondDraft = {
+    name: "Mi propuesta dos",
+    color: "orange",
+    baseName: "Versión inicial dos",
+    baseColor: "yellow",
+    baseVersion: 5,
+  };
+
+  assert.equal(isBoardLabelDraftDirty(firstDraft), true);
+  assert.deepEqual(
+    reconcileBoardLabelDrafts([firstLabel, secondLabel], {
+      "label-one": firstDraft,
+      "label-two": secondDraft,
+    }),
+    { "label-one": firstDraft, "label-two": secondDraft },
+    "refresh must not erase this label's or another label's local edits",
+  );
+
+  assert.deepEqual(
+    resolveBoardLabelDraftConflict(firstDraft, firstLabel, "use_current"),
+    createBoardLabelDraft(firstLabel),
+    "discarding must explicitly replace the draft with the reviewed current version",
+  );
+  assert.deepEqual(
+    resolveBoardLabelDraftConflict(firstDraft, firstLabel, "keep_draft"),
+    {
+      ...firstDraft,
+      baseName: firstLabel.name,
+      baseColor: firstLabel.color,
+      baseVersion: firstLabel.version,
+    },
+    "reviewing my changes must keep the proposal over the current version baseline",
+  );
+
+  assert.match(
+    labelsDialogSource,
+    /reconcileBoardLabelDrafts\(labels, current\)/,
+  );
+  assert.match(labelsDialogSource, /expectedVersion:\s*draft\.baseVersion/);
+  assert.match(
+    labelsDialogSource,
+    /result\.reason === "stale_version"[\s\S]*?refreshCatalog\(\)[\s\S]*?setLabelConflicts/,
+  );
+  assert.match(
+    labelsDialogSource,
+    /Tu edición:[\s\S]*?Versión actual:[\s\S]*?Usar versión actual[\s\S]*?Revisar mis cambios/,
   );
 });
 

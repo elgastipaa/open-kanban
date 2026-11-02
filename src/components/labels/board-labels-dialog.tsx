@@ -6,6 +6,14 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Modal } from "@/components/ui/modal";
 import {
+  type BoardLabelDraft,
+  createBoardLabelDraft,
+  isBoardLabelDraftDirty,
+  reconcileBoardLabelDrafts,
+  resolveBoardLabelDraftConflict,
+} from "@/lib/board-label-edit-state";
+import { reconcileRestoreSelection } from "@/lib/board-label-restore-state";
+import {
   type BoardLabelRestorePreview,
   createBoardLabel,
   type DeletedBoardLabel,
@@ -78,8 +86,9 @@ export function BoardLabelsDialog({
 }) {
   const supabase = useMemo(() => createClient(), []);
   const [trash, setTrash] = useState<DeletedBoardLabel[]>([]);
-  const [drafts, setDrafts] = useState<
-    Record<string, { name: string; color: BoardLabelColor }>
+  const [drafts, setDrafts] = useState<Record<string, BoardLabelDraft>>({});
+  const [labelConflicts, setLabelConflicts] = useState<
+    Record<string, { current: BoardLabel; proposal: BoardLabelDraft }>
   >({});
   const [newName, setNewName] = useState("");
   const [newColor, setNewColor] = useState<BoardLabelColor>("blue");
@@ -88,6 +97,7 @@ export function BoardLabelsDialog({
     null,
   );
   const [preview, setPreview] = useState<BoardLabelRestorePreview | null>(null);
+  const [restoreNeedsReview, setRestoreNeedsReview] = useState(false);
   const [restoreName, setRestoreName] = useState("");
   const [selectedTasks, setSelectedTasks] = useState<string[]>([]);
   const [selectedBirthdays, setSelectedBirthdays] = useState<string[]>([]);
@@ -98,14 +108,7 @@ export function BoardLabelsDialog({
   const errorId = useId();
 
   useEffect(() => {
-    setDrafts(
-      Object.fromEntries(
-        labels.map((label) => [
-          label.id,
-          { name: label.name, color: label.color },
-        ]),
-      ),
-    );
+    setDrafts((current) => reconcileBoardLabelDrafts(labels, current));
   }, [labels]);
 
   useEffect(() => {
@@ -139,10 +142,19 @@ export function BoardLabelsDialog({
   async function refreshCatalog() {
     const active = await listBoardLabels(supabase, slug);
     onLabelsChange(active);
+    setLabelConflicts((current) =>
+      Object.fromEntries(
+        Object.entries(current).flatMap(([labelId, conflict]) => {
+          const latest = active.find((label) => label.id === labelId);
+          return latest ? [[labelId, { ...conflict, current: latest }]] : [];
+        }),
+      ),
+    );
     setTrash(
       role === "owner" ? await listDeletedBoardLabels(supabase, slug) : [],
     );
     await onChanged();
+    return active;
   }
 
   async function createLabel(event: FormEvent<HTMLFormElement>) {
@@ -173,7 +185,7 @@ export function BoardLabelsDialog({
 
   async function saveLabel(label: BoardLabel) {
     const draft = drafts[label.id];
-    if (!draft || loading) return;
+    if (!draft || labelConflicts[label.id] || loading) return;
     setLoading(true);
     setError(null);
     setNotice(null);
@@ -181,17 +193,42 @@ export function BoardLabelsDialog({
       const result = await updateBoardLabel(supabase, {
         slug,
         labelId: label.id,
-        expectedVersion: label.version,
+        expectedVersion: draft.baseVersion,
         name: draft.name,
         color: draft.color,
       });
       if (result.status !== "confirmed") {
-        setError(resultMessage(result.status, result.reason));
-        await refreshCatalog();
+        if (result.reason === "stale_version") {
+          setError(null);
+          const active = await refreshCatalog();
+          const current = active.find((item) => item.id === label.id);
+          if (current) {
+            setLabelConflicts((existing) => ({
+              ...existing,
+              [label.id]: { current, proposal: draft },
+            }));
+          } else {
+            setError(resultMessage(result.status, result.reason));
+          }
+        } else {
+          setError(resultMessage(result.status, result.reason));
+          await refreshCatalog();
+        }
         return;
       }
       setNotice("Se guardaron el nombre y el color.");
-      await refreshCatalog();
+      const active = await refreshCatalog();
+      const updated = active.find((item) => item.id === label.id);
+      if (updated) {
+        setDrafts((current) => ({
+          ...current,
+          [label.id]: createBoardLabelDraft(updated),
+        }));
+      }
+      setLabelConflicts((current) => {
+        const { [label.id]: _removed, ...remaining } = current;
+        return remaining;
+      });
     } catch {
       setError(
         "No se pudo guardar la etiqueta. Conservamos los cambios escritos.",
@@ -199,6 +236,34 @@ export function BoardLabelsDialog({
     } finally {
       setLoading(false);
     }
+  }
+
+  function resolveLabelVersionConflict(
+    labelId: string,
+    resolution: "use_current" | "keep_draft",
+  ) {
+    const conflict = labelConflicts[labelId];
+    if (!conflict) return;
+    const current = conflict.current;
+    setDrafts((draftMap) => {
+      return {
+        ...draftMap,
+        [labelId]: resolveBoardLabelDraftConflict(
+          conflict.proposal,
+          current,
+          resolution,
+        ),
+      };
+    });
+    setLabelConflicts((existing) => {
+      const { [labelId]: _removed, ...remaining } = existing;
+      return remaining;
+    });
+    setNotice(
+      resolution === "use_current"
+        ? "Descartaste tu edición y aplicaste la versión actual de la etiqueta."
+        : "Conservamos tu edición sobre la versión actual. Revisala y guardala cuando quieras.",
+    );
   }
 
   async function confirmDelete() {
@@ -229,7 +294,14 @@ export function BoardLabelsDialog({
     }
   }
 
-  async function loadPreview(label: DeletedBoardLabel, name = restoreName) {
+  async function loadPreview(
+    label: DeletedBoardLabel,
+    name = restoreName,
+    {
+      preserveSelections = false,
+      requireReview = false,
+    }: { preserveSelections?: boolean; requireReview?: boolean } = {},
+  ): Promise<boolean> {
     setLoading(true);
     setError(null);
     try {
@@ -238,24 +310,54 @@ export function BoardLabelsDialog({
         labelId: label.id,
         name,
       });
-      setRestoreTarget(label);
+      setRestoreTarget(next.label ?? label);
       setRestoreName(name);
       setPreview(next);
+      setRestoreNeedsReview(requireReview);
       if (next.status === "preview") {
-        setSelectedTasks(next.associated_tasks.map((item) => item.id));
-        setSelectedBirthdays(next.associated_birthdays.map((item) => item.id));
+        setSelectedTasks((current) =>
+          reconcileRestoreSelection(
+            current,
+            next.associated_tasks.map((item) => item.id),
+            preserveSelections,
+          ),
+        );
+        setSelectedBirthdays((current) =>
+          reconcileRestoreSelection(
+            current,
+            next.associated_birthdays.map((item) => item.id),
+            preserveSelections,
+          ),
+        );
       } else if (next.status === "expired") {
         setError(resultMessage("expired"));
       }
+      return next.status === "preview" && next.label !== undefined;
     } catch {
       setError("No se pudo preparar la vista previa de recuperación.");
+      return false;
     } finally {
       setLoading(false);
     }
   }
 
+  async function reviewRestoreVersion() {
+    if (!restoreTarget || loading) return;
+    const refreshed = await loadPreview(restoreTarget, restoreName, {
+      preserveSelections: true,
+      requireReview: true,
+    });
+    if (refreshed) {
+      setRestoreNeedsReview(false);
+      setNotice(
+        "Revisaste la versión actual. Tu propuesta sigue seleccionada.",
+      );
+    }
+  }
+
   async function confirmRestore() {
-    if (!restoreTarget || !preview || !canConfirmRestore || loading) return;
+    if (!restoreTarget || !preview?.label || !canConfirmRestore || loading)
+      return;
     setLoading(true);
     setError(null);
     setNotice(null);
@@ -263,18 +365,25 @@ export function BoardLabelsDialog({
       const result = await restoreBoardLabel(supabase, {
         slug,
         labelId: restoreTarget.id,
-        expectedVersion: restoreTarget.version,
+        expectedVersion: preview.label.version,
         name: restoreName,
         taskIds: selectedTasks,
         birthdayIds: selectedBirthdays,
       });
       if (result.status !== "confirmed") {
-        setError(resultMessage(result.status, result.reason));
-        await loadPreview(restoreTarget, restoreName);
+        const staleVersion = result.reason === "stale_version";
+        setError(
+          staleVersion ? null : resultMessage(result.status, result.reason),
+        );
+        await loadPreview(restoreTarget, restoreName, {
+          preserveSelections: true,
+          requireReview: staleVersion || restoreNeedsReview,
+        });
         return;
       }
       setRestoreTarget(null);
       setPreview(null);
+      setRestoreNeedsReview(false);
       setNotice("Se recuperó la etiqueta y las relaciones elegidas.");
       await refreshCatalog();
     } catch {
@@ -297,7 +406,9 @@ export function BoardLabelsDialog({
     );
   const canConfirmRestore =
     preview?.status === "preview" &&
+    preview.label !== undefined &&
     preview.can_restore === true &&
+    !restoreNeedsReview &&
     !hasSelectedOverflow;
   const blockedByTombstoneCapacity = preview?.reasons?.some(
     (reason) =>
@@ -397,16 +508,13 @@ export function BoardLabelsDialog({
           ) : (
             <ul className="space-y-2" aria-label="Etiquetas activas">
               {labels.map((label) => {
-                const draft = drafts[label.id] ?? {
-                  name: label.name,
-                  color: label.color,
-                };
-                const changed =
-                  draft.name !== label.name || draft.color !== label.color;
+                const draft = drafts[label.id] ?? createBoardLabelDraft(label);
+                const changed = isBoardLabelDraftDirty(draft);
+                const conflict = labelConflicts[label.id];
                 return (
                   <li
                     key={label.id}
-                    className="flex flex-col gap-2 rounded-lg border border-border bg-surface-base p-3 sm:flex-row sm:items-center"
+                    className="flex flex-col gap-2 rounded-lg border border-border bg-surface-base p-3 sm:flex-row sm:flex-wrap sm:items-center"
                   >
                     <label
                       className="sr-only"
@@ -420,10 +528,14 @@ export function BoardLabelsDialog({
                       onChange={(event) =>
                         setDrafts((current) => ({
                           ...current,
-                          [label.id]: { ...draft, name: event.target.value },
+                          [label.id]: {
+                            ...draft,
+                            name: event.target.value,
+                          },
                         }))
                       }
                       maxLength={40}
+                      disabled={loading || Boolean(conflict)}
                       className="h-10 min-w-0 flex-1 rounded-md border border-border bg-surface-raised px-3 text-sm text-text-primary"
                     />
                     <label
@@ -445,6 +557,7 @@ export function BoardLabelsDialog({
                         }))
                       }
                       className="h-10 rounded-md border border-border bg-surface-raised px-2 text-sm text-text-primary"
+                      disabled={loading || Boolean(conflict)}
                     >
                       {colors.map((color) => (
                         <option key={color.value} value={color.value}>
@@ -456,7 +569,12 @@ export function BoardLabelsDialog({
                       <Button
                         size="sm"
                         onClick={() => void saveLabel(label)}
-                        disabled={loading || !changed || !draft.name.trim()}
+                        disabled={
+                          loading ||
+                          Boolean(conflict) ||
+                          !changed ||
+                          !draft.name.trim()
+                        }
                       >
                         Guardar
                       </Button>
@@ -473,6 +591,52 @@ export function BoardLabelsDialog({
                         </Button>
                       ) : null}
                     </div>
+                    {conflict ? (
+                      <section
+                        className="w-full basis-full space-y-2 rounded-md border border-priority-medium/40 p-3 text-sm"
+                        aria-label={`Conflicto de versión de ${label.name}`}
+                      >
+                        <p>
+                          Tu edición: “{conflict.proposal.name}”, color{" "}
+                          {colors.find(
+                            (color) => color.value === conflict.proposal.color,
+                          )?.label ?? conflict.proposal.color}
+                          .
+                        </p>
+                        <p>
+                          Versión actual: “{conflict.current.name}”, color{" "}
+                          {colors.find(
+                            (color) => color.value === conflict.current.color,
+                          )?.label ?? conflict.current.color}
+                          , versión {conflict.current.version}.
+                        </p>
+                        <div className="flex flex-wrap justify-end gap-2">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() =>
+                              resolveLabelVersionConflict(
+                                label.id,
+                                "use_current",
+                              )
+                            }
+                          >
+                            Usar versión actual
+                          </Button>
+                          <Button
+                            size="sm"
+                            onClick={() =>
+                              resolveLabelVersionConflict(
+                                label.id,
+                                "keep_draft",
+                              )
+                            }
+                          >
+                            Revisar mis cambios
+                          </Button>
+                        </div>
+                      </section>
+                    ) : null}
                   </li>
                 );
               })}
@@ -544,7 +708,10 @@ export function BoardLabelsDialog({
                     <Button
                       size="sm"
                       onClick={() =>
-                        void loadPreview(restoreTarget, restoreName)
+                        void loadPreview(restoreTarget, restoreName, {
+                          preserveSelections: true,
+                          requireReview: restoreNeedsReview,
+                        })
                       }
                       disabled={loading || !restoreName.trim()}
                     >
@@ -564,6 +731,28 @@ export function BoardLabelsDialog({
                     <p className="text-priority-urgent text-sm" role="alert">
                       Venció el plazo de recuperación de esta etiqueta.
                     </p>
+                  ) : null}
+                  {restoreNeedsReview && preview.label ? (
+                    <section
+                      className="space-y-2 rounded-md border border-priority-medium/40 p-3 text-sm"
+                      aria-label="Revisión de versión de etiqueta"
+                    >
+                      <p>
+                        Versión actual: “{preview.label.name}”, color{" "}
+                        {colors.find(
+                          (color) => color.value === preview.label?.color,
+                        )?.label ?? preview.label.color}
+                        , versión {preview.label.version}.
+                      </p>
+                      <p>Tu propuesta: recuperar como “{restoreName}”.</p>
+                      <Button
+                        size="sm"
+                        onClick={() => void reviewRestoreVersion()}
+                        disabled={loading}
+                      >
+                        Revisar estado actual y conservar mi propuesta
+                      </Button>
+                    </section>
                   ) : null}
                   <RestoreAssociationChoices
                     title="Tareas que tenían esta etiqueta"

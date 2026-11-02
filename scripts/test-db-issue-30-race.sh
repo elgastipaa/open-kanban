@@ -14,7 +14,7 @@ mkdir -p -- "$test_dir"
 psql=(env -u PGHOSTADDR -u PGSERVICE -u PGSERVICEFILE -u PGOPTIONS -u PGPASSWORD -u PGPASSFILE
   "$psql_bin" -X -h "$socket_dir" -p "$port" -U postgres -d postgres -v ON_ERROR_STOP=1)
 
-board_ref=$(${psql[@]} -qAtF '|' <<'SQL'
+board_ref=$("${psql[@]}" -qAtF '|' <<'SQL'
 BEGIN;
 SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claim.sub', '43000000-0000-4000-8000-000000000002', true) \gset
@@ -32,7 +32,7 @@ if [[ -z "$board_ref" ]]; then
 fi
 IFS='|' read -r board_id board_slug <<< "$board_ref"
 
-created_count=$(${psql[@]} -qAt -v board_slug="$board_slug" <<'SQL'
+created_count=$("${psql[@]}" -qAt -v board_slug="$board_slug" <<'SQL'
 BEGIN;
 SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claim.sub', '43000000-0000-4000-8000-000000000002', true) \gset
@@ -72,7 +72,7 @@ owner_pid=$!
 
 owner_holds_board=false
 for _ in $(seq 1 120); do
-  owner_state=$(${psql[@]} -At -c "SELECT state FROM pg_stat_activity
+  owner_state=$("${psql[@]}" -At -c "SELECT state FROM pg_stat_activity
     WHERE application_name = 'openkanban_issue30_slot_owner'
       AND state = 'active' AND query LIKE '%pg_sleep(5)%'")
   if [[ "$owner_state" == active ]]; then
@@ -101,7 +101,7 @@ collaborator_pid=$!
 
 collaborator_waiting=false
 for _ in $(seq 1 120); do
-  wait_count=$(${psql[@]} -At -c "SELECT count(*) FROM pg_stat_activity
+  wait_count=$("${psql[@]}" -At -c "SELECT count(*) FROM pg_stat_activity
     WHERE application_name = 'openkanban_issue30_slot_collaborator'
       AND wait_event_type = 'Lock'")
   if [[ "$wait_count" == 1 ]]; then
@@ -134,13 +134,13 @@ if ! grep -Fxq 'confirmed' "$owner_log" || ! grep -Fxq 'conflict' "$collaborator
   exit 1
 fi
 
-active_count=$(${psql[@]} -qAt -v board_id="$board_id" <<'SQL'
+active_count=$("${psql[@]}" -qAt -v board_id="$board_id" <<'SQL'
 SELECT count(*)
 FROM public.board_labels
 WHERE board_id = :'board_id'::uuid AND deleted_at IS NULL;
 SQL
 )
-race_label_count=$(${psql[@]} -qAt -v board_id="$board_id" <<'SQL'
+race_label_count=$("${psql[@]}" -qAt -v board_id="$board_id" <<'SQL'
 SELECT count(*)
 FROM public.board_labels
 WHERE board_id = :'board_id'::uuid AND deleted_at IS NULL
@@ -154,7 +154,7 @@ fi
 
 echo 'PASS: concurrent owner and collaborator creates serialize on the final board label slot.'
 
-label_restore_ref=$(${psql[@]} -qAtF '|' -v board_id="$board_id" -v board_slug="$board_slug" <<'SQL'
+label_restore_ref=$("${psql[@]}" -qAtF '|' -v board_id="$board_id" -v board_slug="$board_slug" <<'SQL'
 BEGIN;
 SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claim.sub', '43000000-0000-4000-8000-000000000002', true) \gset
@@ -222,7 +222,7 @@ purge_pid=$!
 
 purger_holding_label=false
 for _ in $(seq 1 120); do
-  purge_state=$(${psql[@]} -At -c "SELECT state FROM pg_stat_activity
+  purge_state=$("${psql[@]}" -At -c "SELECT state FROM pg_stat_activity
     WHERE application_name = 'openkanban_issue30_label_purge'
       AND state = 'active' AND query LIKE '%pg_sleep(5)%'")
   if [[ "$purge_state" == active ]]; then
@@ -254,7 +254,7 @@ restore_pid=$!
 
 restore_waiting=false
 for _ in $(seq 1 120); do
-  wait_count=$(${psql[@]} -At -c "SELECT count(*) FROM pg_stat_activity
+  wait_count=$("${psql[@]}" -At -c "SELECT count(*) FROM pg_stat_activity
     WHERE application_name = 'openkanban_issue30_task_restore'
       AND wait_event_type = 'Lock'")
   if [[ "$wait_count" == 1 ]]; then
@@ -295,7 +295,7 @@ if ! grep -Fxq 'confirmed' "$restore_log"; then
   exit 1
 fi
 
-remaining_assignments=$(${psql[@]} -qAt \
+remaining_assignments=$("${psql[@]}" -qAt \
   -v task_id="$restore_task_id" -v purge_label_id="$purge_label_id" \
   -v keep_label_id="$keep_label_id" <<'SQL'
 SELECT

@@ -10,6 +10,7 @@ import type {
   DailyRepetitionCreateResult,
   DailyRepetitionPreview,
   DailyRepetitionStatus,
+  RepetitionPattern,
 } from "@/lib/db/daily-repetition";
 import { DailyRepetitionError } from "@/lib/db/daily-repetition";
 import { formatTaskDueDate } from "@/lib/task-date";
@@ -31,6 +32,7 @@ interface TaskDailyRepetitionProps {
     startOn: string,
     endOn: string | null,
     occurrenceLimit: number | null,
+    pattern: RepetitionPattern,
   ) => Promise<DailyRepetitionPreview>;
   onCreate: (
     command: DailyRepetitionCreateCommand,
@@ -38,6 +40,39 @@ interface TaskDailyRepetitionProps {
 }
 
 type FinalMode = "count" | "date" | "none";
+type RepetitionFrequency = RepetitionPattern["frequency"];
+
+const WEEKDAYS = [
+  { value: 1, label: "lunes" },
+  { value: 2, label: "martes" },
+  { value: 3, label: "miércoles" },
+  { value: 4, label: "jueves" },
+  { value: 5, label: "viernes" },
+  { value: 6, label: "sábado" },
+  { value: 7, label: "domingo" },
+] as const;
+
+function isoWeekday(date: string): number {
+  const [year, month, day] = date.split("-").map(Number);
+  const utcDate = new Date(0);
+  utcDate.setUTCFullYear(year, month - 1, day);
+  return utcDate.getUTCDay() || 7;
+}
+
+function patternLabel(pattern: RepetitionPattern | undefined): string | null {
+  if (!pattern) return null;
+  if (pattern.frequency === "daily") {
+    return pattern.interval === 1
+      ? "Cada día"
+      : `Cada ${pattern.interval} días`;
+  }
+  const days = pattern.weekdays
+    .map((value) => WEEKDAYS.find((day) => day.value === value))
+    .filter((day) => day !== undefined)
+    .map((day) => day.label)
+    .join(", ");
+  return `Cada ${pattern.interval === 1 ? "semana" : `${pattern.interval} semanas`} · ${days}`;
+}
 
 function stateLabel(state: string) {
   switch (state) {
@@ -102,6 +137,11 @@ export function TaskDailyRepetition({
   const [isWorking, setIsWorking] = useState(false);
   const [showSetup, setShowSetup] = useState(false);
   const [startOn, setStartOn] = useState(task.due_on ?? boardToday);
+  const [frequency, setFrequency] = useState<RepetitionFrequency>("daily");
+  const [interval, setInterval] = useState("1");
+  const [weekdays, setWeekdays] = useState<number[]>(() => [
+    isoWeekday(task.due_on ?? boardToday),
+  ]);
   const [finalMode, setFinalMode] = useState<FinalMode>("count");
   const [occurrenceCount, setOccurrenceCount] = useState("3");
   const [endOn, setEndOn] = useState("");
@@ -119,9 +159,17 @@ export function TaskDailyRepetition({
   useEffect(() => {
     let active = true;
     const pending = operations.get(task.id);
+    const initialStartOn = pending?.start_on ?? task.due_on ?? boardToday;
     setIsLoading(true);
     setShowSetup(pending !== null);
-    setStartOn(pending?.start_on ?? task.due_on ?? boardToday);
+    setStartOn(initialStartOn);
+    setFrequency(pending?.pattern.frequency ?? "daily");
+    setInterval(String(pending?.pattern.interval ?? 1));
+    setWeekdays(
+      pending?.pattern.frequency === "weekly"
+        ? [...pending.pattern.weekdays]
+        : [isoWeekday(initialStartOn)],
+    );
     setFinalMode("count");
     setOccurrenceCount(String(pending?.occurrence_limit ?? 3));
     setEndOn(pending?.end_on ?? "");
@@ -177,8 +225,41 @@ export function TaskDailyRepetition({
     return { endOn: null, occurrenceLimit: null };
   };
 
+  function selectedPattern(): RepetitionPattern | null {
+    const parsedInterval = Number(interval);
+    if (
+      !Number.isSafeInteger(parsedInterval) ||
+      parsedInterval < 1 ||
+      parsedInterval > 2147483647
+    ) {
+      return null;
+    }
+    if (frequency === "weekly") {
+      if (weekdays.length === 0) return null;
+      return {
+        frequency,
+        interval: parsedInterval,
+        weekdays: [...weekdays].sort((left, right) => left - right),
+      };
+    }
+    return { frequency, interval: parsedInterval };
+  }
+
   async function loadPreview() {
-    if (!isOnline || isDisabled || hasUnsavedChanges || !startOn) return;
+    if (!isOnline || isDisabled || hasUnsavedChanges) return;
+    if (!startOn) {
+      setNotice("Elige una primera fecha para preparar la repetición.");
+      return;
+    }
+    const pattern = selectedPattern();
+    if (!pattern) {
+      setNotice(
+        frequency === "weekly" && weekdays.length === 0
+          ? "Elige al menos un día de la semana."
+          : "El intervalo debe ser un número entero positivo válido.",
+      );
+      return;
+    }
     const final = finalSelection();
     if (!final) {
       setNotice(
@@ -195,6 +276,7 @@ export function TaskDailyRepetition({
         startOn,
         final.endOn,
         final.occurrenceLimit,
+        pattern,
       );
       if (nextPreview.status !== "available") {
         setNotice(
@@ -217,7 +299,8 @@ export function TaskDailyRepetition({
     previousSeriesId: string | null,
   ): DailyRepetitionCreateCommand | null {
     const final = finalSelection();
-    if (!final) return null;
+    const pattern = selectedPattern();
+    if (!final || !pattern) return null;
     operationIdRef.current ??= generateUUID();
     return {
       operation_id: operationIdRef.current,
@@ -226,6 +309,7 @@ export function TaskDailyRepetition({
       start_on: startOn,
       end_on: final.endOn,
       occurrence_limit: final.occurrenceLimit,
+      pattern,
       expected_due_on_version: task.field_versions.due_on,
       confirm_start_change: confirmStartChange,
       previous_series_id: previousSeriesId,
@@ -244,7 +328,7 @@ export function TaskDailyRepetition({
         setPendingConfirmation(null);
         setPreview(null);
         setShowSetup(false);
-        setNotice("La repetición diaria quedó guardada.");
+        setNotice("La repetición quedó guardada.");
         setStatus(await onLoad(task.id));
         return;
       }
@@ -352,13 +436,13 @@ export function TaskDailyRepetition({
   return (
     <section
       className="border-border border-t pt-3 sm:col-span-2"
-      aria-labelledby="task-daily-repetition-heading"
+      aria-labelledby="task-repetition-heading"
     >
       <h3
-        id="task-daily-repetition-heading"
+        id="task-repetition-heading"
         className="mb-2 flex items-center gap-2 font-semibold text-sm text-text-primary"
       >
-        <IconRepeat size={16} aria-hidden="true" /> Repetición diaria
+        <IconRepeat size={16} aria-hidden="true" /> Repetición
       </h3>
       {isLoading ? (
         <p className="text-text-muted text-xs" aria-live="polite">
@@ -367,7 +451,7 @@ export function TaskDailyRepetition({
       ) : activeSeries && status?.status === "available" ? (
         <div className="space-y-3 text-sm">
           <p className="text-text-secondary">
-            Serie activa · próxima ocurrencia:{" "}
+            {patternLabel(status.pattern) ?? "Serie activa"} · próxima fecha:{" "}
             {formatTaskDueDate(status.next_due_on ?? null) ??
               status.next_due_on}{" "}
             · zona del tablero: {boardTimeZone}.
@@ -437,7 +521,7 @@ export function TaskDailyRepetition({
                 hasUnsavedChanges
               }
             >
-              Repetir diariamente
+              Programar repetición
             </Button>
           ) : (
             <div className="space-y-4 rounded-md border border-border p-3">
@@ -484,6 +568,103 @@ export function TaskDailyRepetition({
                   </select>
                 </label>
               </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label
+                  className="flex flex-col gap-1.5 font-semibold text-text-muted text-xs"
+                  htmlFor="daily-repetition-frequency"
+                >
+                  Frecuencia
+                  <select
+                    id="daily-repetition-frequency"
+                    value={frequency}
+                    disabled={isWorking || Boolean(retryCommand)}
+                    onChange={(event) => {
+                      setFrequency(event.target.value as RepetitionFrequency);
+                      setPreview(null);
+                      setNotice("");
+                    }}
+                    className="h-10 rounded-md border border-border bg-surface-base px-3 text-sm text-text-primary outline-none focus:border-accent disabled:opacity-60"
+                  >
+                    <option value="daily">Diaria</option>
+                    <option value="weekly">Semanal</option>
+                  </select>
+                </label>
+                <label
+                  className="flex flex-col gap-1.5 font-semibold text-text-muted text-xs"
+                  htmlFor="daily-repetition-interval"
+                >
+                  Repetir cada · {frequency === "weekly" ? "semanas" : "días"}
+                  <input
+                    id="daily-repetition-interval"
+                    type="number"
+                    min={1}
+                    max={2147483647}
+                    step={1}
+                    value={interval}
+                    disabled={isWorking || Boolean(retryCommand)}
+                    onChange={(event) => {
+                      setInterval(event.target.value);
+                      setPreview(null);
+                      setNotice("");
+                    }}
+                    className="h-10 rounded-md border border-border bg-transparent px-3 text-sm text-text-primary outline-none focus:border-accent disabled:opacity-60"
+                  />
+                </label>
+              </div>
+              {frequency === "weekly" ? (
+                <fieldset
+                  className="space-y-2 rounded-md border border-border p-3"
+                  disabled={isWorking || Boolean(retryCommand)}
+                >
+                  <legend className="px-1 font-semibold text-text-muted text-xs">
+                    Días de la semana · de lunes a domingo
+                  </legend>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    {WEEKDAYS.map((day) => (
+                      <label
+                        key={day.value}
+                        className="flex min-h-9 items-center gap-2 rounded-md px-2 text-sm text-text-primary hover:bg-surface-base"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={weekdays.includes(day.value)}
+                          onChange={(event) => {
+                            setWeekdays((current) =>
+                              event.target.checked
+                                ? [...current, day.value].sort(
+                                    (left, right) => left - right,
+                                  )
+                                : current.filter(
+                                    (value) => value !== day.value,
+                                  ),
+                            );
+                            setPreview(null);
+                            setNotice("");
+                          }}
+                          className="size-4 accent-accent"
+                        />
+                        {day.label}
+                      </label>
+                    ))}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setWeekdays([1, 2, 3, 4, 5]);
+                        setPreview(null);
+                        setNotice("");
+                      }}
+                      className="min-h-9 rounded-md border border-border px-3 font-semibold text-text-secondary text-xs hover:bg-surface-base focus-visible:outline-2 focus-visible:outline-accent"
+                    >
+                      Laborables (lunes a viernes)
+                    </button>
+                    <p className="text-text-muted text-xs">
+                      Laborables no excluye feriados.
+                    </p>
+                  </div>
+                </fieldset>
+              ) : null}
               {finalMode === "count" ? (
                 <label
                   className="flex max-w-xs flex-col gap-1.5 font-semibold text-text-muted text-xs"
@@ -537,6 +718,10 @@ export function TaskDailyRepetition({
                     · conserva esta tarjeta.
                   </p>
                   <p className="mt-1 text-text-secondary">
+                    {patternLabel(preview.pattern) ??
+                      patternLabel(selectedPattern() ?? undefined)}
+                  </p>
+                  <p className="mt-1 text-text-secondary">
                     Próximas fechas:{" "}
                     {preview.future_dates?.length
                       ? preview.future_dates
@@ -553,7 +738,7 @@ export function TaskDailyRepetition({
                         ? `Final inclusivo: ${formatTaskDueDate(preview.final_on ?? null) ?? preview.final_on}.`
                         : "Sin fecha final."}
                     {preview.start_in_past
-                      ? " La primera fecha ya pasó; la ejecución diaria no acumulará atrasos."
+                      ? " La serie conserva su fase del calendario aunque una ejecución se procese tarde."
                       : ""}
                   </p>
                 </div>
@@ -593,7 +778,7 @@ export function TaskDailyRepetition({
                       Boolean(retryCommand)
                     }
                   >
-                    Crear serie
+                    Programar repetición
                   </Button>
                 ) : null}
                 {retryCommand ? (

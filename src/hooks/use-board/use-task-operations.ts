@@ -29,6 +29,7 @@ import type {
   DailyRepetitionCreateResult,
   DailyRepetitionPreview,
   DailyRepetitionStatus,
+  RepetitionPattern,
 } from "@/lib/db/daily-repetition";
 import { getSessionEpoch } from "@/lib/supabase/client";
 import { TaskChecklistAddOperationStore } from "@/lib/task-checklist-state";
@@ -708,6 +709,7 @@ export function useTaskOperations({
       startOn: string,
       endOn: string | null,
       occurrenceLimit: number | null,
+      pattern: RepetitionPattern,
     ): Promise<DailyRepetitionPreview> => {
       if (!isPersistedRef.current || taskId.startsWith("local-")) {
         return { status: "unavailable" };
@@ -721,6 +723,7 @@ export function useTaskOperations({
           startOn,
           endOn,
           occurrenceLimit,
+          pattern,
         );
         if (sessionEpoch !== getSessionEpoch()) {
           throw new Error(

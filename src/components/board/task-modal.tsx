@@ -29,6 +29,7 @@ import type {
   DailyRepetitionCreateResult,
   DailyRepetitionPreview,
   DailyRepetitionStatus,
+  RepetitionPattern,
 } from "@/lib/db/daily-repetition";
 import { TaskChecklistError, TaskEditError } from "@/lib/db/tasks";
 import { resolveTaskChecklistCompletionReview } from "@/lib/task-checklist-completion";
@@ -122,6 +123,7 @@ interface TaskModalProps {
     startOn: string,
     endOn: string | null,
     occurrenceLimit: number | null,
+    pattern: RepetitionPattern,
   ) => Promise<DailyRepetitionPreview>;
   onCreateDailyRepetition: (
     command: DailyRepetitionCreateCommand,

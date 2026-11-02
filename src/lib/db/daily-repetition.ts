@@ -1,5 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+export type RepetitionPattern =
+  | { frequency: "daily"; interval: number }
+  | { frequency: "weekly"; interval: number; weekdays: number[] };
+
 export interface DailyRepetitionPreview {
   status: "available" | "unavailable";
   board_id?: string;
@@ -14,6 +18,7 @@ export interface DailyRepetitionPreview {
   future_dates?: string[];
   final_on?: string | null;
   occurrence_limit?: number | null;
+  pattern?: RepetitionPattern;
   no_final_date?: boolean;
   remaining_dates_after_current?: number | null;
   start_in_past?: boolean;
@@ -30,6 +35,7 @@ export interface DailyRepetitionCreateCommand {
   start_on: string;
   end_on: string | null;
   occurrence_limit: number | null;
+  pattern: RepetitionPattern;
   expected_due_on_version: number;
   confirm_start_change: boolean;
   previous_series_id: string | null;
@@ -67,6 +73,8 @@ export interface DailyRepetitionStatus {
   start_on?: string;
   end_on?: string | null;
   occurrence_limit?: number | null;
+  rule?: "daily" | "weekly";
+  pattern?: RepetitionPattern;
   consumed_count?: number;
   latest_occurrence_on?: string;
   next_due_on?: string | null;
@@ -92,7 +100,7 @@ export type DailyRepetitionErrorReason =
 
 export class DailyRepetitionError extends Error {
   constructor(readonly reason: DailyRepetitionErrorReason) {
-    super("No se pudo confirmar la repetición diaria.");
+    super("No se pudo confirmar la repetición.");
     this.name = "DailyRepetitionError";
   }
 }
@@ -118,13 +126,15 @@ export async function previewDailyRepetition(
   startOn: string,
   endOn: string | null,
   occurrenceLimit: number | null,
+  pattern: RepetitionPattern,
 ): Promise<DailyRepetitionPreview> {
-  const { data, error } = await supabase.rpc("preview_daily_repetition_p", {
+  const { data, error } = await supabase.rpc("preview_repetition_p", {
     p_slug: slug,
     p_task_id: taskId,
     p_start_on: startOn,
     p_end_on: endOn,
     p_occurrence_limit: occurrenceLimit,
+    p_pattern: pattern,
   });
   if (error) throwDailyRepetitionError(error);
   if (
@@ -140,13 +150,14 @@ export async function createDailyRepetition(
   supabase: SupabaseClient,
   command: DailyRepetitionCreateCommand,
 ): Promise<DailyRepetitionCreateResult> {
-  const { data, error } = await supabase.rpc("create_daily_repetition_p", {
+  const { data, error } = await supabase.rpc("create_repetition_p", {
     p_operation_id: command.operation_id,
     p_slug: command.slug,
     p_task_id: command.task_id,
     p_start_on: command.start_on,
     p_end_on: command.end_on,
     p_occurrence_limit: command.occurrence_limit,
+    p_pattern: command.pattern,
     p_expected_due_on_version: command.expected_due_on_version,
     p_confirm_start_change: command.confirm_start_change,
     p_previous_series_id: command.previous_series_id,
@@ -163,7 +174,7 @@ export async function getDailyRepetition(
   slug: string,
   taskId: string,
 ): Promise<DailyRepetitionStatus> {
-  const { data, error } = await supabase.rpc("get_daily_repetition_p", {
+  const { data, error } = await supabase.rpc("get_repetition_p", {
     p_slug: slug,
     p_task_id: taskId,
   });

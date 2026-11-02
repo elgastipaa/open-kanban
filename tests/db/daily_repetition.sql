@@ -12,6 +12,14 @@ CREATE TEMP TABLE issue23_refs (
 GRANT SELECT, INSERT ON issue23_refs TO authenticated;
 CREATE TEMP TABLE issue23_results (series_id uuid NOT NULL);
 GRANT INSERT, SELECT ON issue23_results TO authenticated;
+CREATE TEMP TABLE issue24_series_refs (
+  purpose text PRIMARY KEY,
+  series_id uuid NOT NULL,
+  task_id uuid NOT NULL,
+  board_id uuid NOT NULL,
+  slug text NOT NULL
+);
+GRANT INSERT, SELECT ON issue24_series_refs TO authenticated;
 CREATE TEMP TABLE issue23_transfer_results (
   series_a uuid NOT NULL,
   series_b uuid,
@@ -44,7 +52,6 @@ SET auth_user_id = '40000000-0000-4000-8000-000000000002',
 WHERE email = 'enabled-user@example.test';
 
 BEGIN;
-SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);
 DO $$
 DECLARE
@@ -165,6 +172,97 @@ BEGIN
     OR v_preview->'future_dates' ? '2026-11-09'
     OR (v_preview->>'requires_start_confirmation')::boolean IS DISTINCT FROM false THEN
     RAISE EXCEPTION 'AC49 weekly preview did not honor the start-week anchor: %', v_preview;
+  END IF;
+END;
+$$;
+COMMIT;
+
+-- Issue #24: preview counts effective weekly dates from the current task,
+-- using the Monday-anchored interval and a controlled board-local clock.
+BEGIN;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);
+DO $$
+DECLARE
+  v_ref issue23_refs%ROWTYPE;
+  v_preview jsonb;
+BEGIN
+  SELECT * INTO v_ref FROM issue23_refs WHERE purpose = 'weekly_preview';
+  v_preview := public.preview_repetition_internal_p(
+    v_ref.slug, v_ref.task_id, '2026-11-04'::date, NULL, 4,
+    '2026-11-04 15:00:00+00'::timestamptz,
+    '{"frequency":"weekly","interval":2,"weekdays":[1,3]}'::jsonb
+  );
+  IF v_preview->>'status' IS DISTINCT FROM 'available'
+    OR v_preview->>'time_zone' IS DISTINCT FROM 'America/Argentina/Buenos_Aires'
+    OR v_preview->>'today' IS DISTINCT FROM '2026-11-04'
+    OR v_preview->'current'->>'due_on' IS DISTINCT FROM '2026-11-04'
+    OR v_preview->'future_dates' IS DISTINCT FROM '["2026-11-16","2026-11-18","2026-11-30"]'::jsonb
+    OR v_preview->>'final_on' IS DISTINCT FROM '2026-11-30'
+    OR (v_preview->>'occurrence_limit')::bigint IS DISTINCT FROM 4
+    OR (v_preview->>'remaining_dates_after_current')::bigint IS DISTINCT FROM 3 THEN
+    RAISE EXCEPTION 'Issue #24 weekly preview did not share anchored calendar/count semantics: %', v_preview;
+  END IF;
+END;
+$$;
+COMMIT;
+
+-- Issue #24: selected weeks/days are part of the idempotent operation and
+-- durable series/job snapshot.
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);
+DO $$
+DECLARE
+  v_ref issue23_refs%ROWTYPE;
+  v_result jsonb;
+  v_replay jsonb;
+  v_status jsonb;
+  v_mismatch_rejected boolean := false;
+  v_pattern jsonb := '{"frequency":"weekly","interval":2,"weekdays":[1,3]}'::jsonb;
+BEGIN
+  SELECT * INTO v_ref FROM issue23_refs WHERE purpose = 'weekly_preview';
+  v_result := public.create_repetition_p(
+    '24000000-0000-4000-8000-000000000001', v_ref.slug, v_ref.task_id,
+    '2026-11-04'::date, NULL, 4, 2, false, NULL, v_pattern
+  );
+  IF v_result->>'status' IS DISTINCT FROM 'confirmed'
+    OR (v_result->>'task_id')::uuid IS DISTINCT FROM v_ref.task_id
+    OR (v_result->>'next_due_on')::date IS DISTINCT FROM '2026-11-16'::date THEN
+    RAISE EXCEPTION 'Weekly series did not keep the first task and first eligible date: %', v_result;
+  END IF;
+  INSERT INTO issue24_series_refs(purpose, series_id, task_id, board_id, slug)
+  VALUES ('biweekly_count', (v_result->>'series_id')::uuid,
+    v_ref.task_id, v_ref.board_id, v_ref.slug);
+
+  v_status := public.get_repetition_p(v_ref.slug, v_ref.task_id);
+  IF v_status->>'status' IS DISTINCT FROM 'available'
+    OR v_status->>'rule' IS DISTINCT FROM 'weekly'
+    OR v_status->'pattern' IS DISTINCT FROM v_pattern
+    OR (v_status->>'consumed_count')::bigint IS DISTINCT FROM 1
+    OR v_status->>'next_due_on' IS DISTINCT FROM '2026-11-16' THEN
+    RAISE EXCEPTION 'The selected weekly rule and durable date were not persisted together: %', v_status;
+  END IF;
+
+  v_replay := public.create_repetition_p(
+    '24000000-0000-4000-8000-000000000001', v_ref.slug, v_ref.task_id,
+    '2026-11-04'::date, NULL, 4, 2, false, NULL, v_pattern
+  );
+  IF v_replay->>'status' IS DISTINCT FROM 'confirmed'
+    OR (v_replay->>'series_id')::uuid IS DISTINCT FROM (v_result->>'series_id')::uuid THEN
+    RAISE EXCEPTION 'Replaying the same weekly operation created another series';
+  END IF;
+
+  BEGIN
+    PERFORM public.create_repetition_p(
+      '24000000-0000-4000-8000-000000000001', v_ref.slug, v_ref.task_id,
+      '2026-11-04'::date, NULL, 4, 2, false, NULL,
+      '{"frequency":"weekly","interval":2,"weekdays":[1,2]}'::jsonb
+    );
+  EXCEPTION WHEN SQLSTATE '23514' THEN
+    v_mismatch_rejected := true;
+  END;
+  IF NOT v_mismatch_rejected THEN
+    RAISE EXCEPTION 'A repeated operation silently changed its selected weekdays';
   END IF;
 END;
 $$;
@@ -969,6 +1067,544 @@ BEGIN
     OR (SELECT state FROM public.task_checklist_deletions
       WHERE task_id = v_task_id) <> 'purged' THEN
     RAISE EXCEPTION 'Parent purge did not atomically purge the occurrence and checklist tombstone';
+  END IF;
+END;
+$$;
+COMMIT;
+
+-- Issue #24: a late durable run uses the latest eligible weekly date, counts
+-- effective dates (not completions), and keeps the original two-week phase.
+BEGIN;
+SELECT set_config('request.jwt.claim.role', 'service_role', true);
+DO $$
+DECLARE
+  v_ref issue24_series_refs%ROWTYPE;
+  v_series public.daily_repetition_series%ROWTYPE;
+  v_job record;
+  v_result jsonb;
+  v_processed boolean := false;
+BEGIN
+  SELECT * INTO v_ref FROM issue24_series_refs WHERE purpose = 'biweekly_count';
+  FOR v_job IN
+    SELECT * FROM public.claim_daily_repetition_jobs_internal_p(
+      100, '2026-11-20 15:00:00+00'::timestamptz
+    )
+  LOOP
+    v_result := public.process_daily_repetition_job_internal_p(
+      v_job.id, v_job.lease_token, '2026-11-20 15:00:00+00'::timestamptz
+    );
+    IF v_job.series_id = v_ref.series_id THEN
+      v_processed := v_result->>'status' = 'confirmed';
+    END IF;
+  END LOOP;
+
+  SELECT * INTO v_series FROM public.daily_repetition_series
+  WHERE id = v_ref.series_id;
+  IF NOT v_processed
+    OR v_series.state IS DISTINCT FROM 'active'
+    OR v_series.latest_occurrence_on IS DISTINCT FROM '2026-11-18'::date
+    OR v_series.consumed_count IS DISTINCT FROM 3
+    OR v_series.next_due_on IS DISTINCT FROM '2026-11-30'::date
+    OR (SELECT count(*) FROM public.daily_repetition_occurrences AS occurrence
+      WHERE occurrence.series_id = v_ref.series_id AND occurrence.state = 'current') <> 1
+    OR NOT EXISTS (
+      SELECT 1 FROM public.daily_repetition_occurrences AS occurrence
+      WHERE occurrence.series_id = v_ref.series_id
+        AND occurrence.occurrence_on = '2026-11-18'::date
+        AND occurrence.state = 'current'
+    ) THEN
+    RAISE EXCEPTION 'Late weekly execution shifted phase or counted completions: %, %',
+      v_series, v_processed;
+  END IF;
+END;
+$$;
+COMMIT;
+
+-- Issue #24 / C110-AC50: an excluded weekly date consumes its position and
+-- does not create an extra date after the finite count is reached.
+BEGIN;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);
+DO $$
+DECLARE
+  v_ref issue23_refs%ROWTYPE;
+  v_created jsonb;
+  v_due_edit jsonb;
+  v_preview jsonb;
+  v_result jsonb;
+  v_task_id uuid;
+  v_pattern jsonb := '{"frequency":"weekly","interval":2,"weekdays":[1,3]}'::jsonb;
+BEGIN
+  SELECT * INTO v_ref FROM issue23_refs WHERE purpose = 'weekly_preview';
+  v_created := public.create_task_p(
+    '24000000-0000-4000-8000-000000000011', v_ref.board_id, v_ref.column_id,
+    'Conteo semanal con exclusión', NULL, 'low'
+  );
+  v_task_id := (v_created->>'task_id')::uuid;
+  v_due_edit := public.edit_task_fields_p(
+    '24000000-0000-4000-8000-000000000012', v_ref.slug, v_task_id,
+    '{"due_on":"2026-12-28"}'::jsonb, '{"due_on":1}'::jsonb
+  );
+  IF v_due_edit->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Synthetic weekly count task setup failed: %', v_due_edit;
+  END IF;
+  v_preview := public.preview_repetition_internal_p(
+    v_ref.slug, v_task_id, '2026-12-28'::date, NULL, 4,
+    '2026-12-28 15:00:00+00'::timestamptz, v_pattern
+  );
+  IF v_preview->>'final_on' IS DISTINCT FROM '2027-01-13'
+    OR v_preview->'future_dates' IS DISTINCT FROM '["2026-12-30","2027-01-11","2027-01-13"]'::jsonb THEN
+    RAISE EXCEPTION 'Weekly N-count preview did not stop at the fourth effective date: %', v_preview;
+  END IF;
+  v_result := public.create_repetition_p(
+    '24000000-0000-4000-8000-000000000013', v_ref.slug, v_task_id,
+    '2026-12-28'::date, NULL, 4, 2, false, NULL, v_pattern
+  );
+  IF v_result->>'status' IS DISTINCT FROM 'confirmed'
+    OR v_result->>'next_due_on' IS DISTINCT FROM '2026-12-30' THEN
+    RAISE EXCEPTION 'Finite weekly series did not schedule its first effective date: %', v_result;
+  END IF;
+  INSERT INTO issue24_series_refs(purpose, series_id, task_id, board_id, slug)
+  VALUES ('count_exclusion', (v_result->>'series_id')::uuid,
+    v_task_id, v_ref.board_id, v_ref.slug);
+END;
+$$;
+COMMIT;
+
+BEGIN;
+SELECT set_config('request.jwt.claim.role', 'service_role', true);
+DO $$
+DECLARE
+  v_ref issue24_series_refs%ROWTYPE;
+  v_job record;
+  v_result jsonb;
+  v_processed boolean := false;
+BEGIN
+  SELECT * INTO v_ref FROM issue24_series_refs WHERE purpose = 'count_exclusion';
+  FOR v_job IN
+    SELECT * FROM public.claim_daily_repetition_jobs_internal_p(
+      100, '2027-01-11 15:00:00+00'::timestamptz
+    )
+  LOOP
+    v_result := public.process_daily_repetition_job_internal_p(
+      v_job.id, v_job.lease_token, '2027-01-11 15:00:00+00'::timestamptz
+    );
+    IF v_job.series_id = v_ref.series_id THEN
+      v_processed := v_result->>'status' = 'confirmed';
+    END IF;
+  END LOOP;
+  IF NOT v_processed OR NOT EXISTS (
+    SELECT 1 FROM public.daily_repetition_occurrences AS occurrence
+    WHERE occurrence.series_id = v_ref.series_id
+      AND occurrence.occurrence_on = '2027-01-11'::date
+      AND occurrence.state = 'current'
+  ) THEN
+    RAISE EXCEPTION 'The second effective weekly date was not materialized';
+  END IF;
+END;
+$$;
+COMMIT;
+
+BEGIN;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);
+DO $$
+DECLARE
+  v_ref issue24_series_refs%ROWTYPE;
+  v_task_id uuid;
+  v_result jsonb;
+BEGIN
+  SELECT * INTO v_ref FROM issue24_series_refs WHERE purpose = 'count_exclusion';
+  SELECT occurrence.task_id INTO v_task_id
+  FROM public.daily_repetition_occurrences AS occurrence
+  WHERE occurrence.series_id = v_ref.series_id
+    AND occurrence.occurrence_on = '2027-01-11'::date;
+  v_result := public.delete_task_internal_p(
+    '24000000-0000-4000-8000-000000000014', v_ref.slug, v_task_id,
+    'user_requested', '2027-01-11 16:00:00+00'::timestamptz
+  );
+  IF v_result->>'status' IS DISTINCT FROM 'confirmed'
+    OR (SELECT occurrence.state FROM public.daily_repetition_occurrences AS occurrence
+      WHERE occurrence.series_id = v_ref.series_id
+        AND occurrence.occurrence_on = '2027-01-11'::date) IS DISTINCT FROM 'excluded' THEN
+    RAISE EXCEPTION 'Deleting the weekly date did not retain its consumed exclusion';
+  END IF;
+END;
+$$;
+COMMIT;
+
+BEGIN;
+SELECT set_config('request.jwt.claim.role', 'service_role', true);
+DO $$
+DECLARE
+  v_ref issue24_series_refs%ROWTYPE;
+  v_series public.daily_repetition_series%ROWTYPE;
+  v_job record;
+  v_result jsonb;
+  v_processed boolean := false;
+BEGIN
+  SELECT * INTO v_ref FROM issue24_series_refs WHERE purpose = 'count_exclusion';
+  FOR v_job IN
+    SELECT * FROM public.claim_daily_repetition_jobs_internal_p(
+      100, '2027-01-14 15:00:00+00'::timestamptz
+    )
+  LOOP
+    v_result := public.process_daily_repetition_job_internal_p(
+      v_job.id, v_job.lease_token, '2027-01-14 15:00:00+00'::timestamptz
+    );
+    IF v_job.series_id = v_ref.series_id THEN
+      v_processed := v_result->>'status' = 'confirmed';
+    END IF;
+  END LOOP;
+  SELECT * INTO v_series FROM public.daily_repetition_series
+  WHERE id = v_ref.series_id;
+  IF NOT v_processed
+    OR v_series.state IS DISTINCT FROM 'finished'
+    OR v_series.latest_occurrence_on IS DISTINCT FROM '2027-01-13'::date
+    OR v_series.consumed_count IS DISTINCT FROM 4
+    OR v_series.next_due_on IS NOT NULL
+    OR (SELECT count(*) FROM public.daily_repetition_occurrences AS occurrence
+      WHERE occurrence.series_id = v_ref.series_id
+        AND occurrence.occurrence_on = '2027-01-11'::date
+        AND occurrence.state = 'excluded') <> 1
+    OR NOT EXISTS (
+      SELECT 1 FROM public.daily_repetition_occurrences AS occurrence
+      WHERE occurrence.series_id = v_ref.series_id
+        AND occurrence.occurrence_on = '2027-01-13'::date
+        AND occurrence.state = 'current'
+    )
+    OR EXISTS (
+      SELECT 1 FROM public.daily_repetition_occurrences AS occurrence
+      WHERE occurrence.series_id = v_ref.series_id
+        AND occurrence.occurrence_on > '2027-01-13'::date
+    ) THEN
+    RAISE EXCEPTION 'C110-AC50 extended or skipped an effective weekly date: %', v_series;
+  END IF;
+END;
+$$;
+COMMIT;
+
+-- Issue #24: local calendar days differ by zone, and invalid patterns are
+-- rejected through the public preview RPC before durable state is created.
+BEGIN;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);
+DO $$
+DECLARE
+  v_ref issue23_refs%ROWTYPE;
+  v_now timestamptz := '2027-01-01 01:00:00+00'::timestamptz;
+  v_invalid_intervals_rejected boolean := false;
+  v_empty_days_rejected boolean := false;
+  v_null_day_rejected boolean := false;
+BEGIN
+  SELECT * INTO v_ref FROM issue23_refs WHERE purpose = 'weekly_preview';
+  IF public.board_calendar_day('Pacific/Kiritimati', v_now) IS DISTINCT FROM '2027-01-01'::date
+    OR public.board_calendar_day('America/Los_Angeles', v_now) IS DISTINCT FROM '2026-12-31'::date
+    OR public.board_calendar_day(
+      'America/Los_Angeles', '2027-01-01 09:00:00+00'::timestamptz
+    ) IS DISTINCT FROM '2027-01-01'::date THEN
+    RAISE EXCEPTION 'Synthetic clock did not cross local midnight independently by board zone';
+  END IF;
+  BEGIN
+    PERFORM public.preview_repetition_p(
+      v_ref.slug, v_ref.task_id, '2026-12-28'::date, NULL, 3,
+      '{"frequency":"weekly","interval":0,"weekdays":[1]}'::jsonb
+    );
+  EXCEPTION WHEN SQLSTATE '22023' THEN
+    v_invalid_intervals_rejected := true;
+  END;
+  BEGIN
+    PERFORM public.preview_repetition_p(
+      v_ref.slug, v_ref.task_id, '2026-12-28'::date, NULL, 3,
+      '{"frequency":"weekly","interval":1,"weekdays":[]}'::jsonb
+    );
+  EXCEPTION WHEN SQLSTATE '22023' THEN
+    v_empty_days_rejected := true;
+  END;
+  BEGIN
+    PERFORM public.preview_repetition_p(
+      v_ref.slug, v_ref.task_id, '2026-12-28'::date, NULL, 1,
+      '{"frequency":"weekly","interval":1,"weekdays":[null]}'::jsonb
+    );
+  EXCEPTION WHEN SQLSTATE '22023' THEN
+    v_null_day_rejected := true;
+  END;
+  IF NOT v_invalid_intervals_rejected OR NOT v_empty_days_rejected
+    OR NOT v_null_day_rejected THEN
+    RAISE EXCEPTION 'Weekly pattern validation accepted a nonpositive interval or invalid weekday selection';
+  END IF;
+END;
+$$;
+COMMIT;
+
+-- Issue #24: local weekly patterns cross ISO years without holiday lookup,
+-- while durable job availability and catch-up use each board's local day.
+BEGIN;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);
+DO $$
+DECLARE
+  v_ref issue23_refs%ROWTYPE;
+  v_created jsonb;
+  v_due_edit jsonb;
+  v_preview jsonb;
+  v_task_id uuid;
+BEGIN
+  SELECT * INTO v_ref FROM issue23_refs WHERE purpose = 'weekly_preview';
+  v_created := public.create_task_p(
+    '24000000-0000-4000-8000-000000000015', v_ref.board_id, v_ref.column_id,
+    'Preview semanal entre años', NULL, 'low'
+  );
+  v_task_id := (v_created->>'task_id')::uuid;
+  v_due_edit := public.edit_task_fields_p(
+    '24000000-0000-4000-8000-000000000016', v_ref.slug, v_task_id,
+    '{"due_on":"2026-12-28"}'::jsonb, '{"due_on":1}'::jsonb
+  );
+  IF v_due_edit->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Synthetic year-boundary preview task setup failed: %', v_due_edit;
+  END IF;
+  v_preview := public.preview_repetition_p(
+    v_ref.slug, v_task_id, '2026-12-28'::date, NULL, 4,
+    '{"frequency":"weekly","interval":2,"weekdays":[1,3]}'::jsonb
+  );
+  IF v_preview->>'status' IS DISTINCT FROM 'available'
+    OR v_preview->>'final_on' IS DISTINCT FROM '2027-01-13'
+    OR v_preview->'future_dates' IS DISTINCT FROM '["2026-12-30","2027-01-11","2027-01-13"]'::jsonb THEN
+    RAISE EXCEPTION 'Weekly preview did not preserve its Monday anchor across the year boundary: %', v_preview;
+  END IF;
+  v_preview := public.preview_repetition_p(
+    v_ref.slug, v_task_id, '2026-12-31'::date, NULL, 3,
+    '{"frequency":"weekly","interval":1,"weekdays":[1,2,3,4,5]}'::jsonb
+  );
+  IF v_preview->>'status' IS DISTINCT FROM 'available'
+    OR v_preview->'future_dates' IS DISTINCT FROM '["2027-01-01","2027-01-04"]'::jsonb THEN
+    RAISE EXCEPTION 'Laborables did not include a selected weekday holiday: %', v_preview;
+  END IF;
+END;
+$$;
+COMMIT;
+
+BEGIN;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);
+DO $$
+DECLARE
+  v_fixture record;
+  v_board record;
+  v_column record;
+  v_created jsonb;
+  v_due_edit jsonb;
+  v_result jsonb;
+  v_task_id uuid;
+BEGIN
+  FOR v_fixture IN
+    SELECT fixture.purpose, fixture.time_zone, fixture.board_operation,
+      fixture.column_operation, fixture.task_operation, fixture.due_operation,
+      fixture.series_operation
+    FROM (VALUES
+      ('zone_kiritimati', 'Pacific/Kiritimati',
+        '24000000-0000-4000-8000-000000000021'::uuid,
+        '24000000-0000-4000-8000-000000000022'::uuid,
+        '24000000-0000-4000-8000-000000000023'::uuid,
+        '24000000-0000-4000-8000-000000000024'::uuid,
+        '24000000-0000-4000-8000-000000000025'::uuid),
+      ('zone_los_angeles', 'America/Los_Angeles',
+        '24000000-0000-4000-8000-000000000026'::uuid,
+        '24000000-0000-4000-8000-000000000027'::uuid,
+        '24000000-0000-4000-8000-000000000028'::uuid,
+        '24000000-0000-4000-8000-000000000029'::uuid,
+        '24000000-0000-4000-8000-000000000030'::uuid)
+    ) AS fixture(
+      purpose, time_zone, board_operation, column_operation,
+      task_operation, due_operation, series_operation
+    )
+  LOOP
+    SELECT * INTO v_board FROM public.create_board_p(
+      'Issue 24 ' || v_fixture.purpose, v_fixture.time_zone, v_fixture.board_operation
+    );
+    SELECT * INTO v_column FROM public.create_column_p(
+      v_board.slug, v_board.id, 'Pendientes', 0
+    );
+    v_created := public.create_task_p(
+      v_fixture.task_operation, v_board.id, v_column.id,
+      'Semana de cambio de año', NULL, 'low'
+    );
+    v_task_id := (v_created->>'task_id')::uuid;
+    v_due_edit := public.edit_task_fields_p(
+      v_fixture.due_operation, v_board.slug, v_task_id,
+      '{"due_on":"2026-12-31"}'::jsonb, '{"due_on":1}'::jsonb
+    );
+    IF v_due_edit->>'status' IS DISTINCT FROM 'confirmed' THEN
+      RAISE EXCEPTION 'Synthetic timezone task setup failed: %', v_due_edit;
+    END IF;
+    v_result := public.create_repetition_p(
+      v_fixture.series_operation, v_board.slug, v_task_id,
+      '2026-12-31'::date, NULL, 3, 2, false, NULL,
+      '{"frequency":"weekly","interval":1,"weekdays":[5]}'::jsonb
+    );
+    IF v_result->>'status' IS DISTINCT FROM 'confirmed'
+      OR v_result->>'next_due_on' IS DISTINCT FROM '2027-01-01' THEN
+      RAISE EXCEPTION 'Synthetic timezone weekly series setup failed: %', v_result;
+    END IF;
+    INSERT INTO issue24_series_refs(purpose, series_id, task_id, board_id, slug)
+    VALUES (v_fixture.purpose, (v_result->>'series_id')::uuid,
+      v_task_id, v_board.id, v_board.slug);
+  END LOOP;
+END;
+$$;
+COMMIT;
+
+BEGIN;
+SELECT set_config('request.jwt.claim.role', 'service_role', true);
+DO $$
+DECLARE
+  v_kiritimati issue24_series_refs%ROWTYPE;
+  v_los_angeles issue24_series_refs%ROWTYPE;
+  v_job record;
+  v_result jsonb;
+  v_kiritimati_processed boolean := false;
+  v_los_angeles_claimed boolean := false;
+BEGIN
+  SELECT * INTO v_kiritimati FROM issue24_series_refs WHERE purpose = 'zone_kiritimati';
+  SELECT * INTO v_los_angeles FROM issue24_series_refs WHERE purpose = 'zone_los_angeles';
+  FOR v_job IN
+    SELECT * FROM public.claim_daily_repetition_jobs_internal_p(
+      100, '2027-01-01 01:00:00+00'::timestamptz
+    )
+  LOOP
+    IF v_job.series_id = v_los_angeles.series_id THEN
+      v_los_angeles_claimed := true;
+    END IF;
+    v_result := public.process_daily_repetition_job_internal_p(
+      v_job.id, v_job.lease_token, '2027-01-01 01:00:00+00'::timestamptz
+    );
+    IF v_job.series_id = v_kiritimati.series_id THEN
+      v_kiritimati_processed := v_result->>'status' = 'confirmed'
+        AND v_result->>'occurrence_on' = '2027-01-01';
+    END IF;
+  END LOOP;
+  IF NOT v_kiritimati_processed OR v_los_angeles_claimed
+    OR (SELECT latest_occurrence_on FROM public.daily_repetition_series
+      WHERE id = v_kiritimati.series_id) IS DISTINCT FROM '2027-01-01'::date
+    OR (SELECT latest_occurrence_on FROM public.daily_repetition_series
+      WHERE id = v_los_angeles.series_id) IS DISTINCT FROM '2026-12-31'::date THEN
+    RAISE EXCEPTION 'Year-boundary worker did not honor each board-local midnight';
+  END IF;
+END;
+$$;
+COMMIT;
+
+BEGIN;
+SELECT set_config('request.jwt.claim.role', 'service_role', true);
+DO $$
+DECLARE
+  v_los_angeles issue24_series_refs%ROWTYPE;
+  v_job record;
+  v_result jsonb;
+  v_processed boolean := false;
+BEGIN
+  SELECT * INTO v_los_angeles FROM issue24_series_refs WHERE purpose = 'zone_los_angeles';
+  FOR v_job IN
+    SELECT * FROM public.claim_daily_repetition_jobs_internal_p(
+      100, '2027-01-01 09:00:00+00'::timestamptz
+    )
+  LOOP
+    v_result := public.process_daily_repetition_job_internal_p(
+      v_job.id, v_job.lease_token, '2027-01-01 09:00:00+00'::timestamptz
+    );
+    IF v_job.series_id = v_los_angeles.series_id THEN
+      v_processed := v_result->>'status' = 'confirmed'
+        AND v_result->>'occurrence_on' = '2027-01-01';
+    END IF;
+  END LOOP;
+  IF NOT v_processed OR (SELECT latest_occurrence_on
+      FROM public.daily_repetition_series WHERE id = v_los_angeles.series_id)
+      IS DISTINCT FROM '2027-01-01'::date THEN
+    RAISE EXCEPTION 'Los Angeles worker did not advance after its local midnight';
+  END IF;
+END;
+$$;
+COMMIT;
+
+-- A late task completion does not become the anchor for later weekly dates;
+-- the finite count and latest materialized date still follow the calendar.
+BEGIN;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);
+DO $$
+DECLARE
+  v_ref issue23_refs%ROWTYPE;
+  v_created jsonb;
+  v_due_edit jsonb;
+  v_series_result jsonb;
+  v_completed jsonb;
+  v_task_id uuid;
+BEGIN
+  SELECT * INTO v_ref FROM issue23_refs WHERE purpose = 'weekly_preview';
+  v_created := public.create_task_p(
+    '24000000-0000-4000-8000-000000000031', v_ref.board_id, v_ref.column_id,
+    'Completar tarde sin mover la fase', NULL, 'low'
+  );
+  v_task_id := (v_created->>'task_id')::uuid;
+  v_due_edit := public.edit_task_fields_p(
+    '24000000-0000-4000-8000-000000000032', v_ref.slug, v_task_id,
+    '{"due_on":"2026-01-05"}'::jsonb, '{"due_on":1}'::jsonb
+  );
+  IF v_due_edit->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Synthetic late-completion task setup failed: %', v_due_edit;
+  END IF;
+  v_series_result := public.create_repetition_p(
+    '24000000-0000-4000-8000-000000000033', v_ref.slug, v_task_id,
+    '2026-01-05'::date, NULL, NULL, 2, false, NULL,
+    '{"frequency":"weekly","interval":2,"weekdays":[1]}'::jsonb
+  );
+  IF v_series_result->>'status' IS DISTINCT FROM 'confirmed'
+    OR v_series_result->>'next_due_on' IS DISTINCT FROM '2026-01-19' THEN
+    RAISE EXCEPTION 'Synthetic late-completion weekly series setup failed: %', v_series_result;
+  END IF;
+  v_completed := public.set_task_completion_p(
+    '24000000-0000-4000-8000-000000000034', v_ref.slug, v_task_id, true, 1
+  );
+  IF v_completed->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Synthetic late-completion task setup failed: %', v_completed;
+  END IF;
+  -- Freeze the synthetic completion time so the test stays independent of
+  -- the machine date while exercising a completion months after the due date.
+  UPDATE public.tasks SET completed_at = '2026-11-05 12:00:00+00'::timestamptz
+  WHERE id = v_task_id;
+  INSERT INTO issue24_series_refs(purpose, series_id, task_id, board_id, slug)
+  VALUES ('late_completed_task', (v_series_result->>'series_id')::uuid,
+    v_task_id, v_ref.board_id, v_ref.slug);
+END;
+$$;
+COMMIT;
+
+BEGIN;
+SELECT set_config('request.jwt.claim.role', 'service_role', true);
+DO $$
+DECLARE
+  v_ref issue24_series_refs%ROWTYPE;
+  v_series public.daily_repetition_series%ROWTYPE;
+  v_job record;
+  v_result jsonb;
+  v_processed boolean := false;
+BEGIN
+  SELECT * INTO v_ref FROM issue24_series_refs WHERE purpose = 'late_completed_task';
+  FOR v_job IN
+    SELECT * FROM public.claim_daily_repetition_jobs_internal_p(
+      100, '2026-11-20 15:00:00+00'::timestamptz
+    )
+  LOOP
+    v_result := public.process_daily_repetition_job_internal_p(
+      v_job.id, v_job.lease_token, '2026-11-20 15:00:00+00'::timestamptz
+    );
+    IF v_job.series_id = v_ref.series_id THEN
+      v_processed := v_result->>'status' = 'confirmed'
+        AND v_result->>'occurrence_on' = '2026-11-09';
+    END IF;
+  END LOOP;
+  SELECT * INTO v_series FROM public.daily_repetition_series
+  WHERE id = v_ref.series_id;
+  IF NOT v_processed
+    OR v_series.latest_occurrence_on IS DISTINCT FROM '2026-11-09'::date
+    OR v_series.consumed_count IS DISTINCT FROM 23
+    OR v_series.next_due_on IS DISTINCT FROM '2026-11-23'::date
+    OR (SELECT is_completed FROM public.tasks WHERE id = v_ref.task_id) IS DISTINCT FROM true THEN
+    RAISE EXCEPTION 'Late completion changed the anchored weekly phase or effective-date count: %', v_series;
   END IF;
 END;
 $$;

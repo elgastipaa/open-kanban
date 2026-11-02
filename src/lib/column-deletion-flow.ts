@@ -9,6 +9,8 @@ export interface ColumnDeletionPreview {
   column_id: string;
   column_title: string;
   task_count: number;
+  series_count: number;
+  series_token: string;
   task_order_version: number;
   destinations: ColumnDeletionDestination[];
 }
@@ -25,6 +27,7 @@ export interface ColumnDeletionCommand {
   column_id: string;
   destination_column_id: string | null;
   expected_task_order_version: number;
+  expected_series_token: string;
 }
 
 export type ColumnDeletionDialogState =
@@ -164,13 +167,19 @@ export function columnDeletionDecision(
     preview.status !== "preview" ||
     !Number.isInteger(preview.task_count) ||
     preview.task_count < 0 ||
+    !Number.isInteger(preview.series_count) ||
+    preview.series_count < 0 ||
+    typeof preview.series_token !== "string" ||
     !Number.isInteger(preview.task_order_version) ||
     preview.task_order_version < 1
   ) {
     return "invalid_preview";
   }
   if (preview.destinations.length === 0) return "no_destination";
-  if (preview.task_count > 0 && !destinationColumnId) {
+  if (
+    (preview.task_count > 0 || preview.series_count > 0) &&
+    !destinationColumnId
+  ) {
     return "needs_destination";
   }
   if (
@@ -197,6 +206,7 @@ export function createColumnDeletionCommand(
     column_id: preview.column_id,
     destination_column_id: destinationColumnId,
     expected_task_order_version: preview.task_order_version,
+    expected_series_token: preview.series_token,
   };
 }
 
@@ -205,7 +215,7 @@ export function columnDeletionErrorMessage(
 ): string {
   switch (status) {
     case "needs_destination":
-      return "Elige una columna de este tablero para trasladar las tareas.";
+      return "Elige una columna de este tablero para trasladar las tareas y resolver las próximas apariciones.";
     case "conflict":
       return "La columna o sus tareas cambiaron. Revisa la vista previa actualizada antes de confirmar.";
     case "unavailable":
@@ -222,27 +232,46 @@ export function columnDeletionErrorMessage(
   }
 }
 
-export function columnDeletionNoDestinationMessage(taskCount: number): string {
-  return taskCount > 0
-    ? "No se puede borrar la última columna. Agrega otra columna para trasladar allí las tareas o cancela para dejar esta columna."
-    : "No se puede borrar la última columna. Agrega otra columna o cancela para dejar esta columna.";
+export function columnDeletionNoDestinationMessage(
+  taskCount: number,
+  seriesCount = 0,
+): string {
+  if (taskCount > 0 && seriesCount > 0) {
+    return "No se puede borrar la última columna. Agrega otra columna para trasladar allí las tareas y resolver las próximas apariciones, o cancela para dejar esta columna.";
+  }
+  if (taskCount > 0) {
+    return "No se puede borrar la última columna. Agrega otra columna para trasladar allí las tareas o cancela para dejar esta columna.";
+  }
+  if (seriesCount > 0) {
+    return "No se puede borrar la última columna. Agrega otra columna para resolver allí las próximas apariciones o cancela para dejar esta columna.";
+  }
+  return "No se puede borrar la última columna. Agrega otra columna o cancela para dejar esta columna.";
 }
 
 export function columnDeletionSuccessMessage(
   movedTaskCount: number | undefined,
   recoverableUntil: string | null,
+  movedSeriesCount = 0,
 ): string {
   if (recoverableUntil === null) {
     return "Revisa la sección Recuperación del tablero para consultar esta eliminación.";
   }
   const recoveryMessage = `La estructura se podrá recuperar hasta ${recoverableUntil}.`;
   if (movedTaskCount === undefined) return recoveryMessage;
-  if (movedTaskCount <= 0) {
+  if ((movedTaskCount ?? 0) <= 0 && movedSeriesCount <= 0) {
     return `No se trasladaron tareas. ${recoveryMessage}`;
   }
-  const taskMessage =
-    movedTaskCount === 1
+  const taskMessage = movedTaskCount
+    ? movedTaskCount === 1
       ? "1 tarea quedó en la columna elegida."
-      : `${movedTaskCount} tareas quedaron en la columna elegida.`;
-  return `${taskMessage} ${recoveryMessage}`;
+      : `${movedTaskCount} tareas quedaron en la columna elegida.`
+    : "";
+  const seriesMessage = movedSeriesCount
+    ? movedSeriesCount === 1
+      ? "La próxima aparición de 1 serie usará esa columna."
+      : `Las próximas apariciones de ${movedSeriesCount} series usarán esa columna.`
+    : "";
+  return [taskMessage, seriesMessage, recoveryMessage]
+    .filter(Boolean)
+    .join(" ");
 }

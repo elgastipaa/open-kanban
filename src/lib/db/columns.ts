@@ -83,6 +83,7 @@ export async function deleteColumn(
         p_column_id: command.column_id,
         p_destination_column_id: command.destination_column_id,
         p_expected_task_order_version: command.expected_task_order_version,
+        p_expected_series_token: command.expected_series_token,
       });
     } catch {
       if (attempt === 1) throw new ColumnRecoveryError("uncertain");
@@ -110,6 +111,8 @@ export interface ColumnDeletionPreview {
   column_id: string;
   column_title: string;
   task_count: number;
+  series_count: number;
+  series_token: string;
   task_order_version: number;
   destinations: Array<{ id: string; title: string; position: number }>;
 }
@@ -128,6 +131,7 @@ export interface ColumnRecoveryResult {
   operation_id: string;
   column_id?: string;
   moved_task_count?: number;
+  moved_series_count?: number;
   expires_at?: string;
 }
 
@@ -180,6 +184,11 @@ function isColumnDeletionPreview(
     "task_count" in value &&
     typeof value.task_count === "number" &&
     Number.isInteger(value.task_count) &&
+    "series_count" in value &&
+    typeof value.series_count === "number" &&
+    Number.isInteger(value.series_count) &&
+    "series_token" in value &&
+    typeof value.series_token === "string" &&
     "task_order_version" in value &&
     typeof value.task_order_version === "number" &&
     Number.isInteger(value.task_order_version) &&
@@ -215,7 +224,10 @@ function isColumnRecoveryResult(value: unknown): value is ColumnRecoveryResult {
       "retryable",
     ].includes(String(value.status)) &&
     "operation_id" in value &&
-    typeof value.operation_id === "string"
+    typeof value.operation_id === "string" &&
+    (!("moved_series_count" in value) ||
+      (typeof value.moved_series_count === "number" &&
+        Number.isInteger(value.moved_series_count)))
   );
 }
 

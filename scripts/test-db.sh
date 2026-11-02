@@ -260,6 +260,19 @@ if [[ "${TEST_DB_FOCUS:-}" == 'issue27' ]]; then
   printf 'Issue #27 database regression tests passed (disposable PostgreSQL).\n'
   exit 0
 fi
+if [[ "${TEST_DB_FOCUS:-}" == 'issue28' ]]; then
+  "${psql[@]}" -f "$repo_dir/tests/db/repetition_series.sql"
+  "${psql[@]}" -f "$repo_dir/tests/db/repetition_series_history.sql"
+  "${psql[@]}" -f "$repo_dir/tests/db/repetition_series_lifecycle.sql"
+  "${psql[@]}" -f "$repo_dir/tests/db/repetition_series_copy.sql"
+  "${psql[@]}" -f "$repo_dir/tests/db/repetition_series_recovery.sql"
+  "${psql[@]}" -f "$repo_dir/tests/db/repetition_series_recovery_security.sql"
+  "${psql[@]}" -f "$repo_dir/tests/db/repetition_series_recovery_race_fixture.sql"
+  bash "$repo_dir/scripts/test-db-issue-28-race.sh" \
+    "$pg_bin/psql" "$test_dir" 55439 "$test_dir/issue28-race"
+  printf 'Issue #28 database regression tests passed (disposable PostgreSQL).\n'
+  exit 0
+fi
 "${psql[@]}" -f "$repo_dir/tests/db/closed_access.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/authentication.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/realtime_epoch.sql"
@@ -279,9 +292,20 @@ fi
 "${psql[@]}" -q -f "$repo_dir/tests/db/board_favorites.sql"
 "${psql[@]}" -q -f "$repo_dir/tests/db/theme_preferences.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/repetition_edit.sql"
+# Keep the issue #26 race adjacent to its fixture: later series tests may
+# run the scheduler and consume the fixture's intentionally due job.
 bash "$repo_dir/scripts/test-db-issue-26-race.sh" \
   "$pg_bin/psql" "$test_dir" 55439 "$test_dir/issue26-race"
 "${psql[@]}" -f "$repo_dir/tests/db/issue26_worker_claim.sql"
+"${psql[@]}" -f "$repo_dir/tests/db/repetition_series.sql"
+"${psql[@]}" -f "$repo_dir/tests/db/repetition_series_history.sql"
+"${psql[@]}" -f "$repo_dir/tests/db/repetition_series_lifecycle.sql"
+"${psql[@]}" -f "$repo_dir/tests/db/repetition_series_copy.sql"
+"${psql[@]}" -f "$repo_dir/tests/db/repetition_series_recovery.sql"
+"${psql[@]}" -f "$repo_dir/tests/db/repetition_series_recovery_security.sql"
+"${psql[@]}" -f "$repo_dir/tests/db/repetition_series_recovery_race_fixture.sql"
+bash "$repo_dir/scripts/test-db-issue-28-race.sh" \
+  "$pg_bin/psql" "$test_dir" 55439 "$test_dir/issue28-race"
 
 # Suspension takes the account lock before boards. A waiting task write and
 # outgoing invitation must observe the committed suspension before touching a

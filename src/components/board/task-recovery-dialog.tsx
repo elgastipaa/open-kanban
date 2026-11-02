@@ -11,6 +11,11 @@ import {
   restoreColumn,
 } from "@/lib/db/columns";
 import {
+  type DeletedRepetitionSeriesItem,
+  listDeletedRepetitionSeries,
+  restoreRepetitionSeries,
+} from "@/lib/db/repetition-series";
+import {
   listDeletedTaskChecklistSteps,
   listDeletedTasks,
   restoreTask,
@@ -19,6 +24,7 @@ import {
   TaskRecoveryError,
   type TaskRecoveryItem,
 } from "@/lib/db/tasks";
+import { getRepetitionSeriesRestoreAction } from "@/lib/repetition-series-recovery-state";
 import { createClient } from "@/lib/supabase/client";
 import {
   formatTaskRecoveryTimestamp,
@@ -45,6 +51,7 @@ interface TaskRecoveryDialogProps {
   onClose: () => void;
   onRestored: () => Promise<void>;
   slug: string;
+  boardId: string;
   timeZone: string;
   columns: RecoveryColumn[];
 }
@@ -61,11 +68,16 @@ type TimedColumnRecoveryItem = DeletedColumnRecoveryItem & {
   eligibilityRequestStartedAtMonotonic: number;
 };
 
+type TimedSeriesRecoveryItem = DeletedRepetitionSeriesItem & {
+  eligibilityRequestStartedAtMonotonic: number;
+};
+
 export function TaskRecoveryDialog({
   open,
   onClose,
   onRestored,
   slug,
+  boardId,
   timeZone,
   columns,
 }: TaskRecoveryDialogProps) {
@@ -74,6 +86,7 @@ export function TaskRecoveryDialog({
     TimedChecklistRecoveryItem[]
   >([]);
   const [columnItems, setColumnItems] = useState<TimedColumnRecoveryItem[]>([]);
+  const [seriesItems, setSeriesItems] = useState<TimedSeriesRecoveryItem[]>([]);
   const [selectedDestinations, setSelectedDestinations] = useState<
     Record<string, string>
   >({});
@@ -83,6 +96,12 @@ export function TaskRecoveryDialog({
   const [restoringColumnId, setRestoringColumnId] = useState<string | null>(
     null,
   );
+  const [restoringSeriesId, setRestoringSeriesId] = useState<string | null>(
+    null,
+  );
+  const [selectedSeriesDestinations, setSelectedSeriesDestinations] = useState<
+    Record<string, string>
+  >({});
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [monotonicNow, setMonotonicNow] = useState(0);
@@ -92,7 +111,11 @@ export function TaskRecoveryDialog({
   const listViewState = getTaskRecoveryListViewState({
     isLoading,
     hasError: Boolean(error),
-    itemCount: items.length + checklistItems.length + columnItems.length,
+    itemCount:
+      items.length +
+      checklistItems.length +
+      columnItems.length +
+      seriesItems.length,
     hasCurrentEligibility,
   });
 
@@ -105,12 +128,16 @@ export function TaskRecoveryDialog({
     try {
       const client = createClient();
       const eligibilityRequestStartedAtMonotonic = performance.now();
-      const [listedItems, listedChecklistItems, listedColumns] =
+      const [listedItems, listedChecklistItems, listedColumns, listedSeries] =
         await Promise.all([
           listDeletedTasks(client, slug),
           listDeletedTaskChecklistSteps(client, slug),
           listDeletedColumns(client, slug),
+          listDeletedRepetitionSeries(client, boardId),
         ]);
+      if (listedSeries.status !== "available") {
+        throw new Error("Series recovery is unavailable");
+      }
       if (refreshId !== latestRefreshId.current) return;
       const eligibilityResponseReceivedAtMonotonic = performance.now();
       setItems(
@@ -131,6 +158,12 @@ export function TaskRecoveryDialog({
           eligibilityRequestStartedAtMonotonic,
         })),
       );
+      setSeriesItems(
+        listedSeries.series.map((item) => ({
+          ...item,
+          eligibilityRequestStartedAtMonotonic,
+        })),
+      );
       setMonotonicNow(eligibilityResponseReceivedAtMonotonic);
       hasCurrentEligibilityRef.current = true;
       setHasCurrentEligibility(true);
@@ -146,25 +179,52 @@ export function TaskRecoveryDialog({
         setItems([]);
         setChecklistItems([]);
         setColumnItems([]);
+        setSeriesItems([]);
       }
       setError(taskRecoveryLoadErrorMessage(reason));
     } finally {
       if (refreshId === latestRefreshId.current) setIsLoading(false);
     }
-  }, [slug]);
+  }, [boardId, slug]);
 
   useEffect(() => {
     if (!open) return;
     setItems([]);
     setChecklistItems([]);
     setColumnItems([]);
+    setSeriesItems([]);
     setSelectedDestinations({});
+    setSelectedSeriesDestinations({});
     setError("");
     setMessage("");
     hasCurrentEligibilityRef.current = false;
     setHasCurrentEligibility(false);
     void refresh();
   }, [open, refresh]);
+
+  useEffect(() => {
+    if (!open || seriesItems.length === 0) return;
+    const currentMonotonicTime = Math.max(performance.now(), monotonicNow);
+    const nextDeadline = seriesItems
+      .filter((item) => item.can_restore)
+      .map((item) =>
+        getTaskRecoveryExpiryMonotonicTime(
+          item,
+          item.eligibilityRequestStartedAtMonotonic,
+        ),
+      )
+      .filter(
+        (deadline): deadline is number =>
+          deadline !== null && deadline > currentMonotonicTime,
+      )
+      .sort((left, right) => left - right)[0];
+    if (nextDeadline === undefined) return;
+    const timer = window.setTimeout(
+      () => setMonotonicNow(performance.now()),
+      Math.max(0, nextDeadline - currentMonotonicTime),
+    );
+    return () => window.clearTimeout(timer);
+  }, [monotonicNow, open, seriesItems]);
 
   useEffect(() => {
     if (!open) return;
@@ -435,6 +495,94 @@ export function TaskRecoveryDialog({
     }
   }
 
+  async function recoverSeries(item: TimedSeriesRecoveryItem) {
+    if (!hasCurrentEligibilityRef.current) {
+      setError(
+        "Actualizando la lista. Espera a que se confirme la disponibilidad.",
+      );
+      return;
+    }
+    const action = getRepetitionSeriesRestoreAction(
+      item,
+      columns.map((column) => column.id),
+      selectedSeriesDestinations[item.series_id] ?? null,
+      item.eligibilityRequestStartedAtMonotonic,
+      performance.now(),
+    );
+    if (action.status === "expired") {
+      setError(
+        "El plazo de recuperación venció. Esta serie ya no se puede recuperar.",
+      );
+      return;
+    }
+    if (action.status === "needs_destination") {
+      setError("Elige una columna vigente para las próximas apariciones.");
+      return;
+    }
+    if (action.status === "unavailable") {
+      setError(
+        item.generation_available
+          ? "Recupera primero las columnas que contienen ocurrencias de esta serie."
+          : "Esta serie pertenece a una generación del tablero que ya no está disponible.",
+      );
+      return;
+    }
+
+    setRestoringSeriesId(item.series_id);
+    setError("");
+    setMessage("");
+    try {
+      const result = await restoreRepetitionSeries(createClient(), {
+        operationId: generateUUID(),
+        slug,
+        seriesId: item.series_id,
+        targetAppearanceColumnId: action.targetColumnId,
+      });
+      if (result.status === "confirmed") {
+        setMessage(
+          result.state === "stopped"
+            ? "Serie recuperada. Sigue detenida; no se reactivaron próximas apariciones."
+            : result.state === "finished"
+              ? "Serie recuperada. Se conservaron su estado final y el historial."
+              : "Serie recuperada con su historial. Se programó solo la próxima aparición vigente.",
+        );
+        try {
+          await onRestored();
+        } catch {
+          setMessage(
+            "Serie recuperada. No se pudo actualizar el tablero; vuelve a cargarlo.",
+          );
+        }
+        await refresh();
+      } else if (result.status === "expired") {
+        await refresh();
+        setError(
+          "El plazo de recuperación venció. Esta serie ya no se puede recuperar.",
+        );
+      } else if (result.status === "needs_destination") {
+        await refresh();
+        setError("Elige una columna vigente para las próximas apariciones.");
+      } else if (result.status === "needs_parent") {
+        await refresh();
+        setError(
+          "Recupera primero las columnas y la generación original del tablero.",
+        );
+      } else {
+        await refresh();
+        setError(
+          "La serie ya no está disponible para recuperar. Actualiza la lista.",
+        );
+      }
+    } catch {
+      await refresh();
+      setError(
+        "No se pudo confirmar si la serie se recuperó. Actualiza la lista antes de volver a intentarlo.",
+      );
+    } finally {
+      setRestoringSeriesId(null);
+    }
+  }
+
   return (
     <Modal
       open={open}
@@ -445,8 +593,8 @@ export function TaskRecoveryDialog({
     >
       <div className="space-y-5 text-text-primary">
         <p className="text-sm text-text-secondary">
-          Las tareas, columnas y pasos se pueden recuperar durante siete días
-          desde su eliminación. Abrir esta lista no restaura nada
+          Las tareas, columnas, pasos y series se pueden recuperar durante siete
+          días desde su eliminación. Abrir esta lista no restaura nada
           automáticamente.
         </p>
 
@@ -459,7 +607,8 @@ export function TaskRecoveryDialog({
               isLoading ||
               restoringTaskId !== null ||
               restoringStepId !== null ||
-              restoringColumnId !== null
+              restoringColumnId !== null ||
+              restoringSeriesId !== null
             }
             aria-label="Actualizar recuperación"
             title="Actualizar recuperación"
@@ -469,6 +618,129 @@ export function TaskRecoveryDialog({
             Actualizar
           </Button>
         </div>
+
+        {hasCurrentEligibility && seriesItems.length > 0 ? (
+          <section aria-labelledby="deleted-repetition-series-heading">
+            <h3
+              id="deleted-repetition-series-heading"
+              className="mb-2 font-semibold text-sm"
+            >
+              Series eliminadas
+            </h3>
+            <ul className="divide-y divide-border rounded-lg border border-border">
+              {seriesItems.map((item) => {
+                const selectedDestination =
+                  selectedSeriesDestinations[item.series_id] ?? null;
+                const action = getRepetitionSeriesRestoreAction(
+                  item,
+                  columns.map((column) => column.id),
+                  selectedDestination,
+                  item.eligibilityRequestStartedAtMonotonic,
+                  monotonicNow,
+                );
+                const isRestoring = restoringSeriesId === item.series_id;
+                const destinationFieldId = `series-recovery-destination-${item.series_id}`;
+                return (
+                  <li
+                    key={item.series_id}
+                    className="flex flex-col gap-4 p-4 sm:flex-row sm:items-start sm:justify-between"
+                  >
+                    <div className="min-w-0 space-y-1">
+                      <p className="break-words font-medium text-sm">
+                        {item.title || "Serie sin título"}
+                      </p>
+                      <p className="text-text-muted text-xs">
+                        {item.occurrence_count} ocurrencias ·{" "}
+                        {item.state === "active"
+                          ? "Estaba activa"
+                          : item.state === "stopped"
+                            ? "Estaba detenida"
+                            : "Estaba finalizada"}
+                      </p>
+                      <p className="text-text-muted text-xs">
+                        Eliminada:{" "}
+                        {formatTaskRecoveryTimestamp(item.deleted_at, timeZone)}
+                      </p>
+                      <p className="text-text-muted text-xs">
+                        Vence:{" "}
+                        {formatTaskRecoveryTimestamp(item.expires_at, timeZone)}
+                      </p>
+                      {action.status === "expired" ? (
+                        <p className="text-priority-urgent text-xs">
+                          El plazo venció; no se puede recuperar.
+                        </p>
+                      ) : action.status === "unavailable" ? (
+                        <p className="text-text-muted text-xs">
+                          {item.generation_available
+                            ? "Recupera primero las columnas de las ocurrencias."
+                            : "La generación original del tablero ya no está disponible."}
+                        </p>
+                      ) : action.status === "needs_destination" ? (
+                        columns.length > 0 ? (
+                          <div className="space-y-1 pt-2">
+                            <label
+                              htmlFor={destinationFieldId}
+                              className="block text-text-secondary text-xs"
+                            >
+                              Columna para próximas apariciones
+                            </label>
+                            <select
+                              id={destinationFieldId}
+                              value={selectedDestination ?? ""}
+                              onChange={(event) =>
+                                setSelectedSeriesDestinations((current) => ({
+                                  ...current,
+                                  [item.series_id]: event.target.value,
+                                }))
+                              }
+                              disabled={restoringSeriesId !== null}
+                              className="min-h-10 w-full rounded-md border border-border bg-surface-base px-3 text-sm focus:border-accent focus:outline-none sm:min-w-64"
+                            >
+                              <option value="">Elige una columna</option>
+                              {columns.map((column) => (
+                                <option key={column.id} value={column.id}>
+                                  {column.title}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        ) : (
+                          <p className="pt-2 text-text-muted text-xs">
+                            Crea una columna vigente antes de recuperar esta
+                            serie.
+                          </p>
+                        )
+                      ) : null}
+                    </div>
+                    {action.status === "restore" ||
+                    action.status === "needs_destination" ? (
+                      <Button
+                        type="button"
+                        variant="primary"
+                        onClick={() => void recoverSeries(item)}
+                        disabled={
+                          restoringTaskId !== null ||
+                          restoringStepId !== null ||
+                          restoringColumnId !== null ||
+                          restoringSeriesId !== null ||
+                          action.status !== "restore"
+                        }
+                        aria-label={`Recuperar serie: ${item.title || "Sin título"}`}
+                        className="min-h-11 shrink-0"
+                      >
+                        {isRestoring ? "Recuperando…" : "Recuperar serie"}
+                      </Button>
+                    ) : (
+                      <span className="shrink-0 text-sm text-text-muted">
+                        No recuperable
+                      </span>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        ) : null}
 
         {listViewState === "loading" ? (
           <output className="text-sm text-text-muted" aria-live="polite">
@@ -594,7 +866,8 @@ export function TaskRecoveryDialog({
           </ul>
         ) : listViewState === "empty" ? (
           <p className="rounded-lg border border-border border-dashed p-4 text-sm text-text-muted">
-            No hay tareas ni pasos eliminados para recuperar en este tablero.
+            No hay tareas, pasos, columnas ni series eliminadas para recuperar
+            en este tablero.
           </p>
         ) : null}
 

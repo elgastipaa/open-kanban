@@ -199,25 +199,32 @@ export function ColumnDeletionDialog({
                 className="text-sm text-text-secondary leading-relaxed"
                 aria-live="polite"
               >
-                {columnDeletionNoDestinationMessage(state.preview.task_count)}
+                {columnDeletionNoDestinationMessage(
+                  state.preview.task_count,
+                  state.preview.series_count,
+                )}
               </output>
             ) : (
               <>
                 <p className="text-sm text-text-secondary leading-relaxed">
-                  {state.preview.task_count === 0
+                  {state.preview.task_count === 0 &&
+                  state.preview.series_count === 0
                     ? `La columna “${state.preview.column_title}” está vacía.`
-                    : `La columna “${state.preview.column_title}” tiene ${state.preview.task_count} ${state.preview.task_count === 1 ? "tarea" : "tareas"}. Elige dónde trasladarlas antes de eliminarla.`}{" "}
+                    : `La columna “${state.preview.column_title}” tiene ${state.preview.task_count} ${state.preview.task_count === 1 ? "tarea" : "tareas"} y ${state.preview.series_count} ${state.preview.series_count === 1 ? "próxima aparición de serie" : "próximas apariciones de series"}. Elige una columna de destino antes de eliminarla.`}{" "}
                   Podrás recuperar su estructura durante siete días; los
                   traslados no se deshacen.
                 </p>
 
-                {state.preview.task_count > 0 ? (
+                {state.preview.task_count > 0 ||
+                state.preview.series_count > 0 ? (
                   <div className="space-y-2">
                     <label
                       htmlFor={destinationId}
                       className="block font-medium text-sm text-text-primary"
                     >
-                      Trasladar las tareas a
+                      {state.preview.task_count > 0
+                        ? "Trasladar las tareas y resolver las próximas apariciones en"
+                        : "Resolver las próximas apariciones en"}
                     </label>
                     <select
                       id={destinationId}

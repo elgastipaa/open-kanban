@@ -1350,6 +1350,7 @@ function BoardWorkspace({
           await refreshFromDB();
         }}
         slug={slug}
+        boardId={board?.id ?? initialBoard.id}
         timeZone={board?.time_zone ?? initialBoard.time_zone}
         columns={columns.map((column) => ({
           id: column.id,
@@ -1406,6 +1407,7 @@ function BoardWorkspace({
             description: columnDeletionSuccessMessage(
               result.moved_task_count,
               recoverableUntil,
+              result.moved_series_count,
             ),
           });
         }}

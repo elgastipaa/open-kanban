@@ -20,6 +20,8 @@ const preview = {
   column_id: "source",
   column_title: "Por hacer",
   task_count: 2,
+  series_count: 0,
+  series_token: "empty-series-token",
   task_order_version: 7,
   destinations: [
     { id: "destination", title: "En curso", position: 1 },
@@ -40,6 +42,30 @@ test("an empty column can be removed without a destination", () => {
   assert.equal(
     columnDeletionDecision({ ...preview, task_count: 0 }, null),
     "ready",
+  );
+});
+
+test("a future series appearance requires the same explicit column destination as tasks", () => {
+  const seriesOnly = {
+    ...preview,
+    task_count: 0,
+    series_count: 1,
+    series_token: "appearance-set-v1",
+  };
+  assert.equal(columnDeletionDecision(seriesOnly, null), "needs_destination");
+  assert.equal(
+    createColumnDeletionCommand(seriesOnly, null, "op-series"),
+    null,
+  );
+  assert.deepEqual(
+    createColumnDeletionCommand(seriesOnly, "destination", "op-series"),
+    {
+      operation_id: "op-series",
+      column_id: "source",
+      destination_column_id: "destination",
+      expected_task_order_version: 7,
+      expected_series_token: "appearance-set-v1",
+    },
   );
 });
 
@@ -88,6 +114,14 @@ test("successful deletion toast distinguishes no transfer, singular, and plural 
   );
 });
 
+test("successful deletion explains that future appearances use the selected column", () => {
+  const expiry = "8 nov 2026, 14:30";
+  assert.equal(
+    columnDeletionSuccessMessage(0, expiry, 1),
+    `La próxima aparición de 1 serie usará esa columna. La estructura se podrá recuperar hasta ${expiry}.`,
+  );
+});
+
 test("a legacy deletion receipt without expiry asks the user to check recovery", () => {
   assert.equal(
     columnDeletionSuccessMessage(undefined, null),
@@ -103,6 +137,7 @@ test("a deletion command carries the preview version and selected destination", 
       column_id: "source",
       destination_column_id: "destination",
       expected_task_order_version: 7,
+      expected_series_token: "empty-series-token",
     },
   );
   assert.equal(createColumnDeletionCommand(preview, null, "operation-2"), null);
@@ -142,6 +177,7 @@ test("preview resolution gates confirmation and carries the selected destination
     column_id: "source",
     destination_column_id: "destination",
     expected_task_order_version: 7,
+    expected_series_token: "empty-series-token",
   });
 });
 
@@ -158,6 +194,7 @@ test("uncertain submission preserves the same command for an idempotent retry", 
     column_id: "source",
     destination_column_id: "destination",
     expected_task_order_version: 7,
+    expected_series_token: "empty-series-token",
   });
 
   const retryable = failColumnDeletionSubmission(submission.state, "uncertain");

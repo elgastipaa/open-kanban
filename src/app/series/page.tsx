@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { CopyOccurrenceLinkAction } from "@/components/series/copy-occurrence-link-action";
+import { DeleteSeriesButton } from "@/components/series/delete-series-button";
 import { HistoricalTaskCopyAction } from "@/components/series/historical-task-copy-action";
 import { StopSeriesButton } from "@/components/series/stop-series-button";
 import { Logo } from "@/components/ui/logo";
@@ -540,13 +541,21 @@ export default async function SeriesPage({ searchParams }: SeriesPageProps) {
                     · {selectedHistorySeries.consumed_count} ocurrencias
                   </p>
                 </div>
-                {selectedHistorySeries.state === "active" ? (
-                  <StopSeriesButton
+                <div className="flex flex-col items-start gap-3">
+                  {selectedHistorySeries.state === "active" ? (
+                    <StopSeriesButton
+                      slug={selectedHistorySeries.board_slug}
+                      seriesId={selectedHistorySeries.id}
+                      revision={selectedHistorySeries.revision}
+                    />
+                  ) : null}
+                  <DeleteSeriesButton
                     slug={selectedHistorySeries.board_slug}
+                    boardId={selectedHistorySeries.board_id}
                     seriesId={selectedHistorySeries.id}
-                    revision={selectedHistorySeries.revision}
+                    returnState={selectedState}
                   />
-                ) : null}
+                </div>
               </div>
 
               {selectedHistorySeries.state === "stopped" &&

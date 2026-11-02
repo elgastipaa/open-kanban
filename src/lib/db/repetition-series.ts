@@ -154,6 +154,74 @@ export interface StopRepetitionResult {
   consumed_count?: number;
 }
 
+export interface RepetitionSeriesDeletionPreview {
+  status: "available" | "unavailable";
+  series_id?: string;
+  board_id?: string;
+  board_slug?: string;
+  state?: "active" | "stopped" | "finished";
+  revision?: number;
+  occurrence_count?: number;
+  task_count?: number;
+  title?: string | null;
+  requires_confirmation?: boolean;
+  retention_hours?: number;
+}
+
+export interface RepetitionSeriesDeletionResult {
+  status:
+    | "confirmed"
+    | "conflict"
+    | "unavailable"
+    | "confirmation_required"
+    | "expired_unknown";
+  operation_id?: string;
+  series_id?: string;
+  state?: "active" | "stopped" | "finished";
+  deleted_at?: string;
+  expires_at?: string;
+  occurrence_count?: number;
+  task_count?: number;
+}
+
+export interface DeletedRepetitionSeriesItem {
+  series_id: string;
+  board_id: string;
+  board_slug: string;
+  board_name: string;
+  title: string | null;
+  state: "active" | "stopped" | "finished";
+  deleted_at: string;
+  expires_at: string;
+  occurrence_count: number;
+  can_restore: boolean;
+  generation_available: boolean;
+  appearance_column_available: boolean;
+  child_columns_available: boolean;
+  eligibility_checked_at: string;
+}
+
+export interface DeletedRepetitionSeriesPage {
+  status: "available" | "unavailable";
+  series: DeletedRepetitionSeriesItem[];
+}
+
+export interface RepetitionSeriesRestoreResult {
+  status:
+    | "confirmed"
+    | "expired"
+    | "unavailable"
+    | "needs_parent"
+    | "needs_destination"
+    | "expired_unknown";
+  operation_id?: string;
+  series_id?: string;
+  state?: "active" | "stopped" | "finished";
+  series_revision?: number;
+  next_due_on?: string | null;
+  appearance_column_id?: string;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -265,4 +333,71 @@ export function stopRepetitionSeries(
     p_series_id: command.seriesId,
     p_expected_revision: command.expectedRevision,
   });
+}
+
+export function previewDeleteRepetitionSeries(
+  supabase: SupabaseClient,
+  slug: string,
+  seriesId: string,
+) {
+  return callRpc<RepetitionSeriesDeletionPreview>(
+    supabase,
+    "preview_delete_repetition_series_p",
+    { p_slug: slug, p_series_id: seriesId },
+  );
+}
+
+export function deleteRepetitionSeries(
+  supabase: SupabaseClient,
+  command: {
+    operationId: string;
+    slug: string;
+    seriesId: string;
+    expectedRevision: number;
+    confirmHistory: boolean;
+  },
+) {
+  return callRpc<RepetitionSeriesDeletionResult>(
+    supabase,
+    "delete_repetition_series_p",
+    {
+      p_operation_id: command.operationId,
+      p_slug: command.slug,
+      p_series_id: command.seriesId,
+      p_expected_revision: command.expectedRevision,
+      p_confirm_history: command.confirmHistory,
+    },
+  );
+}
+
+export function listDeletedRepetitionSeries(
+  supabase: SupabaseClient,
+  boardId: string,
+) {
+  return callRpc<DeletedRepetitionSeriesPage>(
+    supabase,
+    "list_deleted_repetition_series_p",
+    { p_board_id: boardId },
+  );
+}
+
+export function restoreRepetitionSeries(
+  supabase: SupabaseClient,
+  command: {
+    operationId: string;
+    slug: string;
+    seriesId: string;
+    targetAppearanceColumnId: string | null;
+  },
+) {
+  return callRpc<RepetitionSeriesRestoreResult>(
+    supabase,
+    "restore_repetition_series_p",
+    {
+      p_operation_id: command.operationId,
+      p_slug: command.slug,
+      p_series_id: command.seriesId,
+      p_target_appearance_column_id: command.targetAppearanceColumnId,
+    },
+  );
 }

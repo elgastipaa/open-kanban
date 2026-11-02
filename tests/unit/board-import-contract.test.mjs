@@ -41,6 +41,16 @@ test("the owner-facing UI shows the version and requires explicit replacement co
   assert.match(dialog, /propietario y los integrantes/u);
   assert.match(dialog, /siete días/u);
   assert.match(dialog, /Revisión del contenido/u);
+  assert.match(
+    dialog,
+    /pendingPreparation\?\.operationId \?\? crypto\.randomUUID\(\)/u,
+  );
+  assert.match(dialog, /No se pudo confirmar el resultado de la preparación/u);
+  assert.match(dialog, /No se pudo confirmar el resultado del reemplazo/u);
+  assert.doesNotMatch(
+    dialog,
+    /prepareError\.message|confirmError\.message|row\?\.message/u,
+  );
   assert.match(dialog, /role="alert"/u);
   assert.match(dialog, /<output aria-live="polite"/u);
   assert.match(board, /<BoardImportDialog/u);
@@ -86,6 +96,14 @@ test("the database stages invisible generations and revalidates publication unde
   assert.match(migration, /cleanup_expired_board_import_operations_p/u);
   assert.match(migration, /cleanup_expired_board_generation_retention_p/u);
   assert.match(migration, /confirmed_at <= v_now - interval '168 hours'/u);
+  assert.match(
+    migration,
+    /LIMIT LEAST\(p_limit - v_cleaned, 100\)\s+FOR UPDATE OF operation SKIP LOCKED/u,
+  );
+  assert.match(
+    migration,
+    /LIMIT LEAST\(GREATEST\(p_limit - v_cleaned, 0\), 100\)/u,
+  );
   assert.match(migration, /generation_id = v_generation_id/u);
   assert.doesNotMatch(migration, /board_import_restore_previews/u);
   assert.doesNotMatch(migration, /list_board_import_recoveries_p/u);

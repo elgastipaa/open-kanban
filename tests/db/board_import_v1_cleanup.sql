@@ -1,6 +1,79 @@
 \set ON_ERROR_STOP on
 \echo Testing expiration and quota cleanup of prior import generations
 
+-- p_limit caps expired prepared generations within one board, not just board count.
+WITH fixture AS (
+  SELECT board.id AS board_id, board.active_generation_id, board.owner_id
+  FROM public.issue43_import_fixture AS import_fixture
+  JOIN public.boards AS board ON board.id = import_fixture.board_id
+), synthetic(generation_id, operation_id) AS (
+  VALUES
+    ('a4390000-0000-4000-8000-00000000000a'::uuid, 'a4360000-0000-4000-8000-00000000000a'::uuid),
+    ('a4390000-0000-4000-8000-00000000000b'::uuid, 'a4360000-0000-4000-8000-00000000000b'::uuid),
+    ('a4390000-0000-4000-8000-00000000000c'::uuid, 'a4360000-0000-4000-8000-00000000000c'::uuid)
+)
+INSERT INTO public.board_generations(id, board_id, status, created_by)
+SELECT synthetic.generation_id, fixture.board_id, 'preparing', fixture.owner_id
+FROM fixture CROSS JOIN synthetic;
+WITH fixture AS (
+  SELECT board.id AS board_id, board.active_generation_id, board.owner_id
+  FROM public.issue43_import_fixture AS import_fixture
+  JOIN public.boards AS board ON board.id = import_fixture.board_id
+), synthetic(generation_id, operation_id) AS (
+  VALUES
+    ('a4390000-0000-4000-8000-00000000000a'::uuid, 'a4360000-0000-4000-8000-00000000000a'::uuid),
+    ('a4390000-0000-4000-8000-00000000000b'::uuid, 'a4360000-0000-4000-8000-00000000000b'::uuid),
+    ('a4390000-0000-4000-8000-00000000000c'::uuid, 'a4360000-0000-4000-8000-00000000000c'::uuid)
+)
+INSERT INTO public.board_import_operations(
+  actor_id, operation_id, board_id, generation_id, base_generation_id,
+  expected_content_revision, source_sha256, staged_content_hash, status,
+  created_at, expires_at
+)
+SELECT fixture.owner_id, synthetic.operation_id, fixture.board_id,
+  synthetic.generation_id, fixture.active_generation_id, 1, repeat('f', 64),
+  extensions.digest(convert_to('issue43 batch fixture', 'UTF8'), 'sha256'),
+  'prepared', clock_timestamp() - interval '2 hours', clock_timestamp() - interval '1 hour'
+FROM fixture CROSS JOIN synthetic;
+BEGIN;
+SET LOCAL ROLE service_role;
+SELECT public.cleanup_expired_board_import_operations_p(2);
+COMMIT;
+DO $$
+BEGIN
+  IF (SELECT count(*) FROM public.board_import_operations
+      WHERE operation_id IN (
+        'a4360000-0000-4000-8000-00000000000a',
+        'a4360000-0000-4000-8000-00000000000b',
+        'a4360000-0000-4000-8000-00000000000c'
+      ) AND status = 'expired') <> 2
+    OR (SELECT count(*) FROM public.board_generations
+      WHERE id IN (
+        'a4390000-0000-4000-8000-00000000000a',
+        'a4390000-0000-4000-8000-00000000000b',
+        'a4390000-0000-4000-8000-00000000000c'
+      )) <> 1 THEN
+    RAISE EXCEPTION 'Import cleanup exceeded or missed the per-call row limit';
+  END IF;
+END;
+$$;
+BEGIN;
+SET LOCAL ROLE service_role;
+SELECT public.cleanup_expired_board_import_operations_p(1);
+COMMIT;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM public.board_generations
+      WHERE id IN (
+        'a4390000-0000-4000-8000-00000000000a',
+        'a4390000-0000-4000-8000-00000000000b',
+        'a4390000-0000-4000-8000-00000000000c'
+      )) THEN
+    RAISE EXCEPTION 'Import cleanup did not finish the bounded backlog';
+  END IF;
+END;
+$$;
+
 -- Expired unconfirmed previews are removed by the service cleanup worker.
 BEGIN;
 SET LOCAL ROLE authenticated;

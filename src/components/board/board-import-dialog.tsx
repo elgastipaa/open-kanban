@@ -34,6 +34,13 @@ interface ImportPreview {
   capacity: CapacitySnapshot;
 }
 
+interface PendingPreparation {
+  operationId: string;
+  fileName: string;
+  fileSize: number;
+  fileLastModified: number;
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -150,7 +157,6 @@ function describeError(body: unknown, fallback: string): string {
   if (row?.status === "expired") {
     return "La vista previa venció. Prepara la operación otra vez.";
   }
-  if (typeof row?.message === "string") return row.message;
   return fallback;
 }
 
@@ -190,6 +196,8 @@ export function BoardImportDialog({
   const [importPreview, setImportPreview] = useState<ImportPreview | null>(
     null,
   );
+  const [pendingPreparation, setPendingPreparation] =
+    useState<PendingPreparation | null>(null);
   const [isPreparing, setIsPreparing] = useState(false);
   const [isConfirming, setIsConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -211,6 +219,14 @@ export function BoardImportDialog({
   function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
     const selected = event.target.files?.[0] ?? null;
     setFile(selected);
+    setPendingPreparation((pending) =>
+      selected &&
+      pending?.fileName === selected.name &&
+      pending.fileSize === selected.size &&
+      pending.fileLastModified === selected.lastModified
+        ? pending
+        : null,
+    );
     setImportPreview(null);
     setError(null);
     setNotice(null);
@@ -226,7 +242,14 @@ export function BoardImportDialog({
     setError(null);
     setNotice(null);
     try {
-      const operationId = crypto.randomUUID();
+      const operationId =
+        pendingPreparation?.operationId ?? crypto.randomUUID();
+      setPendingPreparation({
+        operationId,
+        fileName: file.name,
+        fileSize: file.size,
+        fileLastModified: file.lastModified,
+      });
       const form = new FormData();
       form.set("operation_id", operationId);
       form.set("file", file);
@@ -237,16 +260,17 @@ export function BoardImportDialog({
       const body: unknown = await response.json();
       const parsed = parsePreview(body);
       if (!response.ok || !parsed || parsed.source_sha256 === undefined) {
-        throw new Error(
-          describeError(body, "No se pudo preparar el respaldo v1."),
-        );
+        if (asRecord(body)?.status === "conflict") {
+          setPendingPreparation(null);
+        }
+        setError(describeError(body, "No se pudo preparar el respaldo v1."));
+        return;
       }
+      setPendingPreparation(null);
       setImportPreview(parsed);
-    } catch (prepareError) {
+    } catch {
       setError(
-        prepareError instanceof Error
-          ? prepareError.message
-          : "No se pudo preparar el respaldo v1.",
+        "No se pudo confirmar el resultado de la preparación. Vuelve a intentarlo con el mismo archivo para consultar la misma operación.",
       );
     } finally {
       setIsPreparing(false);
@@ -274,9 +298,8 @@ export function BoardImportDialog({
       const body: unknown = await response.json();
       if (!response.ok || asRecord(body)?.status !== "confirmed") {
         if (asRecord(body)?.status === "conflict") setImportPreview(null);
-        throw new Error(
-          describeError(body, "No se pudo confirmar el reemplazo."),
-        );
+        setError(describeError(body, "No se pudo confirmar el reemplazo."));
+        return;
       }
       setImportPreview(null);
       try {
@@ -287,11 +310,9 @@ export function BoardImportDialog({
           "El reemplazo se confirmó, pero no se pudo actualizar la vista. Recarga la página para ver el contenido nuevo.",
         );
       }
-    } catch (confirmError) {
+    } catch {
       setError(
-        confirmError instanceof Error
-          ? confirmError.message
-          : "No se pudo confirmar el reemplazo. Puedes reintentar sin volver a cargar el archivo.",
+        "No se pudo confirmar el resultado del reemplazo. Vuelve a confirmar la misma vista previa sin volver a cargar el archivo.",
       );
     } finally {
       setIsConfirming(false);

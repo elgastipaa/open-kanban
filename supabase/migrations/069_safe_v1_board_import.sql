@@ -1102,6 +1102,7 @@ BEGIN
     ORDER BY board.id
     LIMIT LEAST(p_limit, 100)
   LOOP
+    EXIT WHEN v_cleaned >= p_limit;
     PERFORM 1 FROM public.boards AS board
     WHERE board.id = v_board_id FOR UPDATE SKIP LOCKED;
     IF NOT FOUND THEN CONTINUE; END IF;
@@ -1118,6 +1119,8 @@ BEGIN
             AND operation.expires_at <= v_now)
           OR operation.status IN ('conflict', 'expired', 'cancelled')
         )
+      ORDER BY operation.operation_id
+      LIMIT LEAST(p_limit - v_cleaned, 100)
       FOR UPDATE OF operation SKIP LOCKED
     LOOP
       IF v_operation.status IN ('staging', 'prepared') THEN
@@ -1144,7 +1147,7 @@ BEGIN
         AND operation.expires_at <= v_now - interval '168 hours')
     ORDER BY COALESCE(operation.confirmed_at, operation.expires_at),
       operation.actor_id, operation.operation_id
-    LIMIT LEAST(p_limit, 100)
+    LIMIT LEAST(GREATEST(p_limit - v_cleaned, 0), 100)
     FOR UPDATE OF operation SKIP LOCKED
   )
   DELETE FROM public.board_import_operations AS operation

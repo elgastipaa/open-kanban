@@ -23,10 +23,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Modal } from "@/components/ui/modal";
+import type { RepetitionEditOperationStore } from "@/lib/daily-repetition-edit-state";
 import type { RepetitionOperationStore } from "@/lib/daily-repetition-state";
 import type {
   RepetitionCreateCommand,
   RepetitionCreateResult,
+  RepetitionEditCommand,
+  RepetitionEditPreview,
+  RepetitionEditResult,
   RepetitionPattern,
   RepetitionPreview,
   RepetitionStatus,
@@ -124,11 +128,19 @@ interface TaskModalProps {
     endOn: string | null,
     occurrenceLimit: number | null,
     pattern: RepetitionPattern,
+    advanceDays: number,
   ) => Promise<RepetitionPreview>;
   onCreateRepetition: (
     command: RepetitionCreateCommand,
   ) => Promise<RepetitionCreateResult>;
+  onPreviewRepetitionEdit: (
+    command: Omit<RepetitionEditCommand, "operation_id" | "expected_revision">,
+  ) => Promise<RepetitionEditPreview>;
+  onEditRepetition: (
+    command: RepetitionEditCommand,
+  ) => Promise<RepetitionEditResult>;
   repetitionOperations: RepetitionOperationStore;
+  repetitionEditOperations: RepetitionEditOperationStore;
   onSetTaskCompletion: (
     command: TaskCompletionCommand,
   ) => Promise<TaskCompletionResult>;
@@ -279,7 +291,10 @@ export function TaskModal({
   onGetRepetition,
   onPreviewRepetition,
   onCreateRepetition,
+  onPreviewRepetitionEdit,
+  onEditRepetition,
   repetitionOperations,
+  repetitionEditOperations,
   onSetTaskCompletion,
   checklistAddOperations,
   onMutateChecklist,
@@ -1659,9 +1674,14 @@ export function TaskModal({
                     isDisabled={isWorking || isSessionStale}
                     hasUnsavedChanges={dirty}
                     operations={repetitionOperations}
+                    editOperations={repetitionEditOperations}
+                    columns={columns}
+                    assignableMembers={assignableMembers}
                     onLoad={onGetRepetition}
                     onPreview={onPreviewRepetition}
                     onCreate={onCreateRepetition}
+                    onPreviewEdit={onPreviewRepetitionEdit}
+                    onEdit={onEditRepetition}
                   />
                 ) : null}
                 <div className="flex flex-col gap-2">

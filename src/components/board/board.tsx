@@ -488,6 +488,9 @@ function BoardWorkspace({
     previewTaskRepetition,
     createTaskRepetition,
     repetitionOperations,
+    previewTaskRepetitionEdit,
+    editTaskRepetition,
+    repetitionEditOperations,
     moveColumn,
     removeBoard,
     replaceState,
@@ -1320,6 +1323,9 @@ function BoardWorkspace({
         onPreviewRepetition={previewTaskRepetition}
         onCreateRepetition={createTaskRepetition}
         repetitionOperations={repetitionOperations}
+        onPreviewRepetitionEdit={previewTaskRepetitionEdit}
+        onEditRepetition={editTaskRepetition}
+        repetitionEditOperations={repetitionEditOperations}
         onMoveTask={moveTaskFromEditor}
         onDelete={handleRequestEditorTaskDelete}
       />

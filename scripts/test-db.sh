@@ -244,6 +244,11 @@ if [[ "${TEST_DB_FOCUS:-}" == 'issue23' ]]; then
   printf 'Issue #23 database regression tests passed (disposable PostgreSQL).\n'
   exit 0
 fi
+if [[ "${TEST_DB_FOCUS:-}" == 'issue26' ]]; then
+  "${psql[@]}" -f "$repo_dir/tests/db/repetition_edit.sql"
+  printf 'Issue #26 database regression tests passed (disposable PostgreSQL).\n'
+  exit 0
+fi
 "${psql[@]}" -f "$repo_dir/tests/db/closed_access.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/authentication.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/realtime_epoch.sql"
@@ -262,6 +267,7 @@ fi
 "${psql[@]}" -q -f "$repo_dir/tests/db/access_suspension.sql"
 "${psql[@]}" -q -f "$repo_dir/tests/db/board_favorites.sql"
 "${psql[@]}" -q -f "$repo_dir/tests/db/theme_preferences.sql"
+"${psql[@]}" -f "$repo_dir/tests/db/repetition_edit.sql"
 
 # Suspension takes the account lock before boards. A waiting task write and
 # outgoing invitation must observe the committed suspension before touching a

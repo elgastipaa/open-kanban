@@ -1,15 +1,21 @@
 "use client";
 
 import { IconRepeat } from "@tabler/icons-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
+import type { RepetitionEditOperationStore } from "@/lib/daily-repetition-edit-state";
 import type { RepetitionOperationStore } from "@/lib/daily-repetition-state";
 import type {
   RepetitionCreateCommand,
   RepetitionCreateResult,
+  RepetitionEditCommand,
+  RepetitionEditPreview,
+  RepetitionEditResult,
+  RepetitionFinalMode,
   RepetitionPattern,
   RepetitionPreview,
+  RepetitionSeriesTemplate,
   RepetitionStatus,
 } from "@/lib/db/daily-repetition";
 import { RepetitionError } from "@/lib/db/daily-repetition";
@@ -18,7 +24,12 @@ import {
   ordinalWeekdayAdjective,
 } from "@/lib/repetition-pattern";
 import { formatTaskDueDate } from "@/lib/task-date";
-import type { Task } from "@/lib/types";
+import type {
+  AssignableBoardMember,
+  ColumnWithTasks,
+  Priority,
+  Task,
+} from "@/lib/types";
 import { generateUUID } from "@/lib/utils";
 
 interface TaskRepetitionProps {
@@ -30,6 +41,9 @@ interface TaskRepetitionProps {
   isDisabled: boolean;
   hasUnsavedChanges: boolean;
   operations: RepetitionOperationStore;
+  editOperations: RepetitionEditOperationStore;
+  columns: ColumnWithTasks[];
+  assignableMembers: AssignableBoardMember[] | null;
   onLoad: (taskId: string) => Promise<RepetitionStatus>;
   onPreview: (
     taskId: string,
@@ -37,13 +51,18 @@ interface TaskRepetitionProps {
     endOn: string | null,
     occurrenceLimit: number | null,
     pattern: RepetitionPattern,
+    advanceDays: number,
   ) => Promise<RepetitionPreview>;
   onCreate: (
     command: RepetitionCreateCommand,
   ) => Promise<RepetitionCreateResult>;
+  onPreviewEdit: (
+    command: Omit<RepetitionEditCommand, "operation_id" | "expected_revision">,
+  ) => Promise<RepetitionEditPreview>;
+  onEdit: (command: RepetitionEditCommand) => Promise<RepetitionEditResult>;
 }
 
-type FinalMode = "count" | "date" | "none";
+type FinalMode = RepetitionFinalMode;
 type RepetitionFrequency = RepetitionPattern["frequency"];
 
 const WEEKDAYS = [
@@ -182,14 +201,20 @@ export function TaskRepetition({
   isDisabled,
   hasUnsavedChanges,
   operations,
+  editOperations,
+  columns,
+  assignableMembers,
   onLoad,
   onPreview,
   onCreate,
+  onPreviewEdit,
+  onEdit,
 }: TaskRepetitionProps) {
   const [status, setStatus] = useState<RepetitionStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isWorking, setIsWorking] = useState(false);
   const [showSetup, setShowSetup] = useState(false);
+  const [editingSeries, setEditingSeries] = useState(false);
   const [startOn, setStartOn] = useState(task.due_on ?? boardToday);
   const [frequency, setFrequency] = useState<RepetitionFrequency>("daily");
   const [interval, setInterval] = useState("1");
@@ -204,7 +229,23 @@ export function TaskRepetition({
   const [finalMode, setFinalMode] = useState<FinalMode>("count");
   const [occurrenceCount, setOccurrenceCount] = useState("3");
   const [endOn, setEndOn] = useState("");
+  const [advanceDays, setAdvanceDays] = useState("0");
+  const [appearanceColumnId, setAppearanceColumnId] = useState(task.column_id);
+  const [templateTitle, setTemplateTitle] = useState(task.title);
+  const [templateDescription, setTemplateDescription] = useState(
+    task.description ?? "",
+  );
+  const [templatePriority, setTemplatePriority] = useState<Priority>(
+    task.priority,
+  );
+  const [templateAssigneeId, setTemplateAssigneeId] = useState(
+    task.assignee_id ?? "",
+  );
   const [preview, setPreview] = useState<RepetitionPreview | null>(null);
+  const [editPreview, setEditPreview] = useState<RepetitionEditPreview | null>(
+    null,
+  );
+  const [confirmDateChoice, setConfirmDateChoice] = useState(false);
   const [notice, setNotice] = useState("");
   const [pendingConfirmation, setPendingConfirmation] = useState<{
     changeStart: boolean;
@@ -213,63 +254,142 @@ export function TaskRepetition({
   } | null>(null);
   const [retryCommand, setRetryCommand] =
     useState<RepetitionCreateCommand | null>(null);
+  const [retryEditCommand, setRetryEditCommand] =
+    useState<RepetitionEditCommand | null>(null);
   const operationIdRef = useRef<string | null>(null);
+  const editOperationIdRef = useRef<string | null>(null);
+
+  const applyPattern = useCallback(
+    (pattern: RepetitionPattern, anchor: string) => {
+      setFrequency(pattern.frequency);
+      setInterval(String(pattern.interval));
+      setCalendarMode("ordinal" in pattern ? "ordinal" : "day");
+      setDayOfMonth(
+        "day_of_month" in pattern
+          ? String(pattern.day_of_month)
+          : String(Number(anchor.slice(8, 10))),
+      );
+      setMonth(
+        "month" in pattern
+          ? String(pattern.month)
+          : String(Number(anchor.slice(5, 7))),
+      );
+      setOrdinal("ordinal" in pattern ? String(pattern.ordinal) : "1");
+      setOrdinalWeekday(
+        "weekday" in pattern
+          ? String(pattern.weekday)
+          : String(isoWeekday(anchor)),
+      );
+      setWeekdays(
+        pattern.frequency === "weekly"
+          ? [...pattern.weekdays]
+          : [isoWeekday(anchor)],
+      );
+    },
+    [],
+  );
+
+  const clearPreview = useCallback(() => {
+    setPreview(null);
+    setEditPreview(null);
+    setConfirmDateChoice(false);
+  }, []);
 
   useEffect(() => {
     let active = true;
     const pending = operations.get(task.id);
-    const initialStartOn = pending?.start_on ?? task.due_on ?? boardToday;
+    const pendingEdit = editOperations.get(task.id);
+    const initialStartOn =
+      pendingEdit?.start_on ?? pending?.start_on ?? task.due_on ?? boardToday;
     setIsLoading(true);
-    setShowSetup(pending !== null);
+    setShowSetup(pending !== null || pendingEdit !== null);
+    setEditingSeries(pendingEdit !== null);
     setStartOn(initialStartOn);
-    setFrequency(pending?.pattern.frequency ?? "daily");
-    setInterval(String(pending?.pattern.interval ?? 1));
-    setCalendarMode(
-      pending?.pattern && "ordinal" in pending.pattern ? "ordinal" : "day",
+    const pendingPattern = pendingEdit?.pattern ?? pending?.pattern;
+    if (pendingPattern) applyPattern(pendingPattern, initialStartOn);
+    else applyPattern({ frequency: "daily", interval: 1 }, initialStartOn);
+    setAdvanceDays(
+      String(pendingEdit?.advance_days ?? pending?.advance_days ?? 0),
     );
-    setDayOfMonth(
-      pending?.pattern && "day_of_month" in pending.pattern
-        ? String(pending.pattern.day_of_month)
-        : String(Number(initialStartOn.slice(8, 10))),
+    setAppearanceColumnId(
+      pendingEdit?.appearance_column_id ??
+        pending?.appearance_column_id ??
+        task.column_id,
     );
-    setMonth(
-      pending?.pattern && "month" in pending.pattern
-        ? String(pending.pattern.month)
-        : String(Number(initialStartOn.slice(5, 7))),
+    const pendingTemplate = pendingEdit?.template;
+    setTemplateTitle(pendingTemplate?.title ?? task.title);
+    setTemplateDescription(
+      pendingTemplate?.description ?? task.description ?? "",
     );
-    setOrdinal(
-      pending?.pattern && "ordinal" in pending.pattern
-        ? String(pending.pattern.ordinal)
-        : "1",
+    setTemplatePriority(pendingTemplate?.priority ?? task.priority);
+    setTemplateAssigneeId(
+      pendingTemplate?.assignee_id ?? task.assignee_id ?? "",
     );
-    setOrdinalWeekday(
-      pending?.pattern && "weekday" in pending.pattern
-        ? String(pending.pattern.weekday)
-        : String(isoWeekday(initialStartOn)),
+    const initialFinalMode =
+      pendingEdit?.final_mode ??
+      (pending?.end_on
+        ? "date"
+        : pending?.occurrence_limit === null
+          ? "none"
+          : "count");
+    setFinalMode(initialFinalMode);
+    setOccurrenceCount(
+      String(pendingEdit?.future_count ?? pending?.occurrence_limit ?? 3),
     );
-    setWeekdays(
-      pending?.pattern.frequency === "weekly"
-        ? [...pending.pattern.weekdays]
-        : [isoWeekday(initialStartOn)],
-    );
-    setFinalMode("count");
-    setOccurrenceCount(String(pending?.occurrence_limit ?? 3));
-    setEndOn(pending?.end_on ?? "");
-    setPreview(null);
+    setEndOn(pendingEdit?.end_on ?? pending?.end_on ?? "");
+    clearPreview();
     setNotice(
-      pending
+      pending || pendingEdit
         ? "Hay una operación pendiente de confirmación. Reintenta la misma solicitud para revisar su resultado."
         : "",
     );
     setPendingConfirmation(null);
     setRetryCommand(pending);
+    setRetryEditCommand(pendingEdit);
     operationIdRef.current = pending?.operation_id ?? null;
-    if (pending?.end_on) setFinalMode("date");
-    else if (pending?.occurrence_limit === null) setFinalMode("none");
+    editOperationIdRef.current = pendingEdit?.operation_id ?? null;
     void onLoad(task.id)
       .then((result) => {
         if (!active) return;
         setStatus(result);
+        if (
+          !pendingEdit &&
+          result.status === "available" &&
+          result.state === "active"
+        ) {
+          const nextStart = result.next_due_on ?? initialStartOn;
+          setStartOn(nextStart);
+          if (result.pattern) applyPattern(result.pattern, nextStart);
+          setAdvanceDays(String(result.advance_days ?? 0));
+          setAppearanceColumnId(result.appearance_column_id ?? task.column_id);
+          setTemplateTitle(result.template_snapshot?.title ?? task.title);
+          setTemplateDescription(
+            result.template_snapshot?.description ?? task.description ?? "",
+          );
+          setTemplatePriority(
+            result.template_snapshot?.priority ?? task.priority,
+          );
+          setTemplateAssigneeId(
+            result.template_snapshot?.assignee_id ?? task.assignee_id ?? "",
+          );
+          if (result.end_on) {
+            setFinalMode("date");
+            setEndOn(result.end_on);
+          } else if (result.occurrence_limit === null) {
+            setFinalMode("none");
+            setEndOn("");
+          } else {
+            setFinalMode("count");
+            setOccurrenceCount(
+              String(
+                Math.max(
+                  1,
+                  (result.occurrence_limit ?? 1) - (result.consumed_count ?? 1),
+                ),
+              ),
+            );
+          }
+        }
         if (
           pending &&
           result.status === "available" &&
@@ -292,7 +412,21 @@ export function TaskRepetition({
     return () => {
       active = false;
     };
-  }, [onLoad, operations, task.due_on, task.id, boardToday]);
+  }, [
+    onLoad,
+    applyPattern,
+    clearPreview,
+    operations,
+    editOperations,
+    task.assignee_id,
+    task.column_id,
+    task.description,
+    task.due_on,
+    task.id,
+    task.priority,
+    task.title,
+    boardToday,
+  ]);
 
   const finalSelection = () => {
     if (finalMode === "count") {
@@ -320,8 +454,96 @@ export function TaskRepetition({
     });
   }
 
+  function selectedAdvanceDays(): number | null {
+    const value = Number(advanceDays);
+    return Number.isSafeInteger(value) && value >= 0 ? value : null;
+  }
+
+  function editPreviewCommand(
+    confirmChoice: boolean,
+    startOverride?: string,
+  ): Omit<RepetitionEditCommand, "operation_id" | "expected_revision"> | null {
+    const final = finalSelection();
+    const pattern = selectedPattern();
+    const advance = selectedAdvanceDays();
+    if (!final || !pattern || advance === null || !appearanceColumnId) {
+      return null;
+    }
+    const priorTemplate = status?.template_snapshot;
+    const template: RepetitionSeriesTemplate = {
+      title: templateTitle.trim(),
+      description: templateDescription.trim() || null,
+      priority: templatePriority,
+      assignee_id: templateAssigneeId || null,
+      ...(priorTemplate?.steps ? { steps: priorTemplate.steps } : {}),
+    };
+    return {
+      slug,
+      task_id: task.id,
+      start_on: startOverride ?? startOn,
+      final_mode: finalMode,
+      future_count: finalMode === "count" ? final.occurrenceLimit : null,
+      end_on: finalMode === "date" ? final.endOn : null,
+      pattern,
+      advance_days: advance,
+      appearance_column_id: appearanceColumnId,
+      template,
+      confirm_date_choice: confirmChoice,
+    };
+  }
+
+  async function loadEditPreview(
+    confirmChoice = confirmDateChoice,
+    startOverride?: string,
+  ) {
+    if (!isOnline || isDisabled) return;
+    if (!startOverride && !startOn) {
+      setNotice("Elige la primera fecha futura para preparar los cambios.");
+      return;
+    }
+    const command = editPreviewCommand(confirmChoice, startOverride);
+    if (!command) {
+      setNotice(
+        selectedAdvanceDays() === null
+          ? "La anticipación debe ser un número entero igual o mayor que cero."
+          : "Revisa la cantidad próxima, la fecha final y los datos de plantilla.",
+      );
+      return;
+    }
+    setIsWorking(true);
+    setNotice("");
+    clearPreview();
+    setEditPreview(null);
+    try {
+      const nextPreview = await onPreviewEdit(command);
+      if (nextPreview.status !== "available") {
+        setNotice("La serie ya no está disponible para editar.");
+        return;
+      }
+      setEditPreview(nextPreview);
+      if (nextPreview.requires_date_choice) {
+        setNotice(
+          "La fecha elegida no coincide con la regla nueva. Confirma esa fecha o elige la fecha sugerida.",
+        );
+      }
+    } catch (error) {
+      setNotice(
+        error instanceof RepetitionError && error.reason === "rejected"
+          ? "La anticipación debe ser menor que la separación mínima entre fechas de la serie."
+          : "No se pudo generar la vista previa. La serie y el borrador siguen intactos.",
+      );
+    } finally {
+      setIsWorking(false);
+    }
+  }
+
   async function loadPreview() {
-    if (!isOnline || isDisabled || hasUnsavedChanges) return;
+    if (!isOnline || isDisabled) return;
+    if (editingSeries) {
+      await loadEditPreview();
+      return;
+    }
+    if (hasUnsavedChanges) return;
     if (!startOn) {
       setNotice("Elige una primera fecha para preparar la repetición.");
       return;
@@ -342,9 +564,16 @@ export function TaskRepetition({
       );
       return;
     }
+    const advance = selectedAdvanceDays();
+    if (advance === null) {
+      setNotice(
+        "La anticipación debe ser un número entero igual o mayor que cero.",
+      );
+      return;
+    }
     setIsWorking(true);
     setNotice("");
-    setPreview(null);
+    clearPreview();
     try {
       const nextPreview = await onPreview(
         task.id,
@@ -352,6 +581,7 @@ export function TaskRepetition({
         final.endOn,
         final.occurrenceLimit,
         pattern,
+        advance,
       );
       if (nextPreview.status !== "available") {
         setNotice(
@@ -360,9 +590,11 @@ export function TaskRepetition({
         return;
       }
       setPreview(nextPreview);
-    } catch {
+    } catch (error) {
       setNotice(
-        "No se pudo generar la vista previa. Los datos de la tarea no cambiaron.",
+        error instanceof RepetitionError && error.reason === "rejected"
+          ? "La anticipación debe ser menor que la separación mínima entre fechas de la serie."
+          : "No se pudo generar la vista previa. Los datos de la tarea no cambiaron.",
       );
     } finally {
       setIsWorking(false);
@@ -385,9 +617,30 @@ export function TaskRepetition({
       end_on: final.endOn,
       occurrence_limit: final.occurrenceLimit,
       pattern,
+      advance_days: selectedAdvanceDays() ?? 0,
+      appearance_column_id: appearanceColumnId,
       expected_due_on_version: task.field_versions.due_on,
       confirm_start_change: confirmStartChange,
       previous_series_id: previousSeriesId,
+    };
+  }
+
+  function editCommandFor(): RepetitionEditCommand | null {
+    if (
+      !editPreview ||
+      editPreview.status !== "available" ||
+      editPreview.requires_date_choice ||
+      typeof editPreview.series_revision !== "number"
+    ) {
+      return null;
+    }
+    const draft = editPreviewCommand(confirmDateChoice);
+    if (!draft) return null;
+    editOperationIdRef.current ??= generateUUID();
+    return {
+      ...draft,
+      operation_id: editOperationIdRef.current,
+      expected_revision: editPreview.series_revision,
     };
   }
 
@@ -401,7 +654,7 @@ export function TaskRepetition({
       if (result.status === "confirmed") {
         operationIdRef.current = null;
         setPendingConfirmation(null);
-        setPreview(null);
+        clearPreview();
         setShowSetup(false);
         setNotice("La repetición quedó guardada.");
         setStatus(await onLoad(task.id));
@@ -426,7 +679,7 @@ export function TaskRepetition({
         setNotice(
           "La tarea o la serie cambió mientras preparabas la repetición. Actualiza la vista previa y revisa el estado actual.",
         );
-        setPreview(null);
+        clearPreview();
         setStatus(await onLoad(task.id));
         return;
       }
@@ -499,11 +752,155 @@ export function TaskRepetition({
     await submitCreate(retryCommand);
   }
 
+  async function submitEdit(command: RepetitionEditCommand) {
+    setIsWorking(true);
+    setNotice("");
+    try {
+      const result = await onEdit(command);
+      setRetryEditCommand(null);
+      editOperations.clear(task.id);
+      if (result.status === "confirmed") {
+        editOperationIdRef.current = null;
+        setEditingSeries(false);
+        setShowSetup(false);
+        clearPreview();
+        setNotice("Las próximas repeticiones quedaron actualizadas.");
+        setStatus(await onLoad(task.id));
+        return;
+      }
+      if (result.status === "date_choice_required") {
+        setEditPreview({
+          ...result,
+          status: "available",
+          requires_date_choice: true,
+        });
+        setConfirmDateChoice(false);
+        setNotice(
+          "Confirma la primera fecha futura para que coincida con la nueva regla.",
+        );
+        return;
+      }
+      if (result.status === "conflict") {
+        editOperationIdRef.current = null;
+        clearPreview();
+        setNotice(
+          "La serie cambió mientras editabas. El borrador se conserva; actualiza la vista previa para revisar el estado actual.",
+        );
+        setStatus(await onLoad(task.id));
+        return;
+      }
+      editOperationIdRef.current = null;
+      setNotice(
+        result.status === "expired_unknown"
+          ? "No se pudo confirmar el resultado anterior. Revisa la serie antes de volver a editarla."
+          : "La serie ya no está disponible para editar.",
+      );
+      setStatus(await onLoad(task.id));
+    } catch (error) {
+      if (error instanceof RepetitionError && error.reason === "rejected") {
+        setNotice(
+          "No se guardaron los cambios. Revisa la fecha, la anticipación y la plantilla; el borrador se conserva.",
+        );
+        setRetryEditCommand(null);
+        editOperations.clear(task.id);
+        editOperationIdRef.current = null;
+      } else if (
+        error instanceof RepetitionError &&
+        error.reason === "access_denied"
+      ) {
+        setNotice(
+          "Tu acceso al tablero cambió. Actualiza la página antes de continuar.",
+        );
+        editOperations.clear(task.id);
+      } else {
+        editOperations.set(command);
+        setRetryEditCommand(command);
+        setNotice(
+          "No se pudo confirmar el resultado. Reintenta la misma edición para evitar duplicados.",
+        );
+      }
+    } finally {
+      setIsWorking(false);
+    }
+  }
+
+  async function saveEdit() {
+    if (!isOnline || isDisabled || !editPreview) return;
+    const command = editCommandFor();
+    if (!command) return;
+    await submitEdit(command);
+  }
+
+  async function retryEdit() {
+    if (!retryEditCommand || isWorking) return;
+    await submitEdit(retryEditCommand);
+  }
+
+  function chooseSuggestedDate() {
+    const suggested = editPreview?.proposed_start_on;
+    if (!suggested) return;
+    setStartOn(suggested);
+    setConfirmDateChoice(false);
+    void loadEditPreview(false, suggested);
+  }
+
+  function beginCreate() {
+    setEditingSeries(false);
+    setShowSetup(true);
+    setNotice("");
+    clearPreview();
+  }
+
+  function beginEdit() {
+    if (status?.status !== "available" || status.state !== "active") return;
+    const nextStart = status.next_due_on ?? task.due_on ?? boardToday;
+    setEditingSeries(true);
+    setShowSetup(true);
+    setStartOn(nextStart);
+    if (status.pattern) applyPattern(status.pattern, nextStart);
+    setAdvanceDays(String(status.advance_days ?? 0));
+    setAppearanceColumnId(status.appearance_column_id ?? task.column_id);
+    setTemplateTitle(status.template_snapshot?.title ?? task.title);
+    setTemplateDescription(
+      status.template_snapshot?.description ?? task.description ?? "",
+    );
+    setTemplatePriority(status.template_snapshot?.priority ?? task.priority);
+    setTemplateAssigneeId(
+      status.template_snapshot?.assignee_id ?? task.assignee_id ?? "",
+    );
+    if (status.end_on) {
+      setFinalMode("date");
+      setEndOn(status.end_on);
+    } else if (status.occurrence_limit === null) {
+      setFinalMode("none");
+      setEndOn("");
+    } else {
+      setFinalMode("count");
+      setOccurrenceCount(
+        String(
+          Math.max(
+            1,
+            (status.occurrence_limit ?? 1) - (status.consumed_count ?? 1),
+          ),
+        ),
+      );
+    }
+    setRetryEditCommand(null);
+    editOperationIdRef.current = null;
+    setNotice("");
+    clearPreview();
+  }
+
   const activeSeries =
     status?.status === "available" && status.state === "active";
   const canCreate =
     status?.status === "not_repeating" ||
     (status?.status === "available" && status.state !== "active");
+  const canEdit =
+    activeSeries &&
+    status?.status === "available" &&
+    typeof status.revision === "number" &&
+    Boolean(status.template_snapshot);
 
   return (
     <section
@@ -520,7 +917,7 @@ export function TaskRepetition({
         <p className="text-text-muted text-xs" aria-live="polite">
           Consultando el estado de la serie…
         </p>
-      ) : activeSeries && status?.status === "available" ? (
+      ) : activeSeries && status?.status === "available" && !showSetup ? (
         <div className="space-y-3 text-sm">
           <p className="text-text-secondary">
             {patternLabel(status.pattern) ?? "Serie activa"} · próxima fecha:{" "}
@@ -554,6 +951,20 @@ export function TaskRepetition({
               </li>
             ))}
           </ol>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={beginEdit}
+            disabled={
+              !canEdit ||
+              isDisabled ||
+              isWorking ||
+              !isOnline ||
+              hasUnsavedChanges
+            }
+          >
+            Editar próximas repeticiones
+          </Button>
         </div>
       ) : status?.status === "unavailable" ? (
         <output
@@ -565,13 +976,13 @@ export function TaskRepetition({
         </output>
       ) : (
         <div className="space-y-3">
-          {status?.status === "available" ? (
+          {status?.status === "available" && !editingSeries ? (
             <p className="text-sm text-text-secondary">
               Serie {stateLabel(status.state ?? "")}. El historial se conserva
               al programar una nueva serie.
             </p>
           ) : null}
-          {hasUnsavedChanges ? (
+          {hasUnsavedChanges && !editingSeries ? (
             <p className="text-text-muted text-xs">
               Guarda primero los cambios de esta tarjeta para convertirla en la
               primera ocurrencia.
@@ -581,10 +992,7 @@ export function TaskRepetition({
             <Button
               type="button"
               variant="ghost"
-              onClick={() => {
-                setShowSetup(true);
-                setNotice("");
-              }}
+              onClick={beginCreate}
               disabled={
                 !canCreate ||
                 isDisabled ||
@@ -608,15 +1016,18 @@ export function TaskRepetition({
                   className="flex flex-col gap-1.5 font-semibold text-text-muted text-xs"
                   htmlFor="repetition-start"
                 >
-                  Primera fecha · zona {boardTimeZone}
+                  {editingSeries ? "Próxima fecha futura" : "Primera fecha"} ·
+                  zona {boardTimeZone}
                   <input
                     id="repetition-start"
                     type="date"
                     value={startOn}
-                    disabled={isWorking || Boolean(retryCommand)}
+                    disabled={
+                      isWorking || Boolean(retryCommand || retryEditCommand)
+                    }
                     onChange={(event) => {
                       setStartOn(event.target.value);
-                      setPreview(null);
+                      clearPreview();
                     }}
                     className="h-10 rounded-md border border-border bg-transparent px-3 text-sm text-text-primary outline-none focus:border-accent disabled:opacity-60"
                   />
@@ -629,15 +1040,19 @@ export function TaskRepetition({
                   <select
                     id="repetition-final-mode"
                     value={finalMode}
-                    disabled={isWorking || Boolean(retryCommand)}
+                    disabled={
+                      isWorking || Boolean(retryCommand || retryEditCommand)
+                    }
                     onChange={(event) => {
                       setFinalMode(event.target.value as FinalMode);
-                      setPreview(null);
+                      clearPreview();
                     }}
                     className="h-10 rounded-md border border-border bg-surface-base px-3 text-sm text-text-primary outline-none focus:border-accent disabled:opacity-60"
                   >
                     <option value="count">
-                      Cantidad total incluyendo esta tarea
+                      {editingSeries
+                        ? "Cantidad de próximas repeticiones"
+                        : "Cantidad total incluyendo esta tarea"}
                     </option>
                     <option value="date">
                       Hasta una fecha final inclusiva
@@ -649,16 +1064,157 @@ export function TaskRepetition({
               <div className="grid gap-3 sm:grid-cols-2">
                 <label
                   className="flex flex-col gap-1.5 font-semibold text-text-muted text-xs"
+                  htmlFor="repetition-advance-days"
+                >
+                  Anticipar próxima tarjeta · días
+                  <input
+                    id="repetition-advance-days"
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={advanceDays}
+                    disabled={
+                      isWorking || Boolean(retryCommand || retryEditCommand)
+                    }
+                    onChange={(event) => {
+                      setAdvanceDays(event.target.value);
+                      clearPreview();
+                    }}
+                    className="h-10 rounded-md border border-border bg-transparent px-3 text-sm text-text-primary outline-none focus:border-accent disabled:opacity-60"
+                  />
+                  <span className="font-normal text-text-muted">
+                    Debe ser menor que la separación mínima entre fechas.
+                  </span>
+                </label>
+                <label
+                  className="flex flex-col gap-1.5 font-semibold text-text-muted text-xs"
+                  htmlFor="repetition-appearance-column"
+                >
+                  Columna de las próximas tarjetas
+                  <select
+                    id="repetition-appearance-column"
+                    value={appearanceColumnId}
+                    disabled={
+                      isWorking || Boolean(retryCommand || retryEditCommand)
+                    }
+                    onChange={(event) => {
+                      setAppearanceColumnId(event.target.value);
+                      clearPreview();
+                    }}
+                    className="h-10 rounded-md border border-border bg-surface-base px-3 text-sm text-text-primary outline-none focus:border-accent disabled:opacity-60"
+                  >
+                    {columns.map((column) => (
+                      <option key={column.id} value={column.id}>
+                        {column.title}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              {editingSeries ? (
+                <fieldset
+                  className="space-y-3 rounded-md border border-border p-3"
+                  disabled={isWorking || Boolean(retryEditCommand)}
+                >
+                  <legend className="px-1 font-semibold text-text-muted text-xs">
+                    Plantilla de las próximas tarjetas
+                  </legend>
+                  <label
+                    className="flex flex-col gap-1.5 font-semibold text-text-muted text-xs"
+                    htmlFor="repetition-template-title"
+                  >
+                    Título
+                    <input
+                      id="repetition-template-title"
+                      type="text"
+                      maxLength={200}
+                      value={templateTitle}
+                      onChange={(event) => {
+                        setTemplateTitle(event.target.value);
+                        clearPreview();
+                      }}
+                      className="h-10 rounded-md border border-border bg-transparent px-3 text-sm text-text-primary outline-none focus:border-accent disabled:opacity-60"
+                    />
+                  </label>
+                  <label
+                    className="flex flex-col gap-1.5 font-semibold text-text-muted text-xs"
+                    htmlFor="repetition-template-description"
+                  >
+                    Descripción
+                    <textarea
+                      id="repetition-template-description"
+                      maxLength={2000}
+                      rows={3}
+                      value={templateDescription}
+                      onChange={(event) => {
+                        setTemplateDescription(event.target.value);
+                        clearPreview();
+                      }}
+                      className="rounded-md border border-border bg-transparent px-3 py-2 text-sm text-text-primary outline-none focus:border-accent disabled:opacity-60"
+                    />
+                  </label>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <label
+                      className="flex flex-col gap-1.5 font-semibold text-text-muted text-xs"
+                      htmlFor="repetition-template-priority"
+                    >
+                      Prioridad
+                      <select
+                        id="repetition-template-priority"
+                        value={templatePriority}
+                        onChange={(event) => {
+                          setTemplatePriority(event.target.value as Priority);
+                          clearPreview();
+                        }}
+                        className="h-10 rounded-md border border-border bg-surface-base px-3 text-sm text-text-primary outline-none focus:border-accent disabled:opacity-60"
+                      >
+                        <option value="low">Baja</option>
+                        <option value="medium">Media</option>
+                        <option value="high">Alta</option>
+                        <option value="urgent">Urgente</option>
+                      </select>
+                    </label>
+                    <label
+                      className="flex flex-col gap-1.5 font-semibold text-text-muted text-xs"
+                      htmlFor="repetition-template-assignee"
+                    >
+                      Responsable
+                      <select
+                        id="repetition-template-assignee"
+                        value={templateAssigneeId}
+                        disabled={!assignableMembers}
+                        onChange={(event) => {
+                          setTemplateAssigneeId(event.target.value);
+                          clearPreview();
+                        }}
+                        className="h-10 rounded-md border border-border bg-surface-base px-3 text-sm text-text-primary outline-none focus:border-accent disabled:opacity-60"
+                      >
+                        <option value="">Sin responsable</option>
+                        {assignableMembers?.map((member) => (
+                          <option key={member.user_id} value={member.user_id}>
+                            {member.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                </fieldset>
+              ) : null}
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label
+                  className="flex flex-col gap-1.5 font-semibold text-text-muted text-xs"
                   htmlFor="repetition-frequency"
                 >
                   Frecuencia
                   <select
                     id="repetition-frequency"
                     value={frequency}
-                    disabled={isWorking || Boolean(retryCommand)}
+                    disabled={
+                      isWorking || Boolean(retryCommand || retryEditCommand)
+                    }
                     onChange={(event) => {
                       setFrequency(event.target.value as RepetitionFrequency);
-                      setPreview(null);
+                      clearPreview();
                       setNotice("");
                     }}
                     className="h-10 rounded-md border border-border bg-surface-base px-3 text-sm text-text-primary outline-none focus:border-accent disabled:opacity-60"
@@ -687,10 +1243,12 @@ export function TaskRepetition({
                       max={frequency === "weekly" ? 2147483647 : undefined}
                       step={1}
                       value={interval}
-                      disabled={isWorking || Boolean(retryCommand)}
+                      disabled={
+                        isWorking || Boolean(retryCommand || retryEditCommand)
+                      }
                       onChange={(event) => {
                         setInterval(event.target.value);
-                        setPreview(null);
+                        clearPreview();
                         setNotice("");
                       }}
                       className="h-10 rounded-md border border-border bg-transparent px-3 text-sm text-text-primary outline-none focus:border-accent disabled:opacity-60"
@@ -709,10 +1267,12 @@ export function TaskRepetition({
                       <select
                         id="repetition-month"
                         value={month}
-                        disabled={isWorking || Boolean(retryCommand)}
+                        disabled={
+                          isWorking || Boolean(retryCommand || retryEditCommand)
+                        }
                         onChange={(event) => {
                           setMonth(event.target.value);
-                          setPreview(null);
+                          clearPreview();
                           setNotice("");
                         }}
                         className="h-10 rounded-md border border-border bg-surface-base px-3 text-sm text-text-primary outline-none focus:border-accent disabled:opacity-60"
@@ -733,12 +1293,14 @@ export function TaskRepetition({
                     <select
                       id="repetition-calendar-mode"
                       value={calendarMode}
-                      disabled={isWorking || Boolean(retryCommand)}
+                      disabled={
+                        isWorking || Boolean(retryCommand || retryEditCommand)
+                      }
                       onChange={(event) => {
                         setCalendarMode(
                           event.target.value as "day" | "ordinal",
                         );
-                        setPreview(null);
+                        clearPreview();
                         setNotice("");
                       }}
                       className="h-10 rounded-md border border-border bg-surface-base px-3 text-sm text-text-primary outline-none focus:border-accent disabled:opacity-60"
@@ -756,10 +1318,12 @@ export function TaskRepetition({
                       <select
                         id="repetition-day-of-month"
                         value={dayOfMonth}
-                        disabled={isWorking || Boolean(retryCommand)}
+                        disabled={
+                          isWorking || Boolean(retryCommand || retryEditCommand)
+                        }
                         onChange={(event) => {
                           setDayOfMonth(event.target.value);
-                          setPreview(null);
+                          clearPreview();
                           setNotice("");
                         }}
                         className="h-10 rounded-md border border-border bg-surface-base px-3 text-sm text-text-primary outline-none focus:border-accent disabled:opacity-60"
@@ -785,10 +1349,13 @@ export function TaskRepetition({
                         <select
                           id="repetition-ordinal"
                           value={ordinal}
-                          disabled={isWorking || Boolean(retryCommand)}
+                          disabled={
+                            isWorking ||
+                            Boolean(retryCommand || retryEditCommand)
+                          }
                           onChange={(event) => {
                             setOrdinal(event.target.value);
-                            setPreview(null);
+                            clearPreview();
                             setNotice("");
                           }}
                           className="h-10 rounded-md border border-border bg-surface-base px-3 text-sm text-text-primary outline-none focus:border-accent disabled:opacity-60"
@@ -808,10 +1375,13 @@ export function TaskRepetition({
                         <select
                           id="repetition-ordinal-weekday"
                           value={ordinalWeekday}
-                          disabled={isWorking || Boolean(retryCommand)}
+                          disabled={
+                            isWorking ||
+                            Boolean(retryCommand || retryEditCommand)
+                          }
                           onChange={(event) => {
                             setOrdinalWeekday(event.target.value);
-                            setPreview(null);
+                            clearPreview();
                             setNotice("");
                           }}
                           className="h-10 rounded-md border border-border bg-surface-base px-3 text-sm text-text-primary outline-none focus:border-accent disabled:opacity-60"
@@ -830,7 +1400,9 @@ export function TaskRepetition({
               {frequency === "weekly" ? (
                 <fieldset
                   className="space-y-2 rounded-md border border-border p-3"
-                  disabled={isWorking || Boolean(retryCommand)}
+                  disabled={
+                    isWorking || Boolean(retryCommand || retryEditCommand)
+                  }
                 >
                   <legend className="px-1 font-semibold text-text-muted text-xs">
                     Días de la semana · de lunes a domingo
@@ -854,7 +1426,7 @@ export function TaskRepetition({
                                     (value) => value !== day.value,
                                   ),
                             );
-                            setPreview(null);
+                            clearPreview();
                             setNotice("");
                           }}
                           className="size-4 accent-accent"
@@ -868,7 +1440,7 @@ export function TaskRepetition({
                       type="button"
                       onClick={() => {
                         setWeekdays([1, 2, 3, 4, 5]);
-                        setPreview(null);
+                        clearPreview();
                         setNotice("");
                       }}
                       className="min-h-9 rounded-md border border-border px-3 font-semibold text-text-secondary text-xs hover:bg-surface-base focus-visible:outline-2 focus-visible:outline-accent"
@@ -886,17 +1458,21 @@ export function TaskRepetition({
                   className="flex max-w-xs flex-col gap-1.5 font-semibold text-text-muted text-xs"
                   htmlFor="repetition-count"
                 >
-                  Ocurrencias totales · esta tarea cuenta como la primera
+                  {editingSeries
+                    ? "Próximas repeticiones · la actual y las anteriores quedan fuera"
+                    : "Ocurrencias totales · esta tarea cuenta como la primera"}
                   <input
                     id="repetition-count"
                     type="number"
                     min={1}
                     max={2147483648}
                     value={occurrenceCount}
-                    disabled={isWorking || Boolean(retryCommand)}
+                    disabled={
+                      isWorking || Boolean(retryCommand || retryEditCommand)
+                    }
                     onChange={(event) => {
                       setOccurrenceCount(event.target.value);
-                      setPreview(null);
+                      clearPreview();
                     }}
                     className="h-10 rounded-md border border-border bg-transparent px-3 text-sm text-text-primary outline-none focus:border-accent disabled:opacity-60"
                   />
@@ -913,10 +1489,12 @@ export function TaskRepetition({
                     type="date"
                     min={startOn}
                     value={endOn}
-                    disabled={isWorking || Boolean(retryCommand)}
+                    disabled={
+                      isWorking || Boolean(retryCommand || retryEditCommand)
+                    }
                     onChange={(event) => {
                       setEndOn(event.target.value);
-                      setPreview(null);
+                      clearPreview();
                     }}
                     className="h-10 rounded-md border border-border bg-transparent px-3 text-sm text-text-primary outline-none focus:border-accent disabled:opacity-60"
                   />
@@ -938,6 +1516,12 @@ export function TaskRepetition({
                       patternLabel(selectedPattern() ?? undefined)}
                   </p>
                   <p className="mt-1 text-text-secondary">
+                    Plantilla futura: {task.title} · {task.priority} · columna{" "}
+                    {columns.find((column) => column.id === appearanceColumnId)
+                      ?.title ?? "elegida"}
+                    .
+                  </p>
+                  <p className="mt-1 text-text-secondary">
                     Próximas fechas:{" "}
                     {preview.future_dates?.length
                       ? preview.future_dates
@@ -945,6 +1529,20 @@ export function TaskRepetition({
                           .join(", ")
                       : "ninguna dentro de la vista previa"}
                     .
+                  </p>
+                  {preview.appearance_dates?.length ? (
+                    <p className="mt-1 text-text-secondary">
+                      Aparecen con {preview.advance_days ?? 0} días de
+                      anticipación (separación mínima:{" "}
+                      {preview.minimum_separation_days ?? "—"} días):{" "}
+                      {preview.appearance_dates
+                        .map((date) => formatTaskDueDate(date) ?? date)
+                        .join(", ")}
+                      .
+                    </p>
+                  ) : null}
+                  <p className="mt-1 text-text-secondary">
+                    Zona del tablero: {preview.time_zone ?? boardTimeZone}.
                   </p>
                   <p className="mt-1 text-text-muted text-xs">
                     {preview.occurrence_limit !== null &&
@@ -957,6 +1555,129 @@ export function TaskRepetition({
                       ? " La serie conserva su fase del calendario aunque una ejecución se procese tarde."
                       : ""}
                   </p>
+                </div>
+              ) : null}
+              {editPreview ? (
+                <div
+                  className="space-y-1 rounded-md bg-surface-base p-3 text-sm"
+                  aria-live="polite"
+                >
+                  <p className="font-medium text-text-primary">
+                    La tarjeta actual conserva su fecha, identidad e historial:{" "}
+                    {formatTaskDueDate(task.due_on) ?? task.due_on}.
+                  </p>
+                  <p className="text-text-secondary">
+                    {patternLabel(editPreview.pattern) ??
+                      patternLabel(selectedPattern() ?? undefined)}{" "}
+                    · zona del tablero: {editPreview.time_zone ?? boardTimeZone}
+                    .
+                  </p>
+                  <p className="text-text-secondary">
+                    Plantilla:{" "}
+                    {editPreview.template_snapshot?.title ?? templateTitle} ·{" "}
+                    {editPreview.template_snapshot?.priority ??
+                      templatePriority}{" "}
+                    · columna{" "}
+                    {columns.find(
+                      (column) =>
+                        column.id ===
+                        (editPreview.appearance_column_id ??
+                          appearanceColumnId),
+                    )?.title ?? "elegida"}
+                    .
+                  </p>
+                  <p className="text-text-secondary">
+                    Responsable de futuras tarjetas:{" "}
+                    {editPreview.template_snapshot?.assignee_id
+                      ? (assignableMembers?.find(
+                          (member) =>
+                            member.user_id ===
+                            editPreview.template_snapshot?.assignee_id,
+                        )?.name ?? "no disponible en este tablero")
+                      : "sin responsable"}
+                    .
+                  </p>
+                  {editPreview.template_snapshot?.description ? (
+                    <p className="whitespace-pre-wrap text-text-secondary">
+                      {editPreview.template_snapshot.description}
+                    </p>
+                  ) : null}
+                  {editPreview.requires_date_choice ? (
+                    <div className="space-y-2 rounded-md border border-priority-medium/40 p-3 text-text-secondary">
+                      <p>
+                        {editPreview.selected_date_compatible
+                          ? `${startOn} cumple la nueva regla, pero cambia la próxima fecha sugerida. Confirma cuál fecha usar. La sugerida es ${editPreview.proposed_start_on ?? "—"}.`
+                          : `${startOn} no cumple la nueva regla o ya quedó en el pasado. Elige una fecha compatible antes de guardar. La sugerida es ${editPreview.proposed_start_on ?? "—"}.`}
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          onClick={chooseSuggestedDate}
+                          disabled={isWorking || !isOnline}
+                        >
+                          Usar fecha sugerida
+                        </Button>
+                        {editPreview.selected_date_compatible ? (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            onClick={() => {
+                              setConfirmDateChoice(true);
+                              void loadEditPreview(true);
+                            }}
+                            disabled={isWorking || !isOnline}
+                          >
+                            Confirmar la fecha elegida
+                          </Button>
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <p className="text-text-secondary">
+                        Próximas fechas:{" "}
+                        {editPreview.future_dates?.length
+                          ? editPreview.future_dates
+                              .map((date) => formatTaskDueDate(date) ?? date)
+                              .join(", ")
+                          : "ninguna"}
+                        .
+                      </p>
+                      <p className="text-text-secondary">
+                        Aparecen {editPreview.advance_days ?? 0} días antes
+                        (separación mínima:{" "}
+                        {editPreview.minimum_separation_days ?? "—"} días):{" "}
+                        {editPreview.appearance_dates?.length
+                          ? editPreview.appearance_dates
+                              .map((date) => formatTaskDueDate(date) ?? date)
+                              .join(", ")
+                          : "ninguna"}
+                        .
+                      </p>
+                      <p className="text-text-muted text-xs">
+                        {editPreview.final_mode === "count"
+                          ? `${editPreview.future_count ?? 0} próximas repeticiones · nuevo final ${formatTaskDueDate(editPreview.final_on ?? null) ?? editPreview.final_on ?? "—"}.`
+                          : editPreview.final_on
+                            ? `Final inclusivo: ${formatTaskDueDate(editPreview.final_on) ?? editPreview.final_on}.`
+                            : "Sin fecha final."}
+                      </p>
+                      <p className="text-text-secondary">
+                        Exclusiones que se conservan:{" "}
+                        {editPreview.preserved_exclusion_dates?.length
+                          ? editPreview.preserved_exclusion_dates.join(", ")
+                          : "ninguna"}
+                        .
+                      </p>
+                      <p className="text-text-secondary">
+                        Exclusiones retiradas al confirmar:{" "}
+                        {editPreview.removed_exclusion_dates?.length
+                          ? editPreview.removed_exclusion_dates.join(", ")
+                          : "ninguna"}
+                        .
+                      </p>
+                    </>
+                  )}
                 </div>
               ) : null}
               {notice ? (
@@ -976,13 +1697,28 @@ export function TaskRepetition({
                     !isOnline ||
                     isWorking ||
                     isDisabled ||
-                    hasUnsavedChanges ||
-                    Boolean(retryCommand)
+                    (!editingSeries && hasUnsavedChanges) ||
+                    Boolean(retryCommand || retryEditCommand)
                   }
                 >
                   {isWorking ? "Consultando…" : "Vista previa"}
                 </Button>
-                {preview ? (
+                {editingSeries &&
+                editPreview &&
+                !editPreview.requires_date_choice ? (
+                  <Button
+                    type="button"
+                    onClick={() => void saveEdit()}
+                    disabled={
+                      !isOnline ||
+                      isWorking ||
+                      isDisabled ||
+                      Boolean(retryEditCommand)
+                    }
+                  >
+                    Guardar cambios de próximas repeticiones
+                  </Button>
+                ) : !editingSeries && preview ? (
                   <Button
                     type="button"
                     onClick={() => void createSeries()}
@@ -991,13 +1727,21 @@ export function TaskRepetition({
                       isWorking ||
                       isDisabled ||
                       hasUnsavedChanges ||
-                      Boolean(retryCommand)
+                      Boolean(retryCommand || retryEditCommand)
                     }
                   >
                     Programar repetición
                   </Button>
                 ) : null}
-                {retryCommand ? (
+                {retryEditCommand ? (
+                  <Button
+                    type="button"
+                    onClick={() => void retryEdit()}
+                    disabled={!isOnline || isWorking}
+                  >
+                    Reintentar la misma edición
+                  </Button>
+                ) : retryCommand ? (
                   <Button
                     type="button"
                     onClick={() => void retryCreate()}
@@ -1011,7 +1755,8 @@ export function TaskRepetition({
                   variant="ghost"
                   onClick={() => {
                     setShowSetup(false);
-                    setPreview(null);
+                    setEditingSeries(false);
+                    clearPreview();
                     setNotice("");
                     setPendingConfirmation(null);
                   }}

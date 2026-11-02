@@ -710,8 +710,12 @@ BEGIN
     '{"title":"Preparar la revisión diaria"}'::jsonb, '{"title":1}'::jsonb
   );
   IF v_result->>'status' IS DISTINCT FROM 'confirmed'
-    OR v_result->'task'->>'title' IS DISTINCT FROM 'Preparar la revisión diaria' THEN
-    RAISE EXCEPTION 'Updating the current task did not update the series template';
+    OR v_result->'task'->>'title' IS DISTINCT FROM 'Preparar la revisión diaria'
+    OR (SELECT series.template_snapshot->>'title'
+        FROM public.daily_repetition_series AS series
+        WHERE series.id = (SELECT series_id FROM issue23_results))
+      IS DISTINCT FROM 'Preparar la revisión' THEN
+    RAISE EXCEPTION 'Editing only the current task rewrote the future template';
   END IF;
 END;
 $$;
@@ -869,7 +873,7 @@ BEGIN
       WHERE task.id = v_new_task_id) IS DISTINCT FROM
         '40000000-0000-4000-8000-000000000002'::uuid
     OR (SELECT task.title FROM public.tasks AS task
-      WHERE task.id = v_new_task_id) IS DISTINCT FROM 'Preparar la revisión diaria'
+      WHERE task.id = v_new_task_id) IS DISTINCT FROM 'Preparar la revisión'
     OR (SELECT task.column_id FROM public.tasks AS task
       WHERE task.id = v_new_task_id) IS DISTINCT FROM v_original_column_id
     OR (SELECT (step->>'is_completed')::boolean FROM public.tasks AS task

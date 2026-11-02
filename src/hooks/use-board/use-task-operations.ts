@@ -1,17 +1,20 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { useCallback, useEffect, useRef } from "react";
 import { toast } from "sonner";
+import { RepetitionEditOperationStore } from "@/lib/daily-repetition-edit-state";
 import { RepetitionOperationStore } from "@/lib/daily-repetition-state";
 import {
   createColumn,
   createRepetition,
   createTask,
   deleteTask as dbDeleteTask,
+  editRepetition,
   getFullBoard,
   getFullBoardForTaskEdit,
   getRepetition,
   mutateTaskChecklistStep,
   previewRepetition,
+  previewRepetitionEdit,
   RepetitionError,
   reconcileTaskCreation,
   setTaskCompletion,
@@ -27,6 +30,9 @@ import {
 import type {
   RepetitionCreateCommand,
   RepetitionCreateResult,
+  RepetitionEditCommand,
+  RepetitionEditPreview,
+  RepetitionEditResult,
   RepetitionPattern,
   RepetitionPreview,
   RepetitionStatus,
@@ -151,6 +157,27 @@ export function useTaskOperations({
   useEffect(
     () => () => repetitionOperations.clearAll(),
     [repetitionOperations],
+  );
+  const repetitionEditOperationsRef = useRef<{
+    actorId: string;
+    slug: string;
+    store: RepetitionEditOperationStore;
+  } | null>(null);
+  if (
+    !repetitionEditOperationsRef.current ||
+    repetitionEditOperationsRef.current.actorId !== actorId ||
+    repetitionEditOperationsRef.current.slug !== slug
+  ) {
+    repetitionEditOperationsRef.current = {
+      actorId,
+      slug,
+      store: new RepetitionEditOperationStore(actorId, slug),
+    };
+  }
+  const repetitionEditOperations = repetitionEditOperationsRef.current.store;
+  useEffect(
+    () => () => repetitionEditOperations.clearAll(),
+    [repetitionEditOperations],
   );
 
   const reconcileCurrentTaskOrder = useCallback(
@@ -707,6 +734,7 @@ export function useTaskOperations({
       endOn: string | null,
       occurrenceLimit: number | null,
       pattern: RepetitionPattern,
+      advanceDays: number,
     ): Promise<RepetitionPreview> => {
       if (!isPersistedRef.current || taskId.startsWith("local-")) {
         return { status: "unavailable" };
@@ -721,6 +749,7 @@ export function useTaskOperations({
           endOn,
           occurrenceLimit,
           pattern,
+          advanceDays,
         );
         if (sessionEpoch !== getSessionEpoch()) {
           throw new Error("The session changed while previewing repetition.");
@@ -786,6 +815,73 @@ export function useTaskOperations({
       onMutationRef,
       onAccessLost,
       repetitionOperations,
+    ],
+  );
+
+  const previewTaskRepetitionEdit = useCallback(
+    async (
+      command: Omit<
+        RepetitionEditCommand,
+        "operation_id" | "expected_revision"
+      >,
+    ): Promise<RepetitionEditPreview> => {
+      if (!isPersistedRef.current || command.task_id.startsWith("local-")) {
+        return { status: "unavailable" };
+      }
+      const sessionEpoch = getSessionEpoch();
+      try {
+        const result = await previewRepetitionEdit(supabase, command);
+        if (sessionEpoch !== getSessionEpoch()) {
+          throw new Error(
+            "The session changed while previewing repetition edits.",
+          );
+        }
+        return result;
+      } catch (error) {
+        if (
+          sessionEpoch !== getSessionEpoch() ||
+          (error instanceof RepetitionError && error.reason === "access_denied")
+        ) {
+          onAccessLost();
+        }
+        throw error;
+      }
+    },
+    [supabase, isPersistedRef, onAccessLost],
+  );
+
+  const editTaskRepetition = useCallback(
+    async (command: RepetitionEditCommand): Promise<RepetitionEditResult> => {
+      if (!isPersistedRef.current || command.task_id.startsWith("local-")) {
+        return { status: "unavailable", operation_id: command.operation_id };
+      }
+      const sessionEpoch = getSessionEpoch();
+      try {
+        const result = await editRepetition(supabase, command);
+        if (sessionEpoch !== getSessionEpoch()) {
+          throw new Error("The session changed while editing repetition.");
+        }
+        if (result.status === "confirmed") {
+          repetitionEditOperations.clear(command.task_id);
+          onMutationRef.current?.();
+        }
+        return result;
+      } catch (error) {
+        if (
+          sessionEpoch !== getSessionEpoch() ||
+          (error instanceof RepetitionError && error.reason === "access_denied")
+        ) {
+          onAccessLost();
+        }
+        throw error;
+      }
+    },
+    [
+      supabase,
+      isPersistedRef,
+      onMutationRef,
+      onAccessLost,
+      repetitionEditOperations,
     ],
   );
 
@@ -1336,5 +1432,8 @@ export function useTaskOperations({
     previewTaskRepetition,
     createTaskRepetition,
     repetitionOperations,
+    previewTaskRepetitionEdit,
+    editTaskRepetition,
+    repetitionEditOperations,
   };
 }

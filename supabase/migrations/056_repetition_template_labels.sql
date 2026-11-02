@@ -759,6 +759,38 @@ CREATE TRIGGER daily_repetition_series_z_restore_template_labels
 AFTER INSERT ON public.daily_repetition_series
 FOR EACH ROW EXECUTE FUNCTION public.restore_repetition_template_labels_from_recovery_p();
 
+-- Tombstones created before 056 cannot use the new series trigger. Initialize
+-- their baseline from the current occurrence's retained task label IDs while
+-- the seven-day recovery window remains open. Resolve only rows that still
+-- exist as active labels in the exact board generation; hidden and purged
+-- labels are not part of the legacy baseline.
+UPDATE public.daily_repetition_series_deletions AS deletion
+SET series_snapshot = deletion.series_snapshot || pg_catalog.jsonb_build_object(
+  'template_label_ids', coalesce((
+    SELECT pg_catalog.jsonb_agg(DISTINCT label.id ORDER BY label.id)
+    FROM pg_catalog.jsonb_array_elements(deletion.occurrences_snapshot) AS occurrence(value)
+    JOIN public.task_deletions AS task_deletion
+      ON task_deletion.task_id = (occurrence.value->>'task_id')::uuid
+      AND task_deletion.board_id = deletion.board_id
+      AND task_deletion.state = 'deleted'
+      AND task_deletion.task_snapshot IS NOT NULL
+    CROSS JOIN LATERAL pg_catalog.unnest(task_deletion.label_ids) AS selected(label_id)
+    JOIN public.board_labels AS label
+      ON label.id = selected.label_id
+      AND label.board_id = deletion.board_id
+      AND label.generation_id = (deletion.series_snapshot->>'generation_id')::uuid
+      AND label.deleted_at IS NULL
+    WHERE occurrence.value->>'id' = deletion.series_snapshot->>'current_occurrence_id'
+      AND occurrence.value->>'series_id' = deletion.series_id::text
+      AND occurrence.value->>'state' = 'current'
+  ), '[]'::jsonb)
+)
+WHERE deletion.state = 'deleted'
+  AND deletion.expires_at > pg_catalog.statement_timestamp()
+  AND deletion.series_snapshot IS NOT NULL
+  AND deletion.occurrences_snapshot IS NOT NULL
+  AND NOT (deletion.series_snapshot ? 'template_label_ids');
+
 REVOKE ALL ON FUNCTION public.preview_restore_board_label_with_series_p(text, uuid, text)
   FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.restore_board_label_p(

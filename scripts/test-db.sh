@@ -234,6 +234,15 @@ for migration in "$repo_dir"/supabase/migrations/*.sql; do
     private_migrations=true
   fi
   if [[ "$private_migrations" == true ]]; then
+    if [[ "${TEST_DB_FOCUS:-}" == 'issue31-upgrade' \
+      && "$(basename -- "$migration")" == '056_repetition_template_labels.sql' ]]; then
+      "${psql[@]}" -f "$repo_dir/tests/db/repetition_series_labels_upgrade_pre056.sql"
+      printf 'Applying %s after the legacy series tombstone exists\n' "$(basename -- "$migration")"
+      "${psql[@]}" -q -f "$migration"
+      "${psql[@]}" -f "$repo_dir/tests/db/repetition_series_labels_upgrade_post056.sql"
+      printf 'Issue #31 pre-056 series recovery upgrade test passed (disposable PostgreSQL).\n'
+      exit 0
+    fi
     printf 'Applying %s\n' "$(basename -- "$migration")"
     "${psql[@]}" -q -f "$migration"
   fi

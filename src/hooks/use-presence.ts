@@ -4,14 +4,14 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import type { WebSocketStatus } from "@/lib/types";
-import { generateUUID, getChannelTopic } from "@/lib/utils";
+import { generateUUID } from "@/lib/utils";
 
 /**
  * Tracks the number of viewers on a board using Supabase Presence.
  * Each viewer gets a random ID on mount and is tracked/untracked on the channel.
  * Gracefully degrades on subscription or tracking errors.
  */
-export function usePresence(slug: string) {
+export function usePresence(presenceTopic: string) {
   const [viewerCount, setViewerCount] = useState(1);
   const [isConnected, setIsConnected] = useState(true);
 
@@ -20,10 +20,10 @@ export function usePresence(slug: string) {
 
   useEffect(() => {
     const supabase = createClient();
-    const topic = getChannelTopic("board", slug);
-    const ch = supabase.channel(topic, {
-      config: { presence: { key: generateUUID() } },
+    const ch = supabase.channel(presenceTopic, {
+      config: { private: true, presence: { key: generateUUID() } },
     });
+    setViewerCount(1);
 
     ch.on("presence", { event: "sync" }, () => {
       const state = ch.presenceState();
@@ -45,9 +45,9 @@ export function usePresence(slug: string) {
         setIsConnected(false);
         if (!hasShownErrorRef.current) {
           hasShownErrorRef.current = true;
-          toast.error("Presence lost", {
+          toast.error("La presencia en tiempo real está demorada", {
             description:
-              "Live viewer count may be inaccurate. This does not affect your work.",
+              "El número de personas conectadas puede no estar actualizado. Esto no afecta los cambios confirmados.",
           });
         }
       }
@@ -57,7 +57,7 @@ export function usePresence(slug: string) {
       ch.untrack();
       supabase.removeChannel(ch);
     };
-  }, [slug]);
+  }, [presenceTopic]);
 
   return { viewerCount, isConnected };
 }

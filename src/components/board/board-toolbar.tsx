@@ -1,17 +1,53 @@
 "use client";
 
 import {
+  IconDots,
   IconDownload,
+  IconLogout,
+  IconPencil,
   IconTrash,
   IconUpload,
   IconUsers,
+  IconWorld,
 } from "@tabler/icons-react";
+import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
+import { BoardSignOutButton } from "@/components/auth/board-sign-out-button";
+import { BoardDepartureDialog } from "@/components/board/board-departure-dialog";
+import { BoardInvitationsDialog } from "@/components/board/board-invitations-dialog";
+import { BoardMembersDialog } from "@/components/board/board-members-dialog";
+import { BoardTimeZoneDialog } from "@/components/board/board-time-zone-dialog";
 import { Button } from "@/components/ui/button";
-
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Logo } from "@/components/ui/logo";
+import { renameBoard } from "@/lib/auth-actions";
+import type {
+  AssignableBoardMember,
+  BoardTimeZonePreview,
+  CurrentBoardMember,
+} from "@/lib/types";
 
 interface BoardToolbarProps {
   slug: string;
+  myTasksReturnHref: string | null;
+  name: string;
+  timeZone: string;
+  canRename: boolean;
+  canRecoverTasks: boolean;
+  memberRole: "owner" | "collaborator";
+  boardId: string;
+  actorId: string;
+  currentMembers: CurrentBoardMember[] | null;
+  hasOtherCurrentMembers: boolean | null;
+  eligibleSuccessors: AssignableBoardMember[] | null;
+  onOpenTaskRecovery: () => void;
+  onPreviewTimeZone: (timeZone: string) => Promise<BoardTimeZonePreview>;
+  onSaveTimeZone: (expectedTimeZone: string, timeZone: string) => Promise<void>;
   viewerCount: number;
   isConnected: boolean;
   onDeleteBoard: () => void;
@@ -21,37 +57,170 @@ interface BoardToolbarProps {
 
 export function BoardToolbar({
   slug,
+  myTasksReturnHref,
+  name,
+  timeZone,
+  canRename,
+  canRecoverTasks,
+  memberRole,
+  boardId,
+  actorId,
+  currentMembers,
+  hasOtherCurrentMembers,
+  eligibleSuccessors,
+  onOpenTaskRecovery,
+  onPreviewTimeZone,
+  onSaveTimeZone,
   viewerCount,
   isConnected,
   onDeleteBoard,
   onExport,
   onImport,
 }: BoardToolbarProps) {
-  const formattedTitle = slug.replaceAll("-", " ");
-  const titleWords = formattedTitle.split(" ");
-  const displayTitle =
-    titleWords.length > 5
-      ? `${titleWords.slice(0, 5).join(" ")}...`
-      : formattedTitle;
+  const [title, setTitle] = useState(name);
+  const [editValue, setEditValue] = useState(name);
+  const [isEditing, setIsEditing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isTimeZoneDialogOpen, setIsTimeZoneDialogOpen] = useState(false);
+  const [isInvitationsDialogOpen, setIsInvitationsDialogOpen] = useState(false);
+  const [isMembersDialogOpen, setIsMembersDialogOpen] = useState(false);
+  const [isDepartureDialogOpen, setIsDepartureDialogOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const isSavingRef = useRef(false);
+
+  useEffect(() => {
+    setTitle(name);
+    setEditValue(name);
+  }, [name]);
+
+  useEffect(() => {
+    if (isEditing) {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }
+  }, [isEditing]);
+
+  async function saveName() {
+    if (isSavingRef.current) return;
+    const nextName = editValue.trim();
+    if (!nextName) {
+      setError("Escribe un nombre para el tablero.");
+      return;
+    }
+    if (nextName === title) {
+      setIsEditing(false);
+      setError(null);
+      return;
+    }
+
+    setIsSaving(true);
+    isSavingRef.current = true;
+    setError(null);
+    let result: Awaited<ReturnType<typeof renameBoard>>;
+    try {
+      result = await renameBoard(slug, nextName);
+    } catch {
+      result = { error: "No se pudo confirmar el cambio. Inténtalo de nuevo." };
+    }
+    setIsSaving(false);
+    isSavingRef.current = false;
+    if (result.error || !result.name) {
+      setError(result.error ?? "No se pudo cambiar el nombre.");
+      return;
+    }
+    setTitle(result.name);
+    setEditValue(result.name);
+    setIsEditing(false);
+  }
 
   return (
     <header className="flex shrink-0 items-center justify-between border-border border-b bg-surface-base px-4 py-3 md:px-6">
       <div className="flex min-w-0 items-center gap-3">
         <Logo size={24} showText={false} />
         <div className="mx-1 hidden h-4 w-px bg-border sm:block" />
-        <h1
-          className="truncate font-semibold text-base text-text-primary"
-          title={formattedTitle}
+        <Link
+          href={myTasksReturnHref ?? "/"}
+          className="shrink-0 rounded-md px-2 py-1 text-sm text-text-secondary hover:bg-surface-overlay hover:text-text-primary"
         >
-          {displayTitle}
-        </h1>
+          {myTasksReturnHref ? "Volver a Mis tareas" : "Tableros"}
+        </Link>
+        <Link
+          href={myTasksReturnHref ? "/" : "/my-tasks?order=due"}
+          className="shrink-0 rounded-md px-2 py-1 text-sm text-text-secondary hover:bg-surface-overlay hover:text-text-primary"
+        >
+          {myTasksReturnHref ? "Tableros" : "Mis tareas"}
+        </Link>
+        <div className="min-w-0">
+          {isEditing ? (
+            <input
+              ref={inputRef}
+              value={editValue}
+              onChange={(event) => {
+                setEditValue(event.target.value);
+                if (error) setError(null);
+              }}
+              onBlur={() => void saveName()}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void saveName();
+                }
+                if (event.key === "Escape") {
+                  setEditValue(title);
+                  setError(null);
+                  setIsEditing(false);
+                }
+              }}
+              maxLength={100}
+              aria-label="Nombre del tablero"
+              aria-invalid={Boolean(error)}
+              aria-describedby={error ? "board-rename-error" : undefined}
+              disabled={isSaving}
+              className="w-full min-w-24 rounded-md border border-accent bg-surface-raised px-2 py-1 font-semibold text-base text-text-primary outline-none"
+            />
+          ) : (
+            <div className="flex items-center gap-1">
+              <h1
+                className="truncate font-semibold text-base text-text-primary"
+                title={title}
+              >
+                {title}
+              </h1>
+              {canRename ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditValue(title);
+                    setError(null);
+                    setIsEditing(true);
+                  }}
+                  aria-label="Cambiar el nombre del tablero"
+                  title="Cambiar el nombre del tablero"
+                  className="rounded-md p-1 text-text-muted hover:bg-surface-overlay hover:text-text-primary"
+                >
+                  <IconPencil size={15} />
+                </button>
+              ) : null}
+            </div>
+          )}
+          {error ? (
+            <p
+              id="board-rename-error"
+              className="text-priority-urgent text-xs"
+              role="alert"
+            >
+              {error}
+            </p>
+          ) : null}
+        </div>
 
         {/* Live viewer count & connection status */}
         {(viewerCount > 1 || !isConnected) && (
           <div className="flex items-center gap-1.5 rounded-full bg-surface-overlay px-2.5 py-1">
             <span
               className={`h-1.5 w-1.5 rounded-full ${
-                isConnected ? "bg-green-500" : "bg-red-500"
+                isConnected ? "bg-status-connected" : "bg-priority-urgent"
               }`}
               style={
                 isConnected
@@ -68,33 +237,132 @@ export function BoardToolbar({
       </div>
 
       <div className="flex items-center gap-1">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onImport}
-          title="Import board"
-        >
-          <IconUpload size={16} />
-          <span className="hidden sm:inline">Import</span>
-        </Button>
+        {canRename || canRecoverTasks ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              title="Más acciones del tablero"
+              aria-label={`Opciones del tablero ${name}`}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-transparent text-text-secondary transition-colors hover:bg-surface-overlay hover:text-text-primary focus-visible:ring-1 focus-visible:ring-accent"
+            >
+              <IconDots size={18} aria-hidden="true" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-56">
+              <DropdownMenuItem
+                onClick={() => setIsMembersDialogOpen(true)}
+                className="cursor-pointer"
+              >
+                <IconUsers size={16} aria-hidden="true" />
+                Miembros
+              </DropdownMenuItem>
+              {canRecoverTasks ? (
+                <DropdownMenuItem
+                  onClick={onOpenTaskRecovery}
+                  className="cursor-pointer"
+                >
+                  Recuperación
+                </DropdownMenuItem>
+              ) : null}
+              <DropdownMenuItem
+                onClick={() => setIsDepartureDialogOpen(true)}
+                className="cursor-pointer text-priority-urgent"
+              >
+                <IconLogout size={16} aria-hidden="true" />
+                Salir del tablero
+              </DropdownMenuItem>
+              {canRename ? (
+                <>
+                  <DropdownMenuItem
+                    onClick={() => setIsTimeZoneDialogOpen(true)}
+                    className="cursor-pointer"
+                  >
+                    <IconWorld size={16} aria-hidden="true" />
+                    Zona horaria del tablero
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => setIsInvitationsDialogOpen(true)}
+                    className="cursor-pointer"
+                  >
+                    <IconUsers size={16} aria-hidden="true" />
+                    Invitaciones
+                  </DropdownMenuItem>
+                </>
+              ) : null}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : null}
+        {canRename ? (
+          <>
+            <BoardTimeZoneDialog
+              open={isTimeZoneDialogOpen}
+              onClose={() => setIsTimeZoneDialogOpen(false)}
+              timeZone={timeZone}
+              onPreview={onPreviewTimeZone}
+              onSave={onSaveTimeZone}
+            />
+            <BoardInvitationsDialog
+              open={isInvitationsDialogOpen}
+              onClose={() => setIsInvitationsDialogOpen(false)}
+              slug={slug}
+            />
+          </>
+        ) : null}
+        <BoardMembersDialog
+          open={isMembersDialogOpen}
+          onClose={() => setIsMembersDialogOpen(false)}
+          slug={slug}
+          boardId={boardId}
+          actorId={actorId}
+          memberRole={memberRole}
+          members={currentMembers}
+        />
+        <BoardDepartureDialog
+          open={isDepartureDialogOpen}
+          onClose={() => setIsDepartureDialogOpen(false)}
+          slug={slug}
+          boardId={boardId}
+          actorId={actorId}
+          memberRole={memberRole}
+          hasOtherCurrentMembers={hasOtherCurrentMembers}
+          eligibleSuccessors={eligibleSuccessors}
+        />
+        {canRename ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onImport}
+            title="Importar tablero"
+          >
+            <IconUpload size={16} />
+            <span className="hidden sm:inline">Importar</span>
+          </Button>
+        ) : null}
         <Button
           variant="ghost"
           size="sm"
           onClick={onExport}
-          title="Export board"
+          title="Exportar tablero"
         >
           <IconDownload size={16} />
-          <span className="hidden sm:inline">Export</span>
+          <span className="hidden sm:inline">Exportar</span>
         </Button>
-        <Button
-          variant="danger"
-          size="sm"
-          onClick={onDeleteBoard}
-          title="Delete board"
+        {canRename ? (
+          <Button
+            variant="danger"
+            size="sm"
+            onClick={onDeleteBoard}
+            title="Eliminar tablero"
+          >
+            <IconTrash size={16} />
+            <span className="hidden sm:inline">Eliminar</span>
+          </Button>
+        ) : null}
+        <Link
+          href="/account"
+          className="rounded-md px-2 py-1 text-sm text-text-secondary hover:bg-surface-overlay hover:text-text-primary"
         >
-          <IconTrash size={16} />
-          <span className="hidden sm:inline">Delete</span>
-        </Button>
+          Cuenta
+        </Link>
+        <BoardSignOutButton />
       </div>
     </header>
   );

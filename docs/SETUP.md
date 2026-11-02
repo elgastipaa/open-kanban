@@ -32,11 +32,11 @@ Mantener Realtime y el acceso a canales públicos habilitados. Upstash queda sin
 
 ## 3. Esquema: aprobación separada
 
-Antes de ejecutar SQL remoto, revisar la migración correctiva 012 y la evidencia de las pruebas locales con el propietario. Luego, con su aprobación, aplicar los archivos de `supabase/migrations/` en orden numérico **001 a 012**, sin abrir la aplicación a usuarios entre pasos. La lista exacta está en el README.
+Antes de ejecutar SQL remoto, revisar la migración correctiva 014 y la evidencia de las pruebas locales con el propietario. Luego, con su aprobación, aplicar los archivos de `supabase/migrations/` en orden numérico **001 a 014**, sin abrir la aplicación a usuarios entre pasos. La lista exacta está en el README.
 
-Las primeras migraciones crean políticas permisivas; las siguientes las cierran. La 012 retira RPC antiguas sin slug, restringe permisos y evita movimientos de tareas hacia otro tablero. No elimina tablas ni datos del tablero. No ejecutar solo 001–004 ni modificar a mano el historial para omitir pasos.
+Las primeras migraciones crean políticas permisivas; las siguientes las cierran. La 012 retira RPC antiguas sin slug y restringe permisos; la 013 separa la edición de campos del movimiento y conserva la denegación de cambios entre tableros; la 014 hace que `updated_at` de tareas avance con el orden de escritura de la fila. No elimina tablas ni datos del tablero. No ejecutar solo 001–004 ni modificar a mano el historial para omitir pasos.
 
-En un proyecto nuevo se ejecuta todo el historial una sola vez. Si falla un paso, registrar cuál y revisar el estado antes de reintentarlo: varios scripts históricos crean triggers o políticas sin ser idempotentes. En una instancia existente que ya tenga 001–011, revisar primero su estado y aplicar únicamente lo pendiente, con respaldo y aprobación.
+En un proyecto nuevo se ejecuta todo el historial una sola vez. Si falla un paso, registrar cuál y revisar el estado antes de reintentarlo: varios scripts históricos crean triggers o políticas sin ser idempotentes. En una instancia existente que ya tenga 001–013, aplicar únicamente la 014 pendiente tras revisar el estado, con respaldo y aprobación. Para historiales anteriores, determinar los pasos pendientes antes de ejecutar SQL.
 
 ## 4. Verificación local
 

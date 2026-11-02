@@ -1,0 +1,251 @@
+"use client";
+
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  boardFavoriteFailureMessage,
+  focusFavoriteBoardButton,
+  groupFavoriteBoards,
+  shouldRestoreFavoriteButtonFocus,
+  updateFavoriteIds,
+  updatePendingFavoriteIds,
+} from "@/lib/board-favorites-state";
+import { setBoardFavorite } from "@/lib/db/board-favorites";
+import { createClient } from "@/lib/supabase/client";
+import type { Board } from "@/lib/types";
+
+interface BoardFavoritesListProps {
+  boards: Board[];
+  favoriteBoardIds: string[];
+  boardsLoadError: boolean;
+  favoritesLoadError: boolean;
+}
+
+export function BoardFavoritesList({
+  boards,
+  favoriteBoardIds,
+  boardsLoadError,
+  favoritesLoadError,
+}: BoardFavoritesListProps) {
+  const router = useRouter();
+  const favoriteButtonRefs = useRef(new Map<string, HTMLButtonElement>());
+  const focusAfterFavoriteMove = useRef<{
+    boardId: string;
+    desiredFavorite: boolean | null;
+    originalButton: HTMLButtonElement;
+  } | null>(null);
+  const pendingBoardIdsRef = useRef(new Set<string>());
+  const [favoriteIds, setFavoriteIds] = useState<Set<string>>(
+    () => new Set(favoriteBoardIds),
+  );
+  const [pendingBoardIds, setPendingBoardIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [mutationError, setMutationError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setFavoriteIds(new Set(favoriteBoardIds));
+  }, [favoriteBoardIds]);
+
+  useLayoutEffect(() => {
+    const request = focusAfterFavoriteMove.current;
+    if (!request) return;
+    if (
+      !shouldRestoreFavoriteButtonFocus(
+        request.originalButton,
+        document.activeElement,
+        document.body,
+        document.documentElement,
+      )
+    ) {
+      focusAfterFavoriteMove.current = null;
+      return;
+    }
+    if (
+      request.desiredFavorite !== null &&
+      favoriteIds.has(request.boardId) !== request.desiredFavorite
+    ) {
+      focusAfterFavoriteMove.current = null;
+      return;
+    }
+    focusFavoriteBoardButton(favoriteButtonRefs.current, request.boardId);
+    focusAfterFavoriteMove.current = null;
+  }, [favoriteIds]);
+
+  async function toggleFavorite(boardId: string) {
+    if (pendingBoardIdsRef.current.has(boardId) || favoritesLoadError) return;
+
+    const button = favoriteButtonRefs.current.get(boardId);
+    const hadFocus = document.activeElement === button;
+    const nextValue = !favoriteIds.has(boardId);
+    const pending = updatePendingFavoriteIds(
+      pendingBoardIdsRef.current,
+      boardId,
+      true,
+    );
+    pendingBoardIdsRef.current = pending;
+    setPendingBoardIds(pending);
+    setMutationError(null);
+
+    try {
+      await setBoardFavorite(createClient(), boardId, nextValue);
+      focusAfterFavoriteMove.current =
+        hadFocus && button && document.activeElement === button
+          ? { boardId, desiredFavorite: nextValue, originalButton: button }
+          : null;
+      setFavoriteIds((current) =>
+        updateFavoriteIds(current, boardId, nextValue),
+      );
+    } catch (error) {
+      focusAfterFavoriteMove.current =
+        hadFocus && button && document.activeElement === button
+          ? { boardId, desiredFavorite: null, originalButton: button }
+          : null;
+      setMutationError(boardFavoriteFailureMessage(error));
+      router.refresh();
+    } finally {
+      const remaining = updatePendingFavoriteIds(
+        pendingBoardIdsRef.current,
+        boardId,
+        false,
+      );
+      pendingBoardIdsRef.current = remaining;
+      setPendingBoardIds(remaining);
+    }
+  }
+
+  if (boardsLoadError) {
+    return (
+      <section
+        aria-label="Tus tableros"
+        className="mt-8 rounded-xl border border-priority-urgent/30 bg-priority-urgent/10 p-4 text-priority-urgent text-sm"
+        role="alert"
+      >
+        <p>No se pudieron cargar tus tableros.</p>
+        <button
+          className="mt-3 rounded-lg border border-priority-urgent/30 px-3 py-2 text-priority-urgent transition hover:bg-priority-urgent/10"
+          onClick={() => router.refresh()}
+          type="button"
+        >
+          Reintentar
+        </button>
+      </section>
+    );
+  }
+
+  if (boards.length === 0) {
+    return (
+      <p className="mt-8 rounded-2xl border border-border border-dashed p-10 text-center text-sm text-text-secondary">
+        Todavía no tienes tableros. Acepta una invitación o crea uno para
+        empezar.
+      </p>
+    );
+  }
+
+  const { favorites, others } = groupFavoriteBoards(
+    boards,
+    favoritesLoadError ? new Set<string>() : favoriteIds,
+  );
+  const otherBoards = favoritesLoadError ? boards : others;
+
+  function boardCard(board: Board, isFavorite: boolean) {
+    const isPending = pendingBoardIds.has(board.id);
+    return (
+      <li key={board.id}>
+        <div className="flex min-h-24 items-center gap-3 rounded-2xl border border-border bg-surface-raised p-5 transition hover:border-border-hover hover:bg-surface-overlay">
+          <Link className="min-w-0 flex-1" href={`/${board.slug}`}>
+            <span className="block truncate font-semibold">{board.name}</span>
+            <span className="mt-2 block text-text-muted text-xs">
+              {board.role === "owner" ? "Propietario" : "Compartido contigo"}
+            </span>
+          </Link>
+          {favoritesLoadError ? null : (
+            <button
+              aria-busy={isPending}
+              aria-disabled={isPending}
+              aria-label={
+                isFavorite
+                  ? `Quitar ${board.name} de favoritos`
+                  : `Marcar ${board.name} como favorito`
+              }
+              aria-pressed={isFavorite}
+              className="grid size-11 shrink-0 place-items-center rounded-full text-2xl text-priority-medium transition hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-focus-ring focus-visible:outline-offset-2 aria-disabled:cursor-wait aria-disabled:opacity-60"
+              onClick={() => void toggleFavorite(board.id)}
+              ref={(button) => {
+                if (button) favoriteButtonRefs.current.set(board.id, button);
+                else favoriteButtonRefs.current.delete(board.id);
+              }}
+              type="button"
+            >
+              <span aria-hidden="true">{isFavorite ? "★" : "☆"}</span>
+            </button>
+          )}
+        </div>
+      </li>
+    );
+  }
+
+  return (
+    <div className="mt-8 space-y-8">
+      <section aria-labelledby="favorites-heading">
+        <h2
+          className="font-display font-semibold text-xl"
+          id="favorites-heading"
+        >
+          Favoritos
+        </h2>
+        {favoritesLoadError ? (
+          <div
+            className="mt-3 rounded-xl border border-priority-urgent/30 bg-priority-urgent/10 p-4 text-priority-urgent text-sm"
+            role="alert"
+          >
+            <p>No se pudieron consultar tus favoritos.</p>
+            <button
+              className="mt-3 rounded-lg border border-priority-urgent/30 px-3 py-2 text-priority-urgent transition hover:bg-priority-urgent/10"
+              onClick={() => router.refresh()}
+              type="button"
+            >
+              Reintentar
+            </button>
+          </div>
+        ) : favorites.length === 0 ? (
+          <p className="mt-3 text-sm text-text-muted">
+            Marca un tablero con la estrella para encontrarlo aquí.
+          </p>
+        ) : (
+          <ul className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {favorites.map((board) => boardCard(board, true))}
+          </ul>
+        )}
+      </section>
+
+      {mutationError ? (
+        <p
+          className="rounded-xl border border-priority-urgent/30 bg-priority-urgent/10 p-4 text-priority-urgent text-sm"
+          role="alert"
+        >
+          {mutationError}
+        </p>
+      ) : null}
+
+      <section aria-labelledby="other-boards-heading">
+        <h2
+          className="font-display font-semibold text-xl"
+          id="other-boards-heading"
+        >
+          {favoritesLoadError ? "Tus tableros" : "Otros tableros"}
+        </h2>
+        {otherBoards.length === 0 ? (
+          <p className="mt-3 text-sm text-text-muted">
+            Todos tus tableros están en Favoritos.
+          </p>
+        ) : (
+          <ul className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {otherBoards.map((board) => boardCard(board, false))}
+          </ul>
+        )}
+      </section>
+    </div>
+  );
+}

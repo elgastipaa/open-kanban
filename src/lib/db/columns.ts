@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import type { ColumnDeletionCommand } from "@/lib/column-deletion-flow";
 import type {
   Column,
   CreateColumnPayload,
@@ -64,17 +65,266 @@ export async function updateColumn(
   return response.data as Column;
 }
 
-/** Delete a column (cascades to tasks) */
+/** Delete a column into recovery, moving its active tasks transactionally. */
 export async function deleteColumn(
   supabase: SupabaseClient,
   slug: string,
+  command: ColumnDeletionCommand,
+): Promise<ColumnRecoveryResult> {
+  if (!slug || !command.operation_id || !command.column_id) {
+    throw new ColumnRecoveryError("rejected");
+  }
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let response: Awaited<ReturnType<SupabaseClient["rpc"]>>;
+    try {
+      response = await supabase.rpc("delete_column_p", {
+        p_operation_id: command.operation_id,
+        p_slug: slug,
+        p_column_id: command.column_id,
+        p_destination_column_id: command.destination_column_id,
+        p_expected_task_order_version: command.expected_task_order_version,
+      });
+    } catch {
+      if (attempt === 1) throw new ColumnRecoveryError("uncertain");
+      continue;
+    }
+    if (response.error) {
+      const definite = columnRecoveryErrorForCode(response.error.code ?? "");
+      if (definite) throw definite;
+      if (attempt === 1) throw new ColumnRecoveryError("uncertain");
+      continue;
+    }
+    if (!isColumnRecoveryResult(response.data)) {
+      throw new ColumnRecoveryError("uncertain");
+    }
+    if (response.data.operation_id !== command.operation_id) {
+      throw new ColumnRecoveryError("uncertain");
+    }
+    return response.data;
+  }
+  throw new ColumnRecoveryError("uncertain");
+}
+
+export interface ColumnDeletionPreview {
+  status: "preview";
+  column_id: string;
+  column_title: string;
+  task_count: number;
+  task_order_version: number;
+  destinations: Array<{ id: string; title: string; position: number }>;
+}
+
+export type ColumnRecoveryResultStatus =
+  | "confirmed"
+  | "conflict"
+  | "unavailable"
+  | "needs_destination"
+  | "expired"
+  | "expired_unknown"
+  | "retryable";
+
+export interface ColumnRecoveryResult {
+  status: ColumnRecoveryResultStatus;
+  operation_id: string;
+  column_id?: string;
+  moved_task_count?: number;
+  expires_at?: string;
+}
+
+export interface DeletedColumnRecoveryItem {
+  column_id: string;
+  title: string;
+  original_position: number;
+  destination_column_id: string | null;
+  moved_task_count: number;
+  deleted_by: string;
+  deleted_at: string;
+  expires_at: string;
+  can_restore: boolean;
+  eligibility_checked_at: string;
+}
+
+export type ColumnRecoveryErrorReason =
+  | "access_denied"
+  | "rejected"
+  | "unavailable"
+  | "uncertain";
+
+export class ColumnRecoveryError extends Error {
+  constructor(readonly reason: ColumnRecoveryErrorReason) {
+    super(reason);
+    this.name = "ColumnRecoveryError";
+  }
+}
+
+function columnRecoveryErrorForCode(code: string): ColumnRecoveryError | null {
+  if (code === "42501") return new ColumnRecoveryError("access_denied");
+  if (code === "22023" || code === "22P02" || code === "23514") {
+    return new ColumnRecoveryError("rejected");
+  }
+  return null;
+}
+
+function isColumnDeletionPreview(
+  value: unknown,
+): value is ColumnDeletionPreview {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "status" in value &&
+    value.status === "preview" &&
+    "column_id" in value &&
+    typeof value.column_id === "string" &&
+    "column_title" in value &&
+    typeof value.column_title === "string" &&
+    "task_count" in value &&
+    typeof value.task_count === "number" &&
+    Number.isInteger(value.task_count) &&
+    "task_order_version" in value &&
+    typeof value.task_order_version === "number" &&
+    Number.isInteger(value.task_order_version) &&
+    "destinations" in value &&
+    Array.isArray(value.destinations) &&
+    value.destinations.every(
+      (destination) =>
+        typeof destination === "object" &&
+        destination !== null &&
+        "id" in destination &&
+        typeof destination.id === "string" &&
+        "title" in destination &&
+        typeof destination.title === "string" &&
+        "position" in destination &&
+        typeof destination.position === "number" &&
+        Number.isInteger(destination.position),
+    )
+  );
+}
+
+function isColumnRecoveryResult(value: unknown): value is ColumnRecoveryResult {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "status" in value &&
+    [
+      "confirmed",
+      "conflict",
+      "unavailable",
+      "needs_destination",
+      "expired",
+      "expired_unknown",
+      "retryable",
+    ].includes(String(value.status)) &&
+    "operation_id" in value &&
+    typeof value.operation_id === "string"
+  );
+}
+
+function isDeletedColumnRecoveryItem(
+  value: unknown,
+): value is DeletedColumnRecoveryItem {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "column_id" in value &&
+    typeof value.column_id === "string" &&
+    "title" in value &&
+    typeof value.title === "string" &&
+    "original_position" in value &&
+    typeof value.original_position === "number" &&
+    "moved_task_count" in value &&
+    typeof value.moved_task_count === "number" &&
+    "deleted_by" in value &&
+    typeof value.deleted_by === "string" &&
+    "deleted_at" in value &&
+    typeof value.deleted_at === "string" &&
+    "expires_at" in value &&
+    typeof value.expires_at === "string" &&
+    "can_restore" in value &&
+    typeof value.can_restore === "boolean" &&
+    "eligibility_checked_at" in value &&
+    typeof value.eligibility_checked_at === "string"
+  );
+}
+
+/** Load an authorized preview, including only destinations in this board. */
+export async function previewDeleteColumn(
+  supabase: SupabaseClient,
+  slug: string,
   columnId: string,
-): Promise<void> {
-  const { error } = await supabase.rpc("delete_column_p", {
+): Promise<ColumnDeletionPreview> {
+  const { data, error } = await supabase.rpc("preview_delete_column_p", {
     p_slug: slug,
-    p_id: columnId,
+    p_column_id: columnId,
   });
-  if (error) handleSupabaseError(error);
+  if (error) {
+    throw (
+      columnRecoveryErrorForCode(error.code ?? "") ??
+      new ColumnRecoveryError("uncertain")
+    );
+  }
+  if (!isColumnDeletionPreview(data)) {
+    throw new ColumnRecoveryError("unavailable");
+  }
+  return data;
+}
+
+/** Load only columns that the current board member can recover. */
+export async function listDeletedColumns(
+  supabase: SupabaseClient,
+  slug: string,
+): Promise<DeletedColumnRecoveryItem[]> {
+  const { data, error } = await supabase.rpc("list_deleted_columns_p", {
+    p_slug: slug,
+  });
+  if (error) {
+    throw (
+      columnRecoveryErrorForCode(error.code ?? "") ??
+      new ColumnRecoveryError("uncertain")
+    );
+  }
+  if (!Array.isArray(data) || !data.every(isDeletedColumnRecoveryItem)) {
+    throw new ColumnRecoveryError("uncertain");
+  }
+  return data;
+}
+
+/** Restore only the column structure; the deletion never reverses task moves. */
+export async function restoreColumn(
+  supabase: SupabaseClient,
+  slug: string,
+  operationId: string,
+  columnId: string,
+): Promise<ColumnRecoveryResult> {
+  if (!slug || !operationId || !columnId) {
+    throw new ColumnRecoveryError("rejected");
+  }
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let response: Awaited<ReturnType<SupabaseClient["rpc"]>>;
+    try {
+      response = await supabase.rpc("restore_column_p", {
+        p_operation_id: operationId,
+        p_slug: slug,
+        p_column_id: columnId,
+      });
+    } catch {
+      if (attempt === 1) throw new ColumnRecoveryError("uncertain");
+      continue;
+    }
+    if (response.error) {
+      const definite = columnRecoveryErrorForCode(response.error.code ?? "");
+      if (definite) throw definite;
+      if (attempt === 1) throw new ColumnRecoveryError("uncertain");
+      continue;
+    }
+    if (!isColumnRecoveryResult(response.data)) {
+      throw new ColumnRecoveryError("uncertain");
+    }
+    if (response.data.operation_id !== operationId) {
+      throw new ColumnRecoveryError("uncertain");
+    }
+    return response.data;
+  }
+  throw new ColumnRecoveryError("uncertain");
 }
 
 /** Maximum batch size for position updates (Finding #4) */
@@ -100,8 +350,6 @@ export async function updateColumnPositions(
   const payload = uniqueUpdates.map((col) => ({
     id: col.id,
     position: col.position,
-    title: col.title,
-    is_collapsed: col.is_collapsed,
   }));
 
   const { error } = await supabase.rpc("update_column_positions_p", {

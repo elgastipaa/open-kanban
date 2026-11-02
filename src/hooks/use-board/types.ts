@@ -1,9 +1,14 @@
 import type { Board, ColumnWithTasks } from "@/lib/types";
 
 export interface UseBoardOptions {
+  /** Authenticated actor for in-memory, actor-scoped command reconciliation. */
+  actorId: string;
   slug: string;
-  initialBoard: Board | null;
+  initialBoard: Board;
   initialColumns: ColumnWithTasks[];
-  /** Called after every DB write - used to trigger broadcast sync */
+  authEpoch: string | number;
+  /** Reconciles a confirmed local write through an authorized database read. */
   onMutation?: () => void;
+  /** Called when a board command confirms that the current user lost access. */
+  onAccessLost?: () => void;
 }

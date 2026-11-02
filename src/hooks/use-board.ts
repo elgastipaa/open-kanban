@@ -3,24 +3,28 @@
 import { useCallback, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { Board, ColumnWithTasks } from "@/lib/types";
-
+import { TaskMutationLedger } from "./use-board/task-mutation-ledger";
 import type { UseBoardOptions } from "./use-board/types";
 import { useBoardSync } from "./use-board/use-board-sync";
 import { useColumnOperations } from "./use-board/use-column-operations";
 import { useTaskOperations } from "./use-board/use-task-operations";
-import { getInitialLocalColumn } from "./use-board/utils";
 
 export function useBoard({
+  actorId,
   slug,
   initialBoard,
   initialColumns,
+  authEpoch,
   onMutation,
+  onAccessLost,
 }: UseBoardOptions) {
   const [board, setBoard] = useState<Board | null>(initialBoard);
-  const [columns, setColumns] = useState<ColumnWithTasks[]>(() => {
-    if (initialColumns.length > 0) return initialColumns;
-    return [getInitialLocalColumn()];
-  });
+  const [columns, setColumns] = useState<ColumnWithTasks[]>(initialColumns);
+  const taskMutationLedgerRef = useRef<TaskMutationLedger | null>(null);
+  if (!taskMutationLedgerRef.current) {
+    taskMutationLedgerRef.current = new TaskMutationLedger(columns);
+  }
+  const taskMutationLedger = taskMutationLedgerRef.current;
 
   /** Whether board + columns have been persisted to DB */
   const isPersistedRef = useRef(initialBoard !== null);
@@ -37,22 +41,32 @@ export function useBoard({
   const queueRef = useRef<Promise<void>>(Promise.resolve());
 
   const enqueue = useCallback((operation: () => Promise<void>) => {
-    queueRef.current = queueRef.current.then(operation).catch((err) => {
+    const queued = queueRef.current.then(operation).catch((err) => {
       console.error("Mutation queue error:", err);
     });
+    queueRef.current = queued;
+    return queued;
   }, []);
 
   const supabase = createClient();
 
-  const { refreshFromDB, persistBoard, removeBoard, replaceState } =
-    useBoardSync({
-      slug,
-      supabase,
-      boardRef,
-      isPersistedRef,
-      setBoard,
-      setColumns,
-    });
+  const {
+    refreshFromDB,
+    persistBoard,
+    applyBoardSettings,
+    removeBoard,
+    replaceState,
+  } = useBoardSync({
+    slug,
+    supabase,
+    authEpoch,
+    onAccessLost,
+    boardRef,
+    isPersistedRef,
+    setBoard,
+    setColumns,
+    taskMutationLedger,
+  });
 
   const {
     addColumn,
@@ -69,10 +83,26 @@ export function useBoard({
     isPersistedRef,
     onMutationRef,
     persistBoard,
+    refreshFromDB,
     enqueue,
+    ledger: taskMutationLedger,
   });
 
-  const { addTask, editTask, removeTask, moveTask } = useTaskOperations({
+  const {
+    addTask,
+    editTask,
+    completeTask,
+    mutateChecklistStep,
+    checklistAddOperations,
+    refreshTaskForEdit,
+    removeTask,
+    moveTask,
+    getTaskDailyRepetition,
+    previewTaskDailyRepetition,
+    createTaskDailyRepetition,
+    dailyRepetitionOperations,
+  } = useTaskOperations({
+    actorId,
     slug,
     supabase,
     columnsRef,
@@ -81,6 +111,8 @@ export function useBoard({
     onMutationRef,
     persistBoard,
     enqueue,
+    ledger: taskMutationLedger,
+    onAccessLost: onAccessLost ?? (() => undefined),
   });
 
   return {
@@ -93,11 +125,20 @@ export function useBoard({
     removeColumn,
     addTask,
     editTask,
+    completeTask,
+    mutateChecklistStep,
+    checklistAddOperations,
+    refreshTaskForEdit,
     removeTask,
     moveTask,
+    getTaskDailyRepetition,
+    previewTaskDailyRepetition,
+    createTaskDailyRepetition,
+    dailyRepetitionOperations,
     moveColumn,
     removeBoard,
     replaceState,
     refreshFromDB,
+    applyBoardSettings,
   };
 }

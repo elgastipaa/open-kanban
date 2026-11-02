@@ -1,5 +1,33 @@
 import type { NextConfig } from "next";
 
+function getLocalSupabaseConnectSources(): string[] {
+  if (process.env.NODE_ENV !== "development") return [];
+
+  const configuredUrl = process.env.NEXT_PUBLIC_SUPABASE_PUBLIC_URL;
+  if (!configuredUrl) return [];
+
+  try {
+    const supabaseUrl = new URL(configuredUrl);
+    if (!["localhost", "127.0.0.1", "[::1]"].includes(supabaseUrl.hostname)) {
+      return [];
+    }
+
+    const realtimeUrl = new URL(supabaseUrl.origin);
+    realtimeUrl.protocol = supabaseUrl.protocol === "https:" ? "wss:" : "ws:";
+    return [supabaseUrl.origin, realtimeUrl.origin];
+  } catch {
+    return [];
+  }
+}
+
+const supabaseConnectSources = [
+  "'self'",
+  "https://*.supabase.co",
+  "wss://*.supabase.co",
+  "https://*.upstash.io",
+  ...getLocalSupabaseConnectSources(),
+];
+
 const nextConfig: NextConfig = {
   /* config options here */
   reactCompiler: true,
@@ -22,7 +50,7 @@ const nextConfig: NextConfig = {
               "style-src 'self' 'unsafe-inline'",
               "img-src 'self' data: https:",
               "font-src 'self' https://fonts.gstatic.com",
-              "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.upstash.io",
+              `connect-src ${supabaseConnectSources.join(" ")}`,
               "frame-ancestors 'none'",
             ].join("; "),
           },

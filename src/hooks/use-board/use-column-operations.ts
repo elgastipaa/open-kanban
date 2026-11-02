@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { useCallback } from "react";
+import type { ColumnDeletionCommand } from "@/lib/column-deletion-flow";
 import {
   batchToggleColumnsCollapse,
   createColumn,
@@ -7,7 +8,10 @@ import {
   updateColumn,
   updateColumnPositions,
 } from "@/lib/db";
+import type { ColumnRecoveryResult } from "@/lib/db/columns";
 import type { Board, Column, ColumnWithTasks } from "@/lib/types";
+import type { TaskMutationLedger } from "./task-mutation-ledger";
+import type { BoardRefreshOutcome } from "./use-board-sync";
 import { makeLocalColumn, showMutationError } from "./utils";
 
 interface UseColumnOperationsProps {
@@ -18,7 +22,9 @@ interface UseColumnOperationsProps {
   isPersistedRef: React.RefObject<boolean>;
   onMutationRef: React.RefObject<(() => void) | undefined>;
   persistBoard: () => Promise<Board>;
-  enqueue: (op: () => Promise<void>) => void;
+  refreshFromDB: () => Promise<BoardRefreshOutcome>;
+  enqueue: (op: () => Promise<void>) => Promise<void>;
+  ledger: TaskMutationLedger;
 }
 
 export function useColumnOperations({
@@ -29,12 +35,15 @@ export function useColumnOperations({
   isPersistedRef,
   onMutationRef,
   persistBoard,
+  refreshFromDB,
   enqueue,
+  ledger,
 }: UseColumnOperationsProps) {
   const addColumn = useCallback(
-    (title = "Untitled") => {
+    (title: string) => {
+      const trimmedTitle = title.trim();
       const position = columnsRef.current ? columnsRef.current.length : 0;
-      const tempCol = makeLocalColumn(title, position);
+      const tempCol = makeLocalColumn(trimmedTitle, position);
 
       // Optimistic UI update
       setColumns((prev) => [...prev, tempCol]);
@@ -42,43 +51,22 @@ export function useColumnOperations({
       // Queue DB operation
       enqueue(async () => {
         try {
-          const wasPersisted = isPersistedRef.current;
           const board = await persistBoard();
-
-          // If the board was just created, persist any existing local columns
-          // (e.g. the default "To Do" column) before creating the new one
-          if (!wasPersisted) {
-            const currentSnapshot = columnsRef.current ?? [];
-            for (const col of currentSnapshot) {
-              if (col.id.startsWith("local-") && col.id !== tempCol.id) {
-                const newCol = await createColumn(supabase, slug, {
-                  board_id: board.id,
-                  title: col.title,
-                  position: col.position,
-                });
-                setColumns((prev) =>
-                  prev.map((c) =>
-                    c.id === col.id
-                      ? { ...c, id: newCol.id, board_id: board.id }
-                      : c,
-                  ),
-                );
-              }
-            }
-          }
 
           const dbCol = await createColumn(supabase, slug, {
             board_id: board.id,
-            title,
+            title: trimmedTitle,
             position,
           });
 
           setColumns((prev) =>
-            prev.map((col) =>
-              col.id === tempCol.id
-                ? { ...dbCol, tasks: [], board_id: board.id }
-                : col,
-            ),
+            ledger
+              .replaceColumnId(tempCol.id, dbCol.id, prev)
+              .map((col) =>
+                col.id === dbCol.id
+                  ? { ...dbCol, board_id: board.id, tasks: col.tasks }
+                  : col,
+              ),
           );
           onMutationRef.current?.();
         } catch {
@@ -95,7 +83,7 @@ export function useColumnOperations({
       supabase,
       slug,
       onMutationRef,
-      isPersistedRef,
+      ledger,
     ],
   );
 
@@ -206,50 +194,32 @@ export function useColumnOperations({
   );
 
   const removeColumn = useCallback(
-    (columnId: string) => {
-      const currentCols = columnsRef.current ?? [];
-      if (currentCols.length <= 1) return;
-
-      const snapshot = currentCols;
-      const filtered = currentCols.filter((col) => col.id !== columnId);
-      const newCols = filtered.map((col, i) => ({ ...col, position: i }));
-
-      // Optimistic UI update
-      setColumns(newCols);
-
-      if (!isPersistedRef.current || columnId.startsWith("local-")) return;
-
-      const colUpdates: Column[] = newCols.map((col) => ({
-        id: col.id,
-        board_id: col.board_id,
-        title: col.title,
-        position: col.position,
-        is_collapsed: col.is_collapsed,
-        created_at: col.created_at,
-      }));
-
-      enqueue(async () => {
+    async (command: ColumnDeletionCommand): Promise<ColumnRecoveryResult> => {
+      if (!isPersistedRef.current || command.column_id.startsWith("local-")) {
+        throw new Error("No se puede recuperar una columna sin guardar.");
+      }
+      let result: ColumnRecoveryResult | null = null;
+      let failure: unknown;
+      await enqueue(async () => {
         try {
-          await dbDeleteColumn(supabase, slug, columnId);
-          if (colUpdates.length > 0) {
-            await updateColumnPositions(supabase, slug, colUpdates);
+          result = await dbDeleteColumn(supabase, slug, command);
+          await refreshFromDB();
+          if (result.status === "confirmed") onMutationRef.current?.();
+        } catch (error) {
+          failure = error;
+          try {
+            await refreshFromDB();
+          } catch {
+            // Preserve the original operation error; the UI will ask for review.
           }
-          onMutationRef.current?.();
-        } catch {
-          setColumns(snapshot);
-          showMutationError("delete column");
         }
       });
+      if (failure) throw failure;
+      if (!result)
+        throw new Error("No se recibió el resultado de la operación.");
+      return result;
     },
-    [
-      columnsRef,
-      setColumns,
-      isPersistedRef,
-      enqueue,
-      supabase,
-      slug,
-      onMutationRef,
-    ],
+    [isPersistedRef, enqueue, supabase, slug, onMutationRef, refreshFromDB],
   );
 
   const moveColumn = useCallback(
@@ -274,6 +244,7 @@ export function useColumnOperations({
         title: col.title,
         position: col.position,
         is_collapsed: col.is_collapsed,
+        task_order_version: col.task_order_version,
         created_at: col.created_at,
       }));
 

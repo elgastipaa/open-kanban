@@ -1,12 +1,21 @@
 "use client";
 
 import { Droppable } from "@hello-pangea/dnd";
-import { IconLayoutSidebarRightCollapse } from "@tabler/icons-react";
+import {
+  IconChevronDown,
+  IconLayoutSidebarRightCollapse,
+} from "@tabler/icons-react";
 import { motion } from "motion/react";
+import { useState } from "react";
 import { AddTask } from "@/components/board/add-task";
 import { ColumnHeader } from "@/components/board/column-header";
 import { TaskCard } from "@/components/board/task-card";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { getTaskAssigneeLabel } from "@/lib/task-assignee-label";
+import {
+  orderTasksByCompletion,
+  pendingTaskMoveIndices,
+} from "@/lib/task-completion";
 import type { ColumnWithTasks, Task } from "@/lib/types";
 
 const columnTransition = {
@@ -20,6 +29,8 @@ const willChangeTransform = { willChange: "transform" } as const;
 
 interface ColumnProps {
   column: ColumnWithTasks;
+  boardToday: string;
+  currentMemberNames: Readonly<Record<string, string>>;
   canDelete: boolean;
   canShiftLeft?: boolean;
   canShiftRight?: boolean;
@@ -28,13 +39,27 @@ interface ColumnProps {
   onDeleteColumn: (columnId: string) => void;
   onShiftLeft?: () => void;
   onShiftRight?: () => void;
-  onAddTask: (columnId: string, title: string) => void;
-  onEditTask: (task: Task) => void;
+  onAddTask: (
+    columnId: string,
+    title: string,
+    operationId: string,
+    reconcileFirst?: boolean,
+  ) => Promise<void>;
+  onEditTask: (task: Task, opener: HTMLButtonElement) => void;
   onDeleteTask: (taskId: string) => void;
+  onCompleteTask: (task: Task, isCompleted: boolean) => void;
+  onMoveTask: (
+    sourceColumnId: string,
+    destinationColumnId: string,
+    sourceIndex: number,
+    destinationIndex: number,
+  ) => unknown;
 }
 
 export function Column({
   column,
+  boardToday,
+  currentMemberNames,
   canDelete,
   canShiftLeft,
   canShiftRight,
@@ -46,12 +71,21 @@ export function Column({
   onAddTask,
   onEditTask,
   onDeleteTask,
+  onCompleteTask,
+  onMoveTask,
 }: ColumnProps) {
+  const [showCompleted, setShowCompleted] = useState(true);
+  const [completedExpanded, setCompletedExpanded] = useState(true);
+  const { pending, completed } = orderTasksByCompletion(column.tasks);
+
   if (column.is_collapsed) {
     return (
       <motion.div
         layout
         layoutId={column.id}
+        data-column-focus={column.id}
+        aria-label={`Columna ${column.title}`}
+        tabIndex={-1}
         transition={columnTransition}
         style={willChangeTransform}
       >
@@ -91,6 +125,9 @@ export function Column({
     <motion.div
       layout
       layoutId={column.id}
+      data-column-focus={column.id}
+      aria-label={`Columna ${column.title}`}
+      tabIndex={-1}
       transition={columnTransition}
       style={willChangeTransform}
       className="z-10 flex h-full w-[calc(280px+0.5rem)] min-w-[280px] shrink-0 flex-col rounded-xl bg-surface-column p-2"
@@ -124,15 +161,115 @@ export function Column({
                 snapshot.isDraggingOver ? "bg-accent-muted" : ""
               }`}
             >
-              {column.tasks.map((task, index) => (
-                <TaskCard
-                  key={task.id}
-                  task={task}
-                  index={index}
-                  onEdit={onEditTask}
-                  onDelete={onDeleteTask}
-                />
-              ))}
+              {pending.map((task, index) => {
+                const moveUp = pendingTaskMoveIndices(
+                  column.tasks,
+                  task.id,
+                  index - 1,
+                );
+                const moveDown = pendingTaskMoveIndices(
+                  column.tasks,
+                  task.id,
+                  index + 1,
+                );
+                return (
+                  <TaskCard
+                    key={task.id}
+                    task={task}
+                    assigneeName={getTaskAssigneeLabel(
+                      task.assignee_id,
+                      currentMemberNames,
+                    )}
+                    boardToday={boardToday}
+                    index={index}
+                    isCompleted={false}
+                    onEdit={onEditTask}
+                    onDelete={onDeleteTask}
+                    onComplete={onCompleteTask}
+                    isFirst={index === 0}
+                    isLast={index === pending.length - 1}
+                    onMoveUp={() =>
+                      moveUp &&
+                      onMoveTask(
+                        column.id,
+                        column.id,
+                        moveUp.sourceIndex,
+                        moveUp.destinationIndex,
+                      )
+                    }
+                    onMoveDown={() =>
+                      moveDown &&
+                      onMoveTask(
+                        column.id,
+                        column.id,
+                        moveDown.sourceIndex,
+                        moveDown.destinationIndex,
+                      )
+                    }
+                  />
+                );
+              })}
+              {completed.length > 0 && (
+                <div className="mt-2 border-border border-t pt-2">
+                  <div className="flex items-center justify-between gap-2">
+                    {showCompleted ? (
+                      <button
+                        type="button"
+                        className="flex min-h-8 items-center gap-1 rounded-md px-1 text-left font-medium text-text-secondary text-xs hover:text-text-primary"
+                        aria-expanded={completedExpanded}
+                        onClick={() =>
+                          setCompletedExpanded((expanded) => !expanded)
+                        }
+                      >
+                        <IconChevronDown
+                          size={14}
+                          className={completedExpanded ? "rotate-180" : ""}
+                          aria-hidden="true"
+                        />
+                        Completadas ({completed.length})
+                      </button>
+                    ) : (
+                      <span className="px-1 text-text-muted text-xs">
+                        {completed.length} tareas completadas ocultas
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      className="rounded-md px-2 py-1 text-text-muted text-xs hover:bg-surface-overlay hover:text-text-primary"
+                      onClick={() => {
+                        setShowCompleted((visible) => !visible);
+                        setCompletedExpanded(true);
+                      }}
+                    >
+                      {showCompleted ? "Ocultar" : "Mostrar"}
+                    </button>
+                  </div>
+                  {showCompleted && completedExpanded && (
+                    <div className="mt-2 flex flex-col gap-2">
+                      {completed.map((task, index) => (
+                        <TaskCard
+                          key={task.id}
+                          task={task}
+                          assigneeName={getTaskAssigneeLabel(
+                            task.assignee_id,
+                            currentMemberNames,
+                          )}
+                          boardToday={boardToday}
+                          index={pending.length + index}
+                          isCompleted
+                          onEdit={onEditTask}
+                          onDelete={onDeleteTask}
+                          onComplete={onCompleteTask}
+                          isFirst
+                          isLast
+                          onMoveUp={() => undefined}
+                          onMoveDown={() => undefined}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
               {provided.placeholder}
             </div>
           )}
@@ -142,7 +279,12 @@ export function Column({
       </ScrollArea>
 
       <div className="mt-1 pt-1">
-        <AddTask onAdd={(title) => onAddTask(column.id, title)} />
+        <AddTask
+          columnId={column.id}
+          onAdd={(title, operationId, reconcileFirst, targetColumnId) =>
+            onAddTask(targetColumnId, title, operationId, reconcileFirst)
+          }
+        />
       </div>
     </motion.div>
   );

@@ -3,6 +3,7 @@ import {
   AnimatePresence,
   type MotionValue,
   motion,
+  useReducedMotion,
   useTransform,
 } from "motion/react";
 import dynamic from "next/dynamic";
@@ -27,6 +28,7 @@ export const HeroSection = ({
 }) => {
   const [slug, setSlug] = useState("");
   const [isNavigating, setIsNavigating] = useState(false);
+  const shouldReduceMotion = useReducedMotion();
   const router = useRouter();
 
   const heroY = useTransform(scrollYProgress, [0, 0.2], [0, 200]);
@@ -45,12 +47,16 @@ export const HeroSection = ({
     <div className="pointer-events-auto sticky top-0 z-10 flex h-[80vh] flex-col items-center justify-center overflow-hidden px-6 lg:h-[90dvh]">
       <BackgroundLayer />
       <motion.div
-        style={{ y: heroY, opacity: heroOpacity, scale: heroScale }}
+        style={
+          shouldReduceMotion
+            ? undefined
+            : { y: heroY, opacity: heroOpacity, scale: heroScale }
+        }
         className="relative flex w-full max-w-5xl flex-col items-center text-center"
       >
-        <div className="mb-8 inline-flex items-center gap-2 rounded-full border border-neutral-800 bg-neutral-900/50 px-3 py-1 shadow-xl backdrop-blur-sm">
+        <div className="mb-8 inline-flex items-center gap-2 rounded-full border border-border bg-surface-overlay/50 px-3 py-1 shadow-xl backdrop-blur-sm">
           <Logo size={16} showText={false} />
-          <span className="font-medium text-neutral-300 text-xs uppercase tracking-wide">
+          <span className="font-medium text-text-secondary text-xs uppercase tracking-wide">
             One of a kind
           </span>
         </div>
@@ -67,7 +73,7 @@ export const HeroSection = ({
               duration: 0.8,
               ease: [0.16, 1, 0.3, 1],
             }}
-            className="block bg-linear-to-r from-neutral-500 to-white bg-clip-text px-2 text-transparent"
+            className="block bg-linear-to-r from-text-secondary to-text-primary bg-clip-text px-2 text-transparent"
           >
             Think it.
           </motion.span>
@@ -79,7 +85,7 @@ export const HeroSection = ({
               duration: 0.8,
               ease: [0.16, 1, 0.3, 1],
             }}
-            className="block bg-linear-to-r from-white to-neutral-500 bg-clip-text pb-2 text-transparent"
+            className="block bg-linear-to-r from-text-primary to-text-secondary bg-clip-text pb-2 text-transparent"
           >
             Sync it.
           </motion.span>
@@ -89,10 +95,12 @@ export const HeroSection = ({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ delay: 0.4, duration: 1 }}
-          className="mb-12 max-w-2xl font-light text-lg text-neutral-400 tracking-wide sm:text-xl md:text-2xl"
+          className="mb-12 max-w-2xl font-light text-lg text-text-secondary tracking-wide sm:text-xl md:text-2xl"
         >
           Your board's privacy is based on{" "}
-          <span className="font-medium text-white">your own creativity.</span>
+          <span className="font-medium text-text-primary">
+            your own creativity.
+          </span>
           <br /> No signup. No downloads.
         </motion.p>
 
@@ -102,8 +110,8 @@ export const HeroSection = ({
         >
           <div className="group relative flex-1">
             <div className="absolute inset-0 rounded-xl bg-accent opacity-0 blur-md transition-opacity duration-500 group-focus-within:opacity-20"></div>
-            <div className="relative flex h-14 items-center gap-0 overflow-hidden rounded-xl border border-neutral-800 bg-black/80 backdrop-blur-xl transition-colors focus-within:border-accent sm:h-auto">
-              <span className="shrink-0 select-none pl-3 font-medium text-neutral-500 text-xs sm:pl-5 sm:text-sm">
+            <div className="relative flex h-14 items-center gap-0 overflow-hidden rounded-xl border border-border bg-surface-raised/95 backdrop-blur-xl transition-colors focus-within:border-accent sm:h-auto">
+              <span className="shrink-0 select-none pl-3 font-medium text-text-muted text-xs sm:pl-5 sm:text-sm">
                 {siteUrl.host}/
               </span>
               <input
@@ -114,14 +122,14 @@ export const HeroSection = ({
                 onChange={(e) => setSlug(e.target.value)}
                 placeholder="super-secret-board"
                 disabled={isNavigating}
-                className="min-w-0 flex-1 bg-transparent py-4 pr-1 pl-1 text-sm text-white placeholder-neutral-700 outline-none disabled:opacity-50 sm:text-base"
+                className="min-w-0 flex-1 bg-transparent py-4 pr-1 pl-1 text-sm text-text-primary outline-none placeholder:text-text-muted disabled:opacity-50 sm:text-base"
               />
               <button
                 type="button"
                 onClick={() => setSlug(generateRandomSlug())}
                 disabled={isNavigating}
                 title="Generate random URL"
-                className="shrink-0 p-2 pr-3 text-neutral-500 transition-colors hover:text-accent disabled:opacity-50"
+                className="shrink-0 p-2 pr-3 text-text-muted transition-colors hover:text-accent-text disabled:opacity-50"
               >
                 <IconDice5 size={18} />
               </button>

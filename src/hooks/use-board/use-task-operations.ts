@@ -1,23 +1,63 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef } from "react";
+import { toast } from "sonner";
+import { DailyRepetitionOperationStore } from "@/lib/daily-repetition-state";
 import {
   createColumn,
+  createDailyRepetition,
   createTask,
+  DailyRepetitionError,
   deleteTask as dbDeleteTask,
+  getDailyRepetition,
+  getFullBoard,
+  getFullBoardForTaskEdit,
+  mutateTaskChecklistStep,
+  previewDailyRepetition,
+  reconcileTaskCreation,
+  setTaskCompletion,
+  TaskCaptureError,
+  TaskChecklistError,
+  TaskCompletionError,
+  TaskEditError,
+  TaskOrderError,
+  TaskRecoveryError,
   updateTask,
   updateTaskPositions,
 } from "@/lib/db";
+import type {
+  DailyRepetitionCreateCommand,
+  DailyRepetitionCreateResult,
+  DailyRepetitionPreview,
+  DailyRepetitionStatus,
+} from "@/lib/db/daily-repetition";
+import { getSessionEpoch } from "@/lib/supabase/client";
+import { TaskChecklistAddOperationStore } from "@/lib/task-checklist-state";
+import { prepareTaskOrderMove } from "@/lib/task-order";
 import type {
   Board,
   ColumnWithTasks,
   CreateTaskPayload,
   Priority,
   Task,
+  TaskChecklistCommand,
+  TaskChecklistResult,
+  TaskCompletionCommand,
+  TaskCompletionResult,
+  TaskEditCommand,
+  TaskEditConflicts,
+  TaskEditResult,
+  TaskOrderResult,
 } from "@/lib/types";
 import { generateUUID } from "@/lib/utils";
-import { showMutationError } from "./utils";
+import type {
+  TaskMutationIntent,
+  TaskMutationLedger,
+} from "./task-mutation-ledger";
+import { reconcileAuthorizedTaskOrder } from "./task-order-reconciliation";
+import { showMutationError, showTaskVerificationError } from "./utils";
 
 interface UseTaskOperationsProps {
+  actorId: string;
   slug: string;
   supabase: SupabaseClient;
   columnsRef: React.RefObject<ColumnWithTasks[]>;
@@ -25,10 +65,37 @@ interface UseTaskOperationsProps {
   isPersistedRef: React.RefObject<boolean>;
   onMutationRef: React.RefObject<(() => void) | undefined>;
   persistBoard: () => Promise<Board>;
-  enqueue: (op: () => Promise<void>) => void;
+  enqueue: (op: () => Promise<void>) => Promise<void>;
+  ledger: TaskMutationLedger;
+  onAccessLost: () => void;
+}
+
+type TaskCreationResolution = {
+  deleteRequested: boolean;
+  needsVerification: boolean;
+  columns: ColumnWithTasks[];
+} | null;
+
+function includeTaskColumn(
+  columns: ColumnWithTasks[],
+  task: Task,
+  authoritativeColumns: ColumnWithTasks[],
+  ledger: TaskMutationLedger,
+): ColumnWithTasks[] {
+  if (ledger.columnWasDeleted(task.column_id)) {
+    return columns.filter((column) => !ledger.columnWasDeleted(column.id));
+  }
+  if (columns.some((column) => column.id === task.column_id)) return columns;
+  const authoritativeColumn = authoritativeColumns.find(
+    (column) => column.id === task.column_id,
+  );
+  return authoritativeColumn
+    ? [...columns, { ...authoritativeColumn, tasks: [task] }]
+    : columns;
 }
 
 export function useTaskOperations({
+  actorId,
   slug,
   supabase,
   columnsRef,
@@ -37,124 +104,566 @@ export function useTaskOperations({
   onMutationRef,
   persistBoard,
   enqueue,
+  ledger,
+  onAccessLost,
 }: UseTaskOperationsProps) {
-  const addTask = useCallback(
-    (columnId: string, title: string, priority: Priority = "medium") => {
-      const currentCols = columnsRef.current ?? [];
-      const col = currentCols.find((c) => c.id === columnId);
-      const position = col ? col.tasks.length : 0;
+  const localColumnIds = useRef(new Map<string, string>());
+  const orderReconciliationRequiredRef = useRef(false);
+  const checklistAddOperationsRef = useRef<{
+    actorId: string;
+    slug: string;
+    store: TaskChecklistAddOperationStore;
+  } | null>(null);
+  if (
+    !checklistAddOperationsRef.current ||
+    checklistAddOperationsRef.current.actorId !== actorId ||
+    checklistAddOperationsRef.current.slug !== slug
+  ) {
+    checklistAddOperationsRef.current = {
+      actorId,
+      slug,
+      store: new TaskChecklistAddOperationStore(actorId, slug),
+    };
+  }
+  const checklistAddOperations = checklistAddOperationsRef.current.store;
+  useEffect(
+    () => () => checklistAddOperations.clearAll(),
+    [checklistAddOperations],
+  );
+  const dailyRepetitionOperationsRef = useRef<{
+    actorId: string;
+    slug: string;
+    store: DailyRepetitionOperationStore;
+  } | null>(null);
+  if (
+    !dailyRepetitionOperationsRef.current ||
+    dailyRepetitionOperationsRef.current.actorId !== actorId ||
+    dailyRepetitionOperationsRef.current.slug !== slug
+  ) {
+    dailyRepetitionOperationsRef.current = {
+      actorId,
+      slug,
+      store: new DailyRepetitionOperationStore(actorId, slug),
+    };
+  }
+  const dailyRepetitionOperations = dailyRepetitionOperationsRef.current.store;
+  useEffect(
+    () => () => dailyRepetitionOperations.clearAll(),
+    [dailyRepetitionOperations],
+  );
 
-      // Optimistic: add a temp task immediately
-      const tempTask: Task = {
-        id: `local-${generateUUID()}`,
-        column_id: columnId,
-        title,
-        description: null,
-        priority,
-        position,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
+  const reconcileCurrentTaskOrder = useCallback(
+    async (
+      sessionEpoch: number,
+      rollbackColumns?: ColumnWithTasks[],
+    ): Promise<boolean> => {
+      orderReconciliationRequiredRef.current = true;
+      if (rollbackColumns) setColumns(rollbackColumns);
+      const latestColumns = await reconcileAuthorizedTaskOrder({
+        readBoard: () => getFullBoardForTaskEdit(supabase, slug),
+        ledger,
+        sessionEpoch,
+        getCurrentSessionEpoch: getSessionEpoch,
+        onAccessLost,
+        isAccessDenied: (error) =>
+          error instanceof TaskEditError && error.reason === "access_denied",
+      });
+      if (!latestColumns) return false;
+      setColumns(latestColumns);
+      orderReconciliationRequiredRef.current = false;
+      return true;
+    },
+    [ledger, onAccessLost, setColumns, slug, supabase],
+  );
+
+  const reconcileAfterTaskMutation = useCallback(
+    async (action: "created" | "deleted"): Promise<void> => {
+      const reconciled = await reconcileCurrentTaskOrder(getSessionEpoch());
+      if (!reconciled) {
+        toast.error(
+          action === "created"
+            ? "La tarea se guardó, pero el orden no se actualizó"
+            : "La tarea se eliminó, pero el orden no se actualizó",
+          {
+            description:
+              "Vuelve a cargar el tablero antes de mover otra tarea.",
+          },
+        );
+      }
+    },
+    [reconcileCurrentTaskOrder],
+  );
+
+  const verifyTaskCreation = useCallback(
+    async (
+      tempTaskId: string,
+      createdTask: Task,
+      previousColumns: ColumnWithTasks[],
+    ): Promise<TaskCreationResolution> => {
+      const verificationSyncRevision = ledger.syncRevision;
+      let latestBoard: Awaited<ReturnType<typeof getFullBoard>> = null;
+      let verificationError: unknown;
+      let verificationFailed = false;
+      try {
+        latestBoard = await getFullBoard(supabase, slug);
+      } catch (error) {
+        verificationFailed = true;
+        verificationError = error;
+      }
+      const liveColumns = columnsRef.current ?? previousColumns;
+      const discardConfirmedMissingTask = () => {
+        const persistedTaskId = ledger.pendingTaskCreationId(tempTaskId);
+        ledger.failTaskCreation(tempTaskId);
+        let columnsAfterDelete = ledger.forgetTask(tempTaskId, liveColumns);
+        if (persistedTaskId) {
+          columnsAfterDelete = ledger.forgetTask(
+            persistedTaskId,
+            columnsAfterDelete,
+            true,
+          );
+        }
+        setColumns(columnsAfterDelete);
       };
 
-      setColumns((prev) =>
-        prev.map((c) =>
-          c.id === columnId ? { ...c, tasks: [...c.tasks, tempTask] } : c,
-        ),
-      );
-
-      enqueue(async () => {
-        try {
-          // Ensure board exists
-          const board = await persistBoard();
-          let targetColumnId = columnId;
-
-          // If the target column is still unpersisted local-, create it first
-          if (columnId.startsWith("local-")) {
-            const currentSnapshot = columnsRef.current ?? [];
-            const targetCol = currentSnapshot.find((c) => c.id === columnId);
-            if (targetCol) {
-              const newCol = await createColumn(supabase, slug, {
-                board_id: board.id,
-                title: targetCol.title,
-                position: targetCol.position,
-              });
-              targetColumnId = newCol.id;
-              setColumns((prev) =>
-                prev.map((c) =>
-                  c.id === columnId ? { ...c, id: newCol.id } : c,
-                ),
-              );
-            }
-          }
-
-          const payload: CreateTaskPayload = {
-            column_id: targetColumnId,
-            title,
-            priority,
-            position,
-          };
-          const dbTask = await createTask(supabase, slug, payload);
-
-          setColumns((prev) =>
-            prev.map((c) => ({
-              ...c,
-              tasks: c.tasks.map((t) => (t.id === tempTask.id ? dbTask : t)),
-            })),
-          );
-          onMutationRef.current?.();
-        } catch {
-          // Rollback task addition
-          setColumns((prev) =>
-            prev.map((c) => ({
-              ...c,
-              tasks: c.tasks.filter((t) => t.id !== tempTask.id),
-            })),
-          );
-          showMutationError("add task");
+      if (ledger.syncRevision !== verificationSyncRevision) {
+        const liveTask = liveColumns
+          .flatMap((column) => column.tasks)
+          .find((task) => task.id === createdTask.id);
+        if (!liveTask) {
+          discardConfirmedMissingTask();
+          return null;
         }
+        const creation = ledger.completeTaskCreation(
+          tempTaskId,
+          liveTask,
+          liveColumns,
+          true,
+        );
+        setColumns(creation.columns);
+        return creation;
+      }
+
+      if (verificationFailed) throw verificationError;
+
+      if (!latestBoard) {
+        discardConfirmedMissingTask();
+        return null;
+      }
+
+      const latestTask = latestBoard.columns
+        .flatMap((column) => column.tasks)
+        .find((task) => task.id === createdTask.id);
+      if (!latestTask) {
+        discardConfirmedMissingTask();
+        return null;
+      }
+
+      const verifiedColumns = includeTaskColumn(
+        liveColumns,
+        latestTask,
+        latestBoard.columns,
+        ledger,
+      );
+      const creation = ledger.completeTaskCreation(
+        tempTaskId,
+        latestTask,
+        verifiedColumns,
+        true,
+      );
+      setColumns(creation.columns);
+      return creation;
+    },
+    [columnsRef, ledger, setColumns, slug, supabase],
+  );
+
+  const deleteCreatedTask = useCallback(
+    async (tempTaskId: string, task: Task, columns: ColumnWithTasks[]) => {
+      const deleteIntent: TaskMutationIntent = {
+        id: generateUUID(),
+        kind: "delete",
+        taskId: task.id,
+      };
+      const optimisticDelete = ledger.begin(deleteIntent, columns);
+      setColumns(optimisticDelete);
+      try {
+        await dbDeleteTask(supabase, slug, deleteIntent.id, task.id);
+      } catch (deleteError) {
+        if (
+          deleteError instanceof TaskRecoveryError &&
+          deleteError.reason === "uncertain"
+        ) {
+          const latestBoard = await getFullBoard(supabase, slug).catch(
+            () => null,
+          );
+          if (
+            latestBoard &&
+            !latestBoard.columns
+              .flatMap((column) => column.tasks)
+              .some((candidate) => candidate.id === task.id)
+          ) {
+            const settled = ledger.settle(
+              deleteIntent.id,
+              latestBoard.columns,
+              { kind: "task-deleted" },
+            );
+            setColumns(settled);
+            await reconcileAfterTaskMutation("deleted");
+            onMutationRef.current?.();
+            return;
+          }
+          if (latestBoard) {
+            const settled = ledger.settle(deleteIntent.id, latestBoard.columns);
+            setColumns(ledger.restoreTaskAfterFailedDelete(task, settled));
+            toast.error("No se pudo confirmar la eliminación", {
+              description:
+                "La tarea sigue en el tablero. Revisa su estado antes de volver a intentarlo.",
+            });
+            return;
+          }
+          toast.error("No se pudo confirmar la eliminación", {
+            description:
+              "Actualiza el tablero y revisa Recuperación antes de volver a intentarlo.",
+          });
+          const settled = ledger.settle(
+            deleteIntent.id,
+            columnsRef.current ?? optimisticDelete,
+          );
+          setColumns(ledger.restoreTaskAfterFailedDelete(task, settled));
+          return;
+        }
+        const rolledBack = ledger.settle(
+          deleteIntent.id,
+          columnsRef.current ?? optimisticDelete,
+        );
+        setColumns(ledger.restoreTaskAfterFailedDelete(task, rolledBack));
+        showMutationError("delete task");
+        return;
+      }
+      const deletedColumns = ledger.settle(
+        deleteIntent.id,
+        columnsRef.current ?? optimisticDelete,
+        { kind: "task-deleted" },
+      );
+      const columnsWithoutTask = ledger.forgetTask(tempTaskId, deletedColumns);
+      setColumns(columnsWithoutTask);
+      await reconcileAfterTaskMutation("deleted");
+      onMutationRef.current?.();
+    },
+    [
+      columnsRef,
+      ledger,
+      onMutationRef,
+      reconcileAfterTaskMutation,
+      setColumns,
+      slug,
+      supabase,
+    ],
+  );
+
+  const addTask = useCallback(
+    (
+      columnId: string,
+      title: string,
+      operationId: string,
+      reconcileFirst = false,
+      priority: Priority = "medium",
+    ): Promise<void> => {
+      return new Promise((resolve, reject) => {
+        const currentCols = columnsRef.current ?? [];
+        const col = currentCols.find((c) => c.id === columnId);
+        if (!col) {
+          reject(new TaskCaptureError("unavailable"));
+          return;
+        }
+        const position = col.tasks.length;
+
+        // Optimistic state is local only; the server assigns the real position.
+        const tempTask: Task = {
+          id: `local-${generateUUID()}`,
+          column_id: columnId,
+          title,
+          description: null,
+          priority,
+          due_on: null,
+          assignee_id: null,
+          assignee_version: 1,
+          position,
+          created_by: null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          field_versions: { title: 1, description: 1, priority: 1, due_on: 1 },
+          is_completed: false,
+          completed_at: null,
+          completion_version: 1,
+          steps: [],
+          steps_order_version: 1,
+          checklist_version: 1,
+        };
+
+        ledger.beginTaskCreation(tempTask.id);
+        setColumns((prev) =>
+          prev.map((candidate) =>
+            candidate.id === columnId
+              ? { ...candidate, tasks: [...candidate.tasks, tempTask] }
+              : candidate,
+          ),
+        );
+
+        enqueue(async () => {
+          try {
+            // Ensure board exists
+            const board = await persistBoard();
+            let targetColumnId =
+              localColumnIds.current.get(columnId) ?? columnId;
+
+            // If the target column is still unpersisted local-, create it first
+            if (targetColumnId.startsWith("local-")) {
+              const currentSnapshot = columnsRef.current ?? [];
+              const targetCol = currentSnapshot.find(
+                (column) => column.id === targetColumnId,
+              );
+              if (targetCol) {
+                const newCol = await createColumn(supabase, slug, {
+                  board_id: board.id,
+                  title: targetCol.title,
+                  position: targetCol.position,
+                });
+                const oldColumnId = targetColumnId;
+                localColumnIds.current.set(columnId, newCol.id);
+                localColumnIds.current.set(oldColumnId, newCol.id);
+                targetColumnId = newCol.id;
+                setColumns(
+                  ledger.replaceColumnId(
+                    oldColumnId,
+                    newCol.id,
+                    columnsRef.current ?? [],
+                  ),
+                );
+              }
+            }
+
+            const payload: CreateTaskPayload = {
+              column_id: targetColumnId,
+              title,
+              priority,
+            };
+            const dbTask = reconcileFirst
+              ? await reconcileTaskCreation(
+                  supabase,
+                  slug,
+                  operationId,
+                  board.id,
+                  payload,
+                )
+              : await createTask(
+                  supabase,
+                  slug,
+                  operationId,
+                  board.id,
+                  payload,
+                );
+
+            const current = columnsRef.current ?? [];
+            let creation = ledger.completeTaskCreation(
+              tempTask.id,
+              dbTask,
+              current,
+            );
+            if (creation.needsVerification) {
+              const retryVerification = () => {
+                enqueue(async () => {
+                  if (ledger.pendingTaskCreationId(tempTask.id) !== dbTask.id) {
+                    return;
+                  }
+                  try {
+                    const resolution = await verifyTaskCreation(
+                      tempTask.id,
+                      dbTask,
+                      columnsRef.current ?? [],
+                    );
+                    if (resolution?.deleteRequested) {
+                      await deleteCreatedTask(
+                        tempTask.id,
+                        dbTask,
+                        resolution.columns,
+                      );
+                    } else if (resolution) {
+                      onMutationRef.current?.();
+                    }
+                  } catch {
+                    showTaskVerificationError(retryVerification);
+                  }
+                });
+              };
+              try {
+                const resolution = await verifyTaskCreation(
+                  tempTask.id,
+                  dbTask,
+                  current,
+                );
+                if (!resolution) {
+                  resolve();
+                  return;
+                }
+                creation = resolution;
+              } catch {
+                showTaskVerificationError(retryVerification);
+                throw new TaskCaptureError("uncertain");
+              }
+            }
+            if (creation.deleteRequested) {
+              await deleteCreatedTask(tempTask.id, dbTask, creation.columns);
+              resolve();
+              return;
+            }
+
+            setColumns(creation.columns);
+            await reconcileAfterTaskMutation("created");
+            onMutationRef.current?.();
+            resolve();
+          } catch (error) {
+            const current = columnsRef.current ?? [];
+            ledger.failTaskCreation(tempTask.id);
+            setColumns(
+              ledger.forgetTask(
+                tempTask.id,
+                current.map((column) => ({
+                  ...column,
+                  tasks: column.tasks.filter((task) => task.id !== tempTask.id),
+                })),
+              ),
+            );
+            reject(error);
+          }
+        });
       });
     },
     [
       columnsRef,
       setColumns,
+      ledger,
+      verifyTaskCreation,
+      deleteCreatedTask,
       enqueue,
       persistBoard,
       supabase,
       slug,
       onMutationRef,
+      reconcileAfterTaskMutation,
     ],
   );
 
   const editTask = useCallback(
-    (
-      taskId: string,
-      updates: {
-        title?: string;
-        description?: string | null;
-        priority?: Priority;
-      },
-    ) => {
-      const snapshot = columnsRef.current ?? [];
-      setColumns((prev) =>
-        prev.map((col) => ({
-          ...col,
-          tasks: col.tasks.map((t) =>
-            t.id === taskId ? { ...t, ...updates } : t,
-          ),
-        })),
-      );
-
-      if (!isPersistedRef.current || taskId.startsWith("local-")) return;
-
-      enqueue(async () => {
-        try {
-          await updateTask(supabase, slug, { id: taskId, ...updates });
-          onMutationRef.current?.();
-        } catch {
-          setColumns(snapshot);
-          showMutationError("update task");
+    async (command: TaskEditCommand): Promise<TaskEditResult> => {
+      if (!isPersistedRef.current || command.id.startsWith("local-")) {
+        throw new TaskEditError("unavailable");
+      }
+      const sessionEpoch = getSessionEpoch();
+      try {
+        const result = await updateTask(supabase, slug, command);
+        if (sessionEpoch !== getSessionEpoch()) {
+          throw new TaskEditError("stale_session");
         }
-      });
+        if (result.status !== "confirmed" && result.status !== "conflict") {
+          throw new TaskEditError(result.status);
+        }
+
+        const currentColumns = columnsRef.current ?? [];
+        let authoritativeColumns = currentColumns;
+        if (
+          !currentColumns.some((column) => column.id === result.task.column_id)
+        ) {
+          const latestBoard = await getFullBoardForTaskEdit(supabase, slug);
+          if (sessionEpoch !== getSessionEpoch()) {
+            throw new TaskEditError("stale_session");
+          }
+          if (!latestBoard) throw new TaskEditError("access_denied");
+          authoritativeColumns = latestBoard.columns;
+        }
+        const nextColumns = authoritativeColumns.map((column) => ({
+          ...column,
+          tasks: [
+            ...column.tasks.filter((task) => task.id !== result.task.id),
+            ...(column.id === result.task.column_id ? [result.task] : []),
+          ],
+        }));
+        setColumns(ledger.sync(nextColumns));
+        if (result.status === "confirmed") onMutationRef.current?.();
+        return result;
+      } catch (error) {
+        if (
+          error instanceof TaskEditError &&
+          (error.reason === "expired_unknown" || error.reason === "conflict")
+        ) {
+          try {
+            const latestBoard = await getFullBoardForTaskEdit(supabase, slug);
+            if (sessionEpoch !== getSessionEpoch()) {
+              throw new TaskEditError("stale_session");
+            }
+            if (!latestBoard) {
+              throw new TaskEditError("access_denied");
+            }
+            const latestTask = latestBoard.columns
+              .flatMap((column) => column.tasks)
+              .find((candidate) => candidate.id === command.id);
+            if (!latestTask) throw new TaskEditError("unavailable");
+
+            setColumns(ledger.sync(latestBoard.columns));
+            const conflicts: TaskEditConflicts = {};
+            if (command.updates.title !== undefined) {
+              conflicts.title = {
+                current: latestTask.title,
+                draft: command.updates.title,
+                current_version: latestTask.field_versions.title,
+              };
+            }
+            if (Object.hasOwn(command.updates, "description")) {
+              conflicts.description = {
+                current: latestTask.description,
+                draft: command.updates.description ?? null,
+                current_version: latestTask.field_versions.description,
+              };
+            }
+            if (command.updates.priority !== undefined) {
+              conflicts.priority = {
+                current: latestTask.priority,
+                draft: command.updates.priority,
+                current_version: latestTask.field_versions.priority,
+              };
+            }
+            if (command.updates.due_on !== undefined) {
+              conflicts.due_on = {
+                current: latestTask.due_on,
+                draft: command.updates.due_on,
+                current_version: latestTask.field_versions.due_on,
+              };
+            }
+            return {
+              status: "conflict",
+              operation_id: command.operation_id,
+              task: latestTask,
+              conflicts,
+            };
+          } catch (reconcileError) {
+            if (
+              reconcileError instanceof TaskEditError &&
+              (reconcileError.reason === "access_denied" ||
+                reconcileError.reason === "stale_session")
+            ) {
+              onAccessLost();
+              throw reconcileError;
+            }
+            throw error;
+          }
+        }
+        if (
+          error instanceof TaskEditError &&
+          (error.reason === "access_denied" || error.reason === "stale_session")
+        ) {
+          onAccessLost();
+        }
+        throw error;
+      }
     },
     [
       supabase,
@@ -162,31 +671,436 @@ export function useTaskOperations({
       columnsRef,
       setColumns,
       isPersistedRef,
-      enqueue,
+      ledger,
       onMutationRef,
+      onAccessLost,
+    ],
+  );
+
+  const getTaskDailyRepetition = useCallback(
+    async (taskId: string): Promise<DailyRepetitionStatus> => {
+      const sessionEpoch = getSessionEpoch();
+      try {
+        const result = await getDailyRepetition(supabase, slug, taskId);
+        if (sessionEpoch !== getSessionEpoch()) {
+          throw new Error(
+            "The session changed while loading daily repetition.",
+          );
+        }
+        return result;
+      } catch (error) {
+        if (
+          sessionEpoch !== getSessionEpoch() ||
+          (error instanceof DailyRepetitionError &&
+            error.reason === "access_denied")
+        ) {
+          onAccessLost();
+        }
+        throw error;
+      }
+    },
+    [supabase, slug, onAccessLost],
+  );
+
+  const previewTaskDailyRepetition = useCallback(
+    async (
+      taskId: string,
+      startOn: string,
+      endOn: string | null,
+      occurrenceLimit: number | null,
+    ): Promise<DailyRepetitionPreview> => {
+      if (!isPersistedRef.current || taskId.startsWith("local-")) {
+        return { status: "unavailable" };
+      }
+      const sessionEpoch = getSessionEpoch();
+      try {
+        const result = await previewDailyRepetition(
+          supabase,
+          slug,
+          taskId,
+          startOn,
+          endOn,
+          occurrenceLimit,
+        );
+        if (sessionEpoch !== getSessionEpoch()) {
+          throw new Error(
+            "The session changed while previewing daily repetition.",
+          );
+        }
+        return result;
+      } catch (error) {
+        if (
+          sessionEpoch !== getSessionEpoch() ||
+          (error instanceof DailyRepetitionError &&
+            error.reason === "access_denied")
+        ) {
+          onAccessLost();
+        }
+        throw error;
+      }
+    },
+    [supabase, slug, isPersistedRef, onAccessLost],
+  );
+
+  const createTaskDailyRepetition = useCallback(
+    async (
+      command: DailyRepetitionCreateCommand,
+    ): Promise<DailyRepetitionCreateResult> => {
+      if (!isPersistedRef.current || command.task_id.startsWith("local-")) {
+        return { status: "unavailable", operation_id: command.operation_id };
+      }
+      const sessionEpoch = getSessionEpoch();
+      try {
+        const result = await createDailyRepetition(supabase, command);
+        if (sessionEpoch !== getSessionEpoch()) {
+          throw new Error(
+            "The session changed while creating daily repetition.",
+          );
+        }
+        if (result.status === "confirmed") {
+          dailyRepetitionOperations.clear(command.task_id);
+          if (result.task && result.task.id === command.task_id) {
+            const savedTask = result.task as unknown as Task;
+            const nextColumns = (columnsRef.current ?? []).map((column) => ({
+              ...column,
+              tasks: column.tasks.map((task) =>
+                task.id === savedTask.id ? savedTask : task,
+              ),
+            }));
+            setColumns(ledger.sync(nextColumns));
+          }
+          onMutationRef.current?.();
+        }
+        return result;
+      } catch (error) {
+        if (
+          sessionEpoch !== getSessionEpoch() ||
+          (error instanceof DailyRepetitionError &&
+            error.reason === "access_denied")
+        ) {
+          onAccessLost();
+        }
+        throw error;
+      }
+    },
+    [
+      supabase,
+      isPersistedRef,
+      columnsRef,
+      setColumns,
+      ledger,
+      onMutationRef,
+      onAccessLost,
+      dailyRepetitionOperations,
+    ],
+  );
+
+  const completeTask = useCallback(
+    async (command: TaskCompletionCommand): Promise<TaskCompletionResult> => {
+      if (!isPersistedRef.current || command.id.startsWith("local-")) {
+        return { status: "unavailable", operation_id: command.operation_id };
+      }
+
+      const sessionEpoch = getSessionEpoch();
+      const reconcile = async (): Promise<Task | null> => {
+        const latestBoard = await getFullBoardForTaskEdit(supabase, slug);
+        if (sessionEpoch !== getSessionEpoch()) {
+          throw new TaskCompletionError("access_denied");
+        }
+        if (!latestBoard) {
+          throw new TaskCompletionError("access_denied");
+        }
+        setColumns(ledger.sync(latestBoard.columns));
+        return (
+          latestBoard.columns
+            .flatMap((column) => column.tasks)
+            .find((candidate) => candidate.id === command.id) ?? null
+        );
+      };
+
+      let result: TaskCompletionResult;
+      try {
+        result = await setTaskCompletion(supabase, slug, command);
+      } catch (error) {
+        if (
+          error instanceof TaskCompletionError &&
+          error.reason === "access_denied"
+        ) {
+          onAccessLost();
+          throw error;
+        }
+        if (
+          error instanceof TaskCompletionError &&
+          ["uncertain", "retryable", "expired_unknown", "conflict"].includes(
+            error.reason,
+          )
+        ) {
+          try {
+            const latestTask = await reconcile();
+            if (!latestTask) {
+              return {
+                status: "unavailable",
+                operation_id: command.operation_id,
+              };
+            }
+            return {
+              status: "conflict",
+              operation_id: command.operation_id,
+              task: latestTask,
+            };
+          } catch (reconcileError) {
+            if (
+              (reconcileError instanceof TaskCompletionError &&
+                reconcileError.reason === "access_denied") ||
+              (reconcileError instanceof TaskEditError &&
+                (reconcileError.reason === "access_denied" ||
+                  reconcileError.reason === "stale_session"))
+            ) {
+              onAccessLost();
+            }
+            return {
+              status: "unavailable",
+              operation_id: command.operation_id,
+            };
+          }
+        }
+        if (
+          error instanceof TaskCompletionError &&
+          error.reason === "access_denied"
+        ) {
+          onAccessLost();
+        }
+        throw error;
+      }
+
+      if (result.status !== "confirmed" && result.status !== "conflict") {
+        return result;
+      }
+
+      if (sessionEpoch !== getSessionEpoch()) {
+        onAccessLost();
+        throw new TaskCompletionError("access_denied");
+      }
+
+      const currentColumns = columnsRef.current ?? [];
+      let authoritativeColumns = currentColumns;
+      const currentTaskColumn = currentColumns.find((column) =>
+        column.tasks.some((candidate) => candidate.id === result.task.id),
+      );
+      if (
+        !currentTaskColumn ||
+        currentTaskColumn.id !== result.task.column_id
+      ) {
+        let latestBoard: Awaited<ReturnType<typeof getFullBoardForTaskEdit>>;
+        try {
+          latestBoard = await getFullBoardForTaskEdit(supabase, slug);
+        } catch (error) {
+          if (
+            error instanceof TaskEditError &&
+            (error.reason === "access_denied" ||
+              error.reason === "stale_session")
+          ) {
+            onAccessLost();
+            throw new TaskCompletionError("access_denied");
+          }
+          throw error;
+        }
+        if (sessionEpoch !== getSessionEpoch()) {
+          onAccessLost();
+          throw new TaskCompletionError("access_denied");
+        }
+        if (!latestBoard) {
+          onAccessLost();
+          return { status: "unavailable", operation_id: command.operation_id };
+        }
+        authoritativeColumns = latestBoard.columns;
+      }
+
+      const nextColumns = authoritativeColumns.map((column) => ({
+        ...column,
+        tasks: column.tasks.map((candidate) =>
+          candidate.id === result.task.id ? result.task : candidate,
+        ),
+      }));
+      setColumns(ledger.sync(nextColumns));
+      if (result.status === "confirmed") onMutationRef.current?.();
+      return result;
+    },
+    [
+      columnsRef,
+      isPersistedRef,
+      ledger,
+      onAccessLost,
+      onMutationRef,
+      setColumns,
+      slug,
+      supabase,
+    ],
+  );
+
+  const refreshTaskForEdit = useCallback(
+    async (taskId: string): Promise<Task | null> => {
+      const sessionEpoch = getSessionEpoch();
+      let latestBoard: Awaited<ReturnType<typeof getFullBoardForTaskEdit>>;
+      try {
+        latestBoard = await getFullBoardForTaskEdit(supabase, slug);
+      } catch (error) {
+        if (
+          error instanceof TaskEditError &&
+          error.reason === "access_denied"
+        ) {
+          onAccessLost();
+        }
+        throw error;
+      }
+      if (sessionEpoch !== getSessionEpoch()) {
+        onAccessLost();
+        throw new TaskEditError("stale_session");
+      }
+      if (!latestBoard) {
+        onAccessLost();
+        return null;
+      }
+      setColumns(ledger.sync(latestBoard.columns));
+      return (
+        latestBoard.columns
+          .flatMap((column) => column.tasks)
+          .find((candidate) => candidate.id === taskId) ?? null
+      );
+    },
+    [supabase, slug, setColumns, ledger, onAccessLost],
+  );
+
+  const mutateChecklistStep = useCallback(
+    async (command: TaskChecklistCommand): Promise<TaskChecklistResult> => {
+      if (!isPersistedRef.current || command.id.startsWith("local-")) {
+        return { status: "unavailable", operation_id: command.operation_id };
+      }
+      const sessionEpoch = getSessionEpoch();
+      let result: TaskChecklistResult;
+      try {
+        result = await mutateTaskChecklistStep(supabase, slug, command);
+      } catch (error) {
+        if (
+          error instanceof TaskChecklistError &&
+          error.reason === "access_denied"
+        ) {
+          onAccessLost();
+        }
+        throw error;
+      }
+      if (result.status !== "confirmed" && result.status !== "conflict") {
+        return result;
+      }
+      if (sessionEpoch !== getSessionEpoch()) {
+        onAccessLost();
+        throw new TaskChecklistError("access_denied");
+      }
+      const currentColumns = columnsRef.current ?? [];
+      const updatedColumns = currentColumns.map((column) => ({
+        ...column,
+        tasks: column.tasks.map((candidate) =>
+          candidate.id === result.task.id ? result.task : candidate,
+        ),
+      }));
+      setColumns(ledger.sync(updatedColumns));
+      if (result.status === "confirmed") onMutationRef.current?.();
+      return result;
+    },
+    [
+      columnsRef,
+      isPersistedRef,
+      ledger,
+      onAccessLost,
+      onMutationRef,
+      setColumns,
+      slug,
+      supabase,
     ],
   );
 
   const removeTask = useCallback(
     (taskId: string) => {
-      const snapshot = columnsRef.current ?? [];
-      setColumns((prev) =>
-        prev.map((col) => ({
-          ...col,
-          tasks: col.tasks
-            .filter((t) => t.id !== taskId)
-            .map((t, i) => ({ ...t, position: i })),
-        })),
-      );
+      const pendingCreationDeleteRequested =
+        taskId.startsWith("local-") &&
+        ledger.requestTaskCreationDeletion(taskId);
+      const intent: TaskMutationIntent = {
+        id: generateUUID(),
+        kind: "delete",
+        taskId,
+      };
+      const optimisticColumns = ledger.begin(intent, columnsRef.current ?? []);
+      setColumns(optimisticColumns);
 
-      if (!isPersistedRef.current || taskId.startsWith("local-")) return;
+      if (pendingCreationDeleteRequested) {
+        ledger.hidePendingCreationDelete(intent.taskId);
+        setColumns(ledger.settle(intent.id, optimisticColumns));
+        return;
+      }
+
+      if (!isPersistedRef.current) {
+        setColumns(
+          ledger.settle(intent.id, optimisticColumns, { kind: "task-deleted" }),
+        );
+        return;
+      }
+
+      if (intent.taskId.startsWith("local-")) {
+        ledger.hidePendingCreationDelete(intent.taskId);
+        setColumns(ledger.settle(intent.id, optimisticColumns));
+        return;
+      }
 
       enqueue(async () => {
         try {
-          await dbDeleteTask(supabase, slug, taskId);
+          await dbDeleteTask(supabase, slug, intent.id, intent.taskId);
+          const columnsWithoutTask = ledger.settle(
+            intent.id,
+            columnsRef.current ?? [],
+            { kind: "task-deleted" },
+          );
+          setColumns(columnsWithoutTask);
+          await reconcileAfterTaskMutation("deleted");
           onMutationRef.current?.();
-        } catch {
-          setColumns(snapshot);
+        } catch (deleteError) {
+          if (
+            deleteError instanceof TaskRecoveryError &&
+            deleteError.reason === "uncertain"
+          ) {
+            const latestBoard = await getFullBoard(supabase, slug).catch(
+              () => null,
+            );
+            if (latestBoard) {
+              if (
+                !latestBoard.columns
+                  .flatMap((column) => column.tasks)
+                  .some((task) => task.id === intent.taskId)
+              ) {
+                const settled = ledger.settle(intent.id, latestBoard.columns, {
+                  kind: "task-deleted",
+                });
+                setColumns(settled);
+                await reconcileAfterTaskMutation("deleted");
+                onMutationRef.current?.();
+                return;
+              }
+              setColumns(ledger.settle(intent.id, latestBoard.columns));
+              toast.error("No se pudo confirmar la eliminación", {
+                description:
+                  "La tarea sigue en el tablero. Revisa su estado antes de volver a intentarlo.",
+              });
+              return;
+            }
+            toast.error("No se pudo confirmar la eliminación", {
+              description:
+                "Actualiza el tablero y revisa Recuperación antes de volver a intentarlo.",
+            });
+            setColumns(
+              ledger.settle(intent.id, columnsRef.current ?? optimisticColumns),
+            );
+            return;
+          }
+          setColumns(ledger.settle(intent.id, columnsRef.current ?? []));
           showMutationError("delete task");
         }
       });
@@ -197,8 +1111,10 @@ export function useTaskOperations({
       columnsRef,
       setColumns,
       isPersistedRef,
+      ledger,
       enqueue,
       onMutationRef,
+      reconcileAfterTaskMutation,
     ],
   );
 
@@ -208,62 +1124,196 @@ export function useTaskOperations({
       destColId: string,
       sourceIndex: number,
       destIndex: number,
-    ) => {
-      const currentCols = columnsRef.current ?? [];
-      const snapshot = currentCols;
-
-      const newCols = currentCols.map((col) => ({
-        ...col,
-        tasks: [...col.tasks],
-      }));
-
-      const sourceCol = newCols.find((c) => c.id === sourceColId);
-      const destCol = newCols.find((c) => c.id === destColId);
-      if (!sourceCol || !destCol) return;
-
-      const [movedTask] = sourceCol.tasks.splice(sourceIndex, 1);
-      if (!movedTask) return;
-
-      movedTask.column_id = destColId;
-      destCol.tasks.splice(destIndex, 0, movedTask);
-
-      sourceCol.tasks.forEach((t, i) => {
-        t.position = i;
-      });
-      destCol.tasks.forEach((t, i) => {
-        t.position = i;
-      });
-
-      setColumns(newCols);
-
-      if (!isPersistedRef.current) return;
-
-      const tasksToUpdate: Task[] = [];
-      const affected =
-        sourceColId === destColId ? [destCol] : [sourceCol, destCol];
-      for (const col of affected) {
-        if (col.id.startsWith("local-")) continue;
-        for (const task of col.tasks) {
-          if (task.id.startsWith("local-")) continue;
-          tasksToUpdate.push({
-            ...task,
-            column_id: col.id,
-            position: task.position,
-          });
-        }
-      }
-
-      if (tasksToUpdate.length > 0) {
-        enqueue(async () => {
-          try {
-            await updateTaskPositions(supabase, slug, tasksToUpdate);
-            onMutationRef.current?.();
-          } catch {
-            setColumns(snapshot);
-            showMutationError("move task");
-          }
+    ): Promise<TaskOrderResult | null> => {
+      const operationId = generateUUID();
+      if (orderReconciliationRequiredRef.current) {
+        return Promise.resolve({
+          status: "unavailable",
+          operation_id: operationId,
         });
       }
+      const currentCols = columnsRef.current ?? [];
+      const plan = prepareTaskOrderMove(
+        currentCols,
+        sourceColId,
+        destColId,
+        sourceIndex,
+        destIndex,
+        operationId,
+      );
+      if (!plan) return Promise.resolve(null);
+
+      const intent: TaskMutationIntent = {
+        id: operationId,
+        kind: "move",
+        updates: plan.optimisticUpdates,
+        orderCommand: plan.command,
+      };
+      const optimisticColumns = ledger.begin(intent, currentCols);
+      setColumns(optimisticColumns);
+
+      const localSnapshots = () =>
+        plan.command.moves
+          .map((move) =>
+            optimisticColumns.find((column) => column.id === move.column_id),
+          )
+          .filter((column): column is ColumnWithTasks => column !== undefined)
+          .map((column) => ({
+            id: column.id,
+            task_order_version: column.task_order_version,
+            tasks: column.tasks,
+          }));
+
+      if (!isPersistedRef.current) {
+        setColumns(
+          ledger.settle(intent.id, optimisticColumns, {
+            kind: "positions-saved",
+            tasks: [],
+          }),
+        );
+        const snapshots = new Map(
+          localSnapshots().map((snapshot) => [snapshot.id, snapshot]),
+        );
+        return Promise.resolve({
+          status: "confirmed",
+          operation_id: operationId,
+          columns: [...snapshots.values()],
+        });
+      }
+
+      return new Promise((resolve) => {
+        const finish = (result: TaskOrderResult) => resolve(result);
+        void enqueue(async () => {
+          const rollback = () =>
+            ledger.settle(intent.id, columnsRef.current ?? []);
+          const reconcileUnconfirmedMove = async (
+            reason: "uncertain" | "retryable" | "expired_unknown",
+          ): Promise<TaskOrderResult> => {
+            const reconciled = await reconcileCurrentTaskOrder(
+              sessionEpoch,
+              rollback(),
+            );
+            toast.error("No se pudo confirmar el movimiento", {
+              description: reconciled
+                ? "Actualizamos el tablero. Revisa el lugar antes de elegir de nuevo."
+                : "No pudimos consultar el orden actual. El movimiento quedó detenido; vuelve a cargar el tablero.",
+            });
+            return reconciled
+              ? { status: reason, operation_id: operationId }
+              : { status: "unavailable", operation_id: operationId };
+          };
+
+          const command = intent.orderCommand;
+          if (
+            command.moves.some(
+              (move) =>
+                move.id.startsWith("local-") ||
+                move.column_id.startsWith("local-") ||
+                move.before_task_id?.startsWith("local-") ||
+                move.after_task_id?.startsWith("local-"),
+            ) ||
+            Object.keys(command.expected_order_versions).some((id) =>
+              id.startsWith("local-"),
+            )
+          ) {
+            setColumns(rollback());
+            showMutationError("move task");
+            finish({ status: "unavailable", operation_id: operationId });
+            return;
+          }
+
+          const sessionEpoch = getSessionEpoch();
+          try {
+            const result = await updateTaskPositions(supabase, slug, command);
+            if (sessionEpoch !== getSessionEpoch()) {
+              setColumns(rollback());
+              onAccessLost();
+              finish({ status: "access_denied", operation_id: operationId });
+              return;
+            }
+            if (result.status === "confirmed") {
+              const settled = ledger.settle(
+                intent.id,
+                columnsRef.current ?? [],
+                {
+                  kind: "positions-saved",
+                  tasks: result.columns.flatMap((column) => column.tasks),
+                },
+              );
+              const snapshotsById = new Map(
+                result.columns.map((snapshot) => [snapshot.id, snapshot]),
+              );
+              setColumns(
+                settled.map((column) => {
+                  const snapshot = snapshotsById.get(column.id);
+                  return snapshot
+                    ? {
+                        ...column,
+                        task_order_version: Math.max(
+                          column.task_order_version,
+                          snapshot.task_order_version,
+                        ),
+                      }
+                    : column;
+                }),
+              );
+              onMutationRef.current?.();
+              finish(result);
+              return;
+            }
+            if (result.status === "conflict") {
+              const reconciled = await reconcileCurrentTaskOrder(
+                sessionEpoch,
+                rollback(),
+              );
+              toast.error("El orden cambió", {
+                description: reconciled
+                  ? "Actualizamos las columnas afectadas. Revisa el lugar y vuelve a elegir el movimiento."
+                  : "No pudimos consultar el orden actual. El movimiento quedó detenido; vuelve a cargar el tablero.",
+              });
+              finish(
+                reconciled
+                  ? result
+                  : { status: "unavailable", operation_id: operationId },
+              );
+              return;
+            }
+            if (
+              result.status === "expired_unknown" ||
+              result.status === "retryable" ||
+              result.status === "uncertain"
+            ) {
+              finish(await reconcileUnconfirmedMove(result.status));
+              return;
+            }
+            setColumns(rollback());
+            if (result.status === "access_denied") onAccessLost();
+            else if (result.status === "rejected")
+              showMutationError("move task");
+            finish(result);
+          } catch (error) {
+            const reason =
+              error instanceof TaskOrderError ? error.reason : "uncertain";
+            if (reason === "access_denied") {
+              setColumns(rollback());
+              onAccessLost();
+              finish({ status: "access_denied", operation_id: operationId });
+              return;
+            }
+            if (
+              reason === "uncertain" ||
+              reason === "retryable" ||
+              reason === "expired_unknown"
+            ) {
+              finish(await reconcileUnconfirmedMove(reason));
+              return;
+            }
+            setColumns(rollback());
+            showMutationError("move task");
+            finish({ status: reason, operation_id: operationId });
+          }
+        });
+      });
     },
     [
       columnsRef,
@@ -272,14 +1322,25 @@ export function useTaskOperations({
       enqueue,
       supabase,
       slug,
+      ledger,
       onMutationRef,
+      onAccessLost,
+      reconcileCurrentTaskOrder,
     ],
   );
 
   return {
     addTask,
     editTask,
+    completeTask,
+    mutateChecklistStep,
+    checklistAddOperations,
+    refreshTaskForEdit,
     removeTask,
     moveTask,
+    getTaskDailyRepetition,
+    previewTaskDailyRepetition,
+    createTaskDailyRepetition,
+    dailyRepetitionOperations,
   };
 }

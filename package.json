@@ -12,7 +12,9 @@
     "start": "next start",
     "lint": "biome check",
     "typecheck": "tsc --noEmit",
+    "test:unit": "node --experimental-strip-types --test tests/unit/invitation-acceptance-state.test.mjs tests/unit/invitation-contract.test.mjs tests/unit/invitation-operation.test.mjs tests/unit/proxy-path.test.mjs tests/unit/private-board-intent.test.mjs tests/unit/my-tasks-navigation.test.mjs tests/unit/my-task-completion-control.test.mjs tests/unit/task-assignee-label.test.mjs tests/unit/task-capture-state.test.mjs tests/unit/task-checklist-state.test.mjs tests/unit/task-checklist-completion.test.mjs tests/unit/task-completion.test.mjs tests/unit/task-date.test.mjs tests/unit/task-delete-flow.test.mjs tests/unit/column-deletion-flow.test.mjs tests/unit/board-recovery-flow.test.mjs tests/unit/import-replacement-boundary.test.mjs tests/unit/task-edit-focus.test.mjs tests/unit/task-edit-read.test.mjs tests/unit/task-edit-workflow.test.mjs tests/unit/task-order.test.mjs tests/unit/task-order-reconciliation.test.mjs tests/unit/task-recovery-state.test.mjs tests/unit/task-comments-state.test.mjs tests/unit/task-comments-db.test.mjs tests/unit/daily-repetition-state.test.mjs tests/unit/board-departure-flow.test.mjs tests/unit/board-member-removal-flow.test.mjs tests/unit/board-auth-epoch.test.mjs tests/unit/board-favorites-state.test.mjs tests/unit/task-draft-preservation.test.mjs tests/unit/submission-gate.test.mjs tests/unit/rpc-status-result.test.mjs tests/unit/theme-preference-state.test.mjs tests/unit/modal-stack.test.mjs tests/unit/modal-focus-contract.test.mjs tests/unit/theme-contrast.test.mjs",
     "test:db": "bash scripts/test-db.sh",
+    "test:db:issue-23": "bash scripts/test-db-issue-23.sh",
     "format": "biome format --write"
   },
   "dependencies": {

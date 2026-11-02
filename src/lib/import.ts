@@ -1,15 +1,10 @@
 import { z } from "zod/v4";
-import {
-  createBoard,
-  createColumn,
-  createTask,
-  deleteColumn,
-  getBoard,
-  getColumns,
-} from "@/lib/db";
+import { createColumn, createTask, getBoard, getColumns } from "@/lib/db";
 import type { ExportData } from "@/lib/export";
+import { ensureImportReplacementAvailable } from "@/lib/import-replacement-boundary";
 import { createClient } from "@/lib/supabase/client";
 import type { Board, ColumnWithTasks, Priority } from "@/lib/types";
+import { generateUUID } from "@/lib/utils";
 import {
   columnTitleSchema,
   prioritySchema,
@@ -92,16 +87,13 @@ export async function importBoard(
   const supabase = createClient();
 
   // Get or create the board
-  let board = await getBoard(supabase, slug);
+  const board = await getBoard(supabase, slug);
 
   if (board) {
-    // Clear existing columns (cascade deletes tasks)
     const existingCols = await getColumns(supabase, board.id);
-    for (const col of existingCols) {
-      await deleteColumn(supabase, slug, col.id);
-    }
+    ensureImportReplacementAvailable(existingCols.length);
   } else {
-    board = await createBoard(supabase, slug);
+    throw new Error("This board is no longer available.");
   }
 
   // Create columns and tasks from import data
@@ -116,12 +108,11 @@ export async function importBoard(
 
     const tasks = [];
     for (const taskData of colData.tasks) {
-      const task = await createTask(supabase, slug, {
+      const task = await createTask(supabase, slug, generateUUID(), board.id, {
         column_id: col.id,
         title: taskData.title,
         description: taskData.description ?? undefined,
         priority: (taskData.priority as Priority) ?? "medium",
-        position: taskData.position,
       });
       tasks.push(task);
     }

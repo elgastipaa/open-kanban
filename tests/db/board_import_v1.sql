@@ -1,5 +1,5 @@
 \set ON_ERROR_STOP on
-\echo 'Testing safe v1 import preparation, revalidation, quota, publication, and recovery'
+\echo 'Testing safe v1 import preparation, revalidation, quota, publication, and retention'
 
 INSERT INTO public.application_access (email, state, is_admin) VALUES
   ('issue43-owner@example.test', 'pending', false),
@@ -112,6 +112,14 @@ GRANT EXECUTE ON FUNCTION public.issue43_hold_board_lock_p(text, integer)
   TO authenticated;
 
 -- A prepared v1 replacement stays invisible; only the authenticated owner may prepare it.
+INSERT INTO public.issue43_import_results(name, result)
+SELECT 'sync_before_stage', jsonb_build_object('count', (
+  SELECT count(*) FROM realtime.messages AS message
+  WHERE message.topic = public.board_realtime_topic(board.id, board.auth_epoch, 'sync')
+    AND message.event = 'sync'
+))
+FROM public.issue43_import_fixture AS fixture
+JOIN public.boards AS board ON board.id = fixture.board_id;
 BEGIN;
 SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claim.sub', 'a4300000-0000-4000-8000-000000000001', true);
@@ -136,6 +144,14 @@ SELECT 'visible', jsonb_build_object(
   'task_count', (SELECT count(*) FROM public.get_tasks_by_board_p(fixture.board_id))
 ) FROM public.issue43_import_fixture AS fixture;
 COMMIT;
+INSERT INTO public.issue43_import_results(name, result)
+SELECT 'sync_after_stage', jsonb_build_object('count', (
+  SELECT count(*) FROM realtime.messages AS message
+  WHERE message.topic = public.board_realtime_topic(board.id, board.auth_epoch, 'sync')
+    AND message.event = 'sync'
+))
+FROM public.issue43_import_fixture AS fixture
+JOIN public.boards AS board ON board.id = fixture.board_id;
 DO $$
 DECLARE
   v_fixture public.issue43_import_fixture%ROWTYPE;
@@ -155,6 +171,8 @@ BEGIN
     OR (SELECT active_generation_id FROM public.boards WHERE id = v_fixture.board_id) <> v_fixture.old_generation_id
     OR (SELECT status FROM public.board_generations WHERE id = v_generation_id) <> 'preparing'
     OR (SELECT result->>'task_count' FROM public.issue43_import_results WHERE name = 'visible') <> '1'
+    OR (SELECT result->>'count' FROM public.issue43_import_results WHERE name = 'sync_before_stage')
+      <> (SELECT result->>'count' FROM public.issue43_import_results WHERE name = 'sync_after_stage')
     OR (SELECT result->>'status' FROM public.issue43_import_results WHERE name = 'invalid_missing_field') <> 'invalid'
     OR (SELECT result->>'status' FROM public.issue43_import_results WHERE name = 'invalid_identity') <> 'invalid'
     OR EXISTS (SELECT 1 FROM public.board_import_operations
@@ -337,6 +355,15 @@ BEGIN
 END;
 $$;
 
+INSERT INTO public.issue43_import_results(name, result)
+SELECT 'sync_before_confirm', jsonb_build_object('count', (
+  SELECT count(*) FROM realtime.messages AS message
+  WHERE message.topic = public.board_realtime_topic(board.id, board.auth_epoch, 'sync')
+    AND message.event = 'sync'
+))
+FROM public.issue43_import_fixture AS fixture
+JOIN public.boards AS board ON board.id = fixture.board_id;
+
 -- A lost response after commit is replayed from the same durable receipt.
 BEGIN;
 SET LOCAL ROLE authenticated;
@@ -347,6 +374,14 @@ SELECT 'confirmed', public.confirm_board_import_p(
   (SELECT (result->>'content_revision')::bigint FROM public.issue43_import_results WHERE name = 'publish'), repeat('c', 64)
 ) FROM public.issue43_import_fixture AS fixture;
 COMMIT;
+INSERT INTO public.issue43_import_results(name, result)
+SELECT 'sync_after_confirm', jsonb_build_object('count', (
+  SELECT count(*) FROM realtime.messages AS message
+  WHERE message.topic = public.board_realtime_topic(board.id, board.auth_epoch, 'sync')
+    AND message.event = 'sync'
+))
+FROM public.issue43_import_fixture AS fixture
+JOIN public.boards AS board ON board.id = fixture.board_id;
 
 BEGIN;
 SET LOCAL ROLE authenticated;
@@ -356,9 +391,6 @@ SELECT 'retry', public.confirm_board_import_p(
   fixture.slug, 'a4360000-0000-4000-8000-000000000003',
   (SELECT (result->>'content_revision')::bigint FROM public.issue43_import_results WHERE name = 'publish'), repeat('c', 64)
 ) FROM public.issue43_import_fixture AS fixture;
-INSERT INTO public.issue43_import_results(name, result)
-SELECT 'recoveries', public.list_board_import_recoveries_p(fixture.slug)
-FROM public.issue43_import_fixture AS fixture;
 COMMIT;
 DO $$
 DECLARE
@@ -377,6 +409,10 @@ BEGIN
     AND column_row.generation_id = (SELECT active_generation_id FROM public.boards WHERE id = fixture.board_id);
   IF result->>'status' <> 'confirmed'
     OR (SELECT issue43_import_results.result FROM public.issue43_import_results WHERE name = 'retry') <> result
+    OR (SELECT (sync_after.result->>'count')::bigint
+      FROM public.issue43_import_results AS sync_after WHERE name = 'sync_after_confirm')
+      <> (SELECT (sync_before.result->>'count')::bigint + 1
+        FROM public.issue43_import_results AS sync_before WHERE name = 'sync_before_confirm')
     OR retained.expires_at <> retained.retained_at + interval '168 hours'
     OR retained.replacement_generation_id <> (SELECT active_generation_id FROM public.boards WHERE id = fixture.board_id)
     OR imported_task.title <> 'Nueva' OR imported_task.created_by IS NOT NULL
@@ -385,37 +421,8 @@ BEGIN
     OR (SELECT owner_id FROM public.boards WHERE id = fixture.board_id) <> fixture.owner_id
     OR (SELECT count(*) FROM public.board_memberships WHERE board_id = fixture.board_id AND revoked_at IS NULL) <> 2
     OR (SELECT active_bytes FROM public.task_attachment_quota_ledger WHERE singleton) <> 12
-    OR NOT EXISTS (SELECT 1 FROM public.task_attachments WHERE id = fixture.attachment_id AND state = 'active')
-    OR jsonb_array_length((SELECT issue43_import_results.result->'items'
-      FROM public.issue43_import_results WHERE name = 'recoveries')) <> 1 THEN
+    OR NOT EXISTS (SELECT 1 FROM public.task_attachments WHERE id = fixture.attachment_id AND state = 'active') THEN
     RAISE EXCEPTION 'Replacement, receipt, retention, defaults, or membership invariant failed';
-  END IF;
-END;
-$$;
-
-BEGIN;
-SET LOCAL ROLE authenticated;
-SELECT set_config('request.jwt.claim.sub', 'a4300000-0000-4000-8000-000000000001', true);
-INSERT INTO public.issue43_import_results(name, result)
-SELECT 'restore_preview', public.prepare_board_import_restore_p(
-  fixture.slug, 'a4360000-0000-4000-8000-000000000004', fixture.old_generation_id
-) FROM public.issue43_import_fixture AS fixture;
-INSERT INTO public.issue43_import_results(name, result)
-SELECT 'restore_confirmed', public.confirm_board_import_restore_p(
-  fixture.slug, 'a4360000-0000-4000-8000-000000000004',
-  (SELECT (result->>'content_revision')::bigint FROM public.issue43_import_results WHERE name = 'restore_preview')
-) FROM public.issue43_import_fixture AS fixture;
-COMMIT;
-DO $$
-DECLARE fixture public.issue43_import_fixture%ROWTYPE;
-BEGIN
-  SELECT * INTO STRICT fixture FROM public.issue43_import_fixture;
-  IF (SELECT result->>'status' FROM public.issue43_import_results WHERE name = 'restore_preview') <> 'prepared'
-    OR (SELECT result->>'status' FROM public.issue43_import_results WHERE name = 'restore_confirmed') <> 'confirmed'
-    OR (SELECT active_generation_id FROM public.boards WHERE id = fixture.board_id) <> fixture.old_generation_id
-    OR (SELECT owner_id FROM public.boards WHERE id = fixture.board_id) <> fixture.owner_id
-    OR (SELECT count(*) FROM public.board_memberships WHERE board_id = fixture.board_id AND revoked_at IS NULL) <> 2 THEN
-    RAISE EXCEPTION 'Previous-generation restore changed board identity or membership';
   END IF;
 END;
 $$;
@@ -423,4 +430,4 @@ $$;
 DROP FUNCTION public.issue43_fail_pointer_swap_tg();
 DROP FUNCTION public.issue43_try_mutate_prepared_generation_p(uuid);
 DROP FUNCTION public.issue43_try_bump_prepared_column_order_p(uuid);
-\echo 'PASS: staged v1 import revalidates owner, revisions, and quota; publication is atomic and retryable; previous generation restores within seven days.'
+\echo 'PASS: staged v1 import revalidates owner, revisions, and quota; publication is atomic and retryable; staging emits no live sync signal; prior generation is retained for seven days.'

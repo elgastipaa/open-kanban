@@ -31,7 +31,7 @@ test("import and confirm routes authenticate the actor and call atomic owner RPC
   assert.match(confirmRoute, /private, no-store/u);
 });
 
-test("the owner-facing UI requires review, explicit confirmation, and exposes prior versions", async () => {
+test("the owner-facing UI shows the version and requires explicit replacement confirmation", async () => {
   const dialog = await source("src/components/board/board-import-dialog.tsx");
   const board = await source("src/components/board/board.tsx");
   const toolbar = await source("src/components/board/board-toolbar.tsx");
@@ -40,13 +40,22 @@ test("the owner-facing UI requires review, explicit confirmation, and exposes pr
   assert.match(dialog, /no se combinarán/u);
   assert.match(dialog, /propietario y los integrantes/u);
   assert.match(dialog, /siete días/u);
+  assert.match(dialog, /Revisión del contenido/u);
   assert.match(dialog, /role="alert"/u);
   assert.match(dialog, /<output aria-live="polite"/u);
-  assert.match(dialog, /Revisar recuperación/u);
-  assert.match(dialog, /Confirmar recuperación/u);
   assert.match(board, /<BoardImportDialog/u);
   assert.doesNotMatch(board, /importBoard\(/u);
   assert.match(toolbar, /canRename \? \(/u);
+  await assert.rejects(
+    source("src/app/api/boards/[slug]/import/recoveries/route.ts"),
+    { code: "ENOENT" },
+  );
+  await assert.rejects(
+    source(
+      "src/app/api/boards/[slug]/import/recoveries/[operationId]/confirm/route.ts",
+    ),
+    { code: "ENOENT" },
+  );
 });
 
 test("the database stages invisible generations and revalidates publication under the board lock", async () => {
@@ -76,6 +85,12 @@ test("the database stages invisible generations and revalidates publication unde
   );
   assert.match(migration, /cleanup_expired_board_import_operations_p/u);
   assert.match(migration, /cleanup_expired_board_generation_retention_p/u);
+  assert.match(migration, /confirmed_at <= v_now - interval '168 hours'/u);
+  assert.match(migration, /generation_id = v_generation_id/u);
+  assert.doesNotMatch(migration, /board_import_restore_previews/u);
+  assert.doesNotMatch(migration, /list_board_import_recoveries_p/u);
+  assert.doesNotMatch(migration, /prepare_board_import_restore_p/u);
+  assert.doesNotMatch(migration, /confirm_board_import_restore_p/u);
   assert.match(cleanupRoute, /cleanup_expired_board_import_operations_p/u);
   assert.match(cleanupRoute, /cleanup_expired_board_generation_retention_p/u);
 });

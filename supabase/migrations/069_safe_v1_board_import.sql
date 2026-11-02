@@ -39,7 +39,6 @@ CREATE TABLE public.board_generation_retention (
   replacement_generation_id uuid NOT NULL,
   retained_at timestamptz NOT NULL,
   expires_at timestamptz NOT NULL,
-  source text NOT NULL CHECK (source IN ('import', 'restore')),
   PRIMARY KEY (board_id, generation_id),
   CHECK (expires_at = retained_at + interval '168 hours'),
   FOREIGN KEY (board_id, generation_id)
@@ -76,32 +75,14 @@ CREATE TABLE public.board_import_operations (
 CREATE INDEX board_import_operations_expiry_idx
   ON public.board_import_operations(expires_at, board_id)
   WHERE status IN ('staging', 'prepared');
+CREATE INDEX board_import_operations_confirmed_retention_idx
+  ON public.board_import_operations(confirmed_at, actor_id, operation_id)
+  WHERE status = 'confirmed';
+CREATE INDEX board_import_operations_terminal_retention_idx
+  ON public.board_import_operations(expires_at, actor_id, operation_id)
+  WHERE status IN ('conflict', 'expired', 'cancelled');
 ALTER TABLE public.board_import_operations ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE public.board_import_operations
-  FROM PUBLIC, anon, authenticated, service_role;
-
-CREATE TABLE public.board_import_restore_previews (
-  actor_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  operation_id uuid NOT NULL,
-  board_id uuid NOT NULL REFERENCES public.boards(id) ON DELETE CASCADE,
-  target_generation_id uuid NOT NULL,
-  base_generation_id uuid NOT NULL,
-  expected_content_revision bigint NOT NULL CHECK (expected_content_revision > 0),
-  target_content_hash bytea NOT NULL,
-  status text NOT NULL CHECK (status IN ('prepared', 'confirmed', 'conflict', 'expired')),
-  created_at timestamptz NOT NULL DEFAULT pg_catalog.clock_timestamp(),
-  expires_at timestamptz NOT NULL,
-  confirmed_at timestamptz,
-  result jsonb,
-  PRIMARY KEY (actor_id, operation_id),
-  CHECK (expires_at > created_at),
-  CHECK ((status = 'confirmed') = (confirmed_at IS NOT NULL))
-);
-CREATE INDEX board_import_restore_previews_expiry_idx
-  ON public.board_import_restore_previews(expires_at, board_id)
-  WHERE status = 'prepared';
-ALTER TABLE public.board_import_restore_previews ENABLE ROW LEVEL SECURITY;
-REVOKE ALL ON TABLE public.board_import_restore_previews
   FROM PUBLIC, anon, authenticated, service_role;
 
 CREATE FUNCTION public.seed_board_content_revision_tg()
@@ -416,6 +397,67 @@ BEGIN
 END;
 $$;
 REVOKE ALL ON FUNCTION public.guard_board_child_owner()
+  FROM PUBLIC, anon, authenticated, service_role;
+
+-- Staged and archived rows are invisible to the live board. Do not publish a
+-- sync invalidation for each row written while preparing an import generation.
+CREATE OR REPLACE FUNCTION public.publish_board_table_change()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public, auth, pg_temp
+AS $$
+DECLARE
+  v_board_id uuid;
+  v_generation_id uuid;
+  v_row jsonb;
+  v_column_id uuid;
+BEGIN
+  CASE TG_TABLE_NAME
+    WHEN 'boards' THEN
+      v_board_id := CASE WHEN TG_OP = 'DELETE' THEN OLD.id ELSE NEW.id END;
+      IF TG_OP = 'UPDATE'
+        AND OLD.name IS NOT DISTINCT FROM NEW.name
+        AND OLD.time_zone IS NOT DISTINCT FROM NEW.time_zone
+        AND OLD.active_generation_id IS NOT DISTINCT FROM NEW.active_generation_id THEN
+        RETURN NULL;
+      END IF;
+    WHEN 'columns' THEN
+      v_row := CASE WHEN TG_OP = 'DELETE'
+        THEN pg_catalog.to_jsonb(OLD) ELSE pg_catalog.to_jsonb(NEW) END;
+      v_board_id := (v_row->>'board_id')::uuid;
+      v_generation_id := (v_row->>'generation_id')::uuid;
+    WHEN 'tasks' THEN
+      v_row := CASE WHEN TG_OP = 'DELETE'
+        THEN pg_catalog.to_jsonb(OLD) ELSE pg_catalog.to_jsonb(NEW) END;
+      v_column_id := (v_row->>'column_id')::uuid;
+      SELECT column_row.board_id, column_row.generation_id
+        INTO v_board_id, v_generation_id
+      FROM public.columns AS column_row WHERE column_row.id = v_column_id;
+    WHEN 'task_comment_mentions' THEN
+      IF TG_OP = 'DELETE' THEN
+        SELECT comment.board_id INTO v_board_id
+        FROM public.task_comments AS comment WHERE comment.id = OLD.comment_id;
+      ELSE
+        SELECT comment.board_id INTO v_board_id
+        FROM public.task_comments AS comment WHERE comment.id = NEW.comment_id;
+      END IF;
+    ELSE
+      v_board_id := CASE WHEN TG_OP = 'DELETE' THEN OLD.board_id ELSE NEW.board_id END;
+  END CASE;
+
+  IF v_generation_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM public.boards AS board
+    WHERE board.id = v_board_id
+      AND board.active_generation_id = v_generation_id
+  ) THEN
+    RETURN NULL;
+  END IF;
+  PERFORM public.publish_board_realtime_sync(v_board_id);
+  RETURN NULL;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.publish_board_table_change()
   FROM PUBLIC, anon, authenticated, service_role;
 
 CREATE FUNCTION public.cleanup_board_import_generation_p(
@@ -980,10 +1022,10 @@ BEGIN
   v_retained_until := v_now + interval '168 hours';
   INSERT INTO public.board_generation_retention(
     board_id, generation_id, replacement_generation_id,
-    retained_at, expires_at, source
+    retained_at, expires_at
   ) VALUES (
     v_board.id, v_board.active_generation_id, v_operation.generation_id,
-    v_now, v_retained_until, 'import'
+    v_now, v_retained_until
   );
   UPDATE public.board_generations
   SET status = 'archived'
@@ -1027,323 +1069,6 @@ REVOKE ALL ON FUNCTION public.confirm_board_import_p(text, uuid, bigint, text)
 GRANT EXECUTE ON FUNCTION public.confirm_board_import_p(text, uuid, bigint, text)
   TO authenticated;
 
-CREATE FUNCTION public.list_board_import_recoveries_p(p_slug text)
-RETURNS jsonb
-LANGUAGE plpgsql
-STABLE
-SECURITY DEFINER
-SET search_path = pg_catalog, public, auth, pg_temp
-AS $$
-DECLARE
-  v_actor_id uuid := auth.uid();
-  v_board public.boards%ROWTYPE;
-  v_items jsonb;
-BEGIN
-  IF v_actor_id IS NULL OR NOT public.is_application_user() OR p_slug IS NULL THEN
-    RETURN pg_catalog.jsonb_build_object('status', 'unavailable');
-  END IF;
-  SELECT board.* INTO v_board
-  FROM public.boards AS board
-  JOIN public.board_memberships AS membership
-    ON membership.board_id = board.id AND membership.user_id = v_actor_id
-    AND membership.role = 'owner' AND membership.revoked_at IS NULL
-  WHERE board.slug = p_slug AND board.owner_id = v_actor_id
-    AND NOT EXISTS (
-      SELECT 1 FROM public.board_recoverable_deletions AS deletion
-      WHERE deletion.board_id = board.id
-    );
-  IF NOT FOUND OR NOT public.is_board_owner(v_board.id) THEN
-    RETURN pg_catalog.jsonb_build_object('status', 'unavailable');
-  END IF;
-  SELECT COALESCE(pg_catalog.jsonb_agg(item ORDER BY item->>'retained_at' DESC), '[]'::jsonb)
-  INTO v_items
-  FROM (
-    SELECT pg_catalog.jsonb_build_object(
-      'generation_id', retention.generation_id,
-      'retained_at', retention.retained_at,
-      'expires_at', retention.expires_at,
-      'source', retention.source,
-      'content', public.board_import_generation_summary_p(
-        retention.board_id, retention.generation_id
-      )
-    ) AS item
-    FROM public.board_generation_retention AS retention
-    JOIN public.board_generations AS generation
-      ON generation.board_id = retention.board_id
-      AND generation.id = retention.generation_id
-      AND generation.status = 'archived'
-    WHERE retention.board_id = v_board.id
-      AND retention.expires_at > pg_catalog.clock_timestamp()
-  ) AS recoverable;
-  RETURN pg_catalog.jsonb_build_object(
-    'status', 'available', 'items', COALESCE(v_items, '[]'::jsonb),
-    'content_revision', (
-      SELECT revision.revision FROM public.board_content_revisions AS revision
-      WHERE revision.board_id = v_board.id
-    )
-  );
-END;
-$$;
-REVOKE ALL ON FUNCTION public.list_board_import_recoveries_p(text)
-  FROM PUBLIC, anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.list_board_import_recoveries_p(text)
-  TO authenticated;
-
-CREATE FUNCTION public.prepare_board_import_restore_p(
-  p_slug text,
-  p_operation_id uuid,
-  p_generation_id uuid
-)
-RETURNS jsonb
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = pg_catalog, public, auth, pg_temp
-AS $$
-DECLARE
-  v_actor_id uuid := auth.uid();
-  v_board public.boards%ROWTYPE;
-  v_preview public.board_import_restore_previews%ROWTYPE;
-  v_retention public.board_generation_retention%ROWTYPE;
-  v_revision bigint;
-  v_capacity jsonb;
-  v_result jsonb;
-BEGIN
-  IF v_actor_id IS NULL OR NOT public.is_application_user()
-    OR p_slug IS NULL OR p_operation_id IS NULL OR p_generation_id IS NULL THEN
-    RETURN pg_catalog.jsonb_build_object('status', 'unavailable');
-  END IF;
-  PERFORM 1 FROM public.application_access AS access
-  WHERE access.auth_user_id = v_actor_id AND access.state = 'active' FOR SHARE;
-  IF NOT FOUND OR NOT public.is_application_user() THEN
-    RETURN pg_catalog.jsonb_build_object('status', 'unavailable');
-  END IF;
-  SELECT board.* INTO v_board
-  FROM public.boards AS board
-  JOIN public.board_memberships AS membership
-    ON membership.board_id = board.id AND membership.user_id = v_actor_id
-    AND membership.role = 'owner' AND membership.revoked_at IS NULL
-  WHERE board.slug = p_slug AND board.owner_id = v_actor_id
-    AND NOT EXISTS (
-      SELECT 1 FROM public.board_recoverable_deletions AS deletion
-      WHERE deletion.board_id = board.id
-    )
-  FOR UPDATE OF board, membership;
-  IF NOT FOUND OR NOT public.is_board_owner(v_board.id) THEN
-    RETURN pg_catalog.jsonb_build_object('status', 'unavailable');
-  END IF;
-  SELECT revision.revision INTO v_revision
-  FROM public.board_content_revisions AS revision
-  WHERE revision.board_id = v_board.id FOR UPDATE;
-  SELECT preview.* INTO v_preview
-  FROM public.board_import_restore_previews AS preview
-  WHERE preview.actor_id = v_actor_id AND preview.operation_id = p_operation_id
-  FOR UPDATE;
-  IF FOUND THEN
-    IF v_preview.board_id <> v_board.id
-      OR v_preview.target_generation_id <> p_generation_id THEN
-      RETURN pg_catalog.jsonb_build_object('status', 'conflict');
-    END IF;
-    IF v_preview.status = 'confirmed' THEN RETURN v_preview.result; END IF;
-    IF v_preview.status <> 'prepared' THEN
-      RETURN pg_catalog.jsonb_build_object('status', v_preview.status);
-    END IF;
-    RETURN pg_catalog.jsonb_build_object(
-      'status', 'prepared', 'operation_id', p_operation_id,
-      'generation_id', p_generation_id, 'content_revision', v_revision,
-      'current', public.board_import_generation_summary_p(
-        v_board.id, v_board.active_generation_id
-      ),
-      'restore', public.board_import_generation_summary_p(v_board.id, p_generation_id),
-      'capacity', public.board_import_capacity_snapshot_p(),
-      'expires_at', v_preview.expires_at
-    );
-  END IF;
-  SELECT retention.* INTO v_retention
-  FROM public.board_generation_retention AS retention
-  JOIN public.board_generations AS generation
-    ON generation.board_id = retention.board_id
-    AND generation.id = retention.generation_id
-    AND generation.status = 'archived'
-  WHERE retention.board_id = v_board.id
-    AND retention.generation_id = p_generation_id
-    AND retention.expires_at > pg_catalog.clock_timestamp()
-  FOR UPDATE OF retention;
-  IF NOT FOUND THEN
-    RETURN pg_catalog.jsonb_build_object('status', 'expired');
-  END IF;
-  SELECT public.board_import_capacity_snapshot_p() INTO v_capacity;
-  INSERT INTO public.board_import_restore_previews(
-    actor_id, operation_id, board_id, target_generation_id, base_generation_id,
-    expected_content_revision, target_content_hash, status, expires_at
-  ) VALUES (
-    v_actor_id, p_operation_id, v_board.id, p_generation_id,
-    v_board.active_generation_id, v_revision,
-    public.board_import_generation_hash_p(v_board.id, p_generation_id),
-    'prepared', pg_catalog.clock_timestamp() + interval '1 hour'
-  ) RETURNING * INTO v_preview;
-  v_result := pg_catalog.jsonb_build_object(
-    'status', 'prepared', 'operation_id', p_operation_id,
-    'generation_id', p_generation_id, 'content_revision', v_revision,
-    'current', public.board_import_generation_summary_p(
-      v_board.id, v_board.active_generation_id
-    ),
-    'restore', public.board_import_generation_summary_p(v_board.id, p_generation_id),
-    'capacity', v_capacity, 'expires_at', v_preview.expires_at
-  );
-  RETURN v_result;
-END;
-$$;
-REVOKE ALL ON FUNCTION public.prepare_board_import_restore_p(text, uuid, uuid)
-  FROM PUBLIC, anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.prepare_board_import_restore_p(text, uuid, uuid)
-  TO authenticated;
-
-CREATE FUNCTION public.confirm_board_import_restore_p(
-  p_slug text,
-  p_operation_id uuid,
-  p_expected_content_revision bigint
-)
-RETURNS jsonb
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = pg_catalog, public, auth, pg_temp
-AS $$
-DECLARE
-  v_actor_id uuid := auth.uid();
-  v_board public.boards%ROWTYPE;
-  v_preview public.board_import_restore_previews%ROWTYPE;
-  v_retention public.board_generation_retention%ROWTYPE;
-  v_ledger public.task_attachment_quota_ledger%ROWTYPE;
-  v_revision bigint;
-  v_used_bytes bigint;
-  v_now timestamptz := pg_catalog.clock_timestamp();
-  v_retained_until timestamptz;
-  v_result jsonb;
-BEGIN
-  IF v_actor_id IS NULL OR NOT public.is_application_user()
-    OR p_slug IS NULL OR p_operation_id IS NULL
-    OR p_expected_content_revision IS NULL THEN
-    RETURN pg_catalog.jsonb_build_object('status', 'unavailable');
-  END IF;
-  PERFORM 1 FROM public.application_access AS access
-  WHERE access.auth_user_id = v_actor_id AND access.state = 'active' FOR SHARE;
-  IF NOT FOUND OR NOT public.is_application_user() THEN
-    RETURN pg_catalog.jsonb_build_object('status', 'unavailable');
-  END IF;
-  SELECT board.* INTO v_board
-  FROM public.boards AS board
-  JOIN public.board_memberships AS membership
-    ON membership.board_id = board.id AND membership.user_id = v_actor_id
-    AND membership.role = 'owner' AND membership.revoked_at IS NULL
-  WHERE board.slug = p_slug AND board.owner_id = v_actor_id
-    AND NOT EXISTS (
-      SELECT 1 FROM public.board_recoverable_deletions AS deletion
-      WHERE deletion.board_id = board.id
-    )
-  FOR UPDATE OF board, membership;
-  IF NOT FOUND OR NOT public.is_board_owner(v_board.id) THEN
-    RETURN pg_catalog.jsonb_build_object('status', 'unavailable');
-  END IF;
-  SELECT revision.revision INTO v_revision
-  FROM public.board_content_revisions AS revision
-  WHERE revision.board_id = v_board.id FOR UPDATE;
-  SELECT preview.* INTO v_preview
-  FROM public.board_import_restore_previews AS preview
-  WHERE preview.actor_id = v_actor_id AND preview.operation_id = p_operation_id
-    AND preview.board_id = v_board.id
-  FOR UPDATE;
-  IF NOT FOUND THEN RETURN pg_catalog.jsonb_build_object('status', 'unavailable'); END IF;
-  IF v_preview.status = 'confirmed' THEN RETURN v_preview.result; END IF;
-  IF v_preview.status <> 'prepared' OR v_preview.expires_at <= v_now THEN
-    UPDATE public.board_import_restore_previews AS preview
-    SET status = 'expired'
-    WHERE preview.actor_id = v_actor_id AND preview.operation_id = p_operation_id;
-    RETURN pg_catalog.jsonb_build_object('status', 'expired');
-  END IF;
-  IF p_expected_content_revision <> v_preview.expected_content_revision
-    OR v_revision <> v_preview.expected_content_revision THEN
-    UPDATE public.board_import_restore_previews AS preview
-    SET status = 'conflict'
-    WHERE preview.actor_id = v_actor_id AND preview.operation_id = p_operation_id;
-    RETURN pg_catalog.jsonb_build_object(
-      'status', 'conflict', 'content_revision', v_revision
-    );
-  END IF;
-  IF public.board_import_generation_hash_p(v_board.id, v_preview.target_generation_id)
-    IS DISTINCT FROM v_preview.target_content_hash THEN
-    UPDATE public.board_import_restore_previews AS preview
-    SET status = 'conflict'
-    WHERE preview.actor_id = v_actor_id AND preview.operation_id = p_operation_id;
-    RETURN pg_catalog.jsonb_build_object('status', 'conflict');
-  END IF;
-  SELECT retention.* INTO v_retention
-  FROM public.board_generation_retention AS retention
-  JOIN public.board_generations AS generation
-    ON generation.board_id = retention.board_id
-    AND generation.id = retention.generation_id AND generation.status = 'archived'
-  WHERE retention.board_id = v_board.id
-    AND retention.generation_id = v_preview.target_generation_id
-    AND retention.expires_at > v_now
-  FOR UPDATE OF retention;
-  IF NOT FOUND THEN RETURN pg_catalog.jsonb_build_object('status', 'expired'); END IF;
-  SELECT ledger.* INTO v_ledger
-  FROM public.task_attachment_quota_ledger AS ledger
-  WHERE ledger.singleton FOR UPDATE;
-  IF NOT FOUND THEN RETURN pg_catalog.jsonb_build_object('status', 'capacity'); END IF;
-  v_used_bytes := v_ledger.active_bytes + v_ledger.recoverable_bytes
-    + v_ledger.reserved_bytes + v_ledger.pending_bytes;
-  IF v_used_bytes > v_ledger.limit_bytes THEN
-    RETURN pg_catalog.jsonb_build_object(
-      'status', 'capacity', 'capacity', public.board_import_capacity_snapshot_p()
-    );
-  END IF;
-
-  v_retained_until := v_now + interval '168 hours';
-  INSERT INTO public.board_generation_retention(
-    board_id, generation_id, replacement_generation_id,
-    retained_at, expires_at, source
-  ) VALUES (
-    v_board.id, v_board.active_generation_id, v_preview.target_generation_id,
-    v_now, v_retained_until, 'restore'
-  );
-  UPDATE public.board_generations SET status = 'archived'
-  WHERE board_id = v_board.id AND id = v_board.active_generation_id AND status = 'active';
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'The current board generation could not be retained'
-      USING ERRCODE = '40001';
-  END IF;
-  UPDATE public.board_generations SET status = 'active'
-  WHERE board_id = v_board.id AND id = v_preview.target_generation_id AND status = 'archived';
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'The prior board generation is unavailable'
-      USING ERRCODE = '40001';
-  END IF;
-  UPDATE public.boards AS board
-  SET active_generation_id = v_preview.target_generation_id
-  WHERE board.id = v_board.id
-    AND board.active_generation_id IS NOT DISTINCT FROM v_preview.base_generation_id;
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'The board changed during recovery'
-      USING ERRCODE = '40001';
-  END IF;
-  DELETE FROM public.board_generation_retention AS retention
-  WHERE retention.board_id = v_board.id
-    AND retention.generation_id = v_preview.target_generation_id;
-  v_result := pg_catalog.jsonb_build_object(
-    'status', 'confirmed', 'operation_id', p_operation_id,
-    'content_revision', v_revision + 1, 'retained_until', v_retained_until
-  );
-  UPDATE public.board_import_restore_previews AS preview
-  SET status = 'confirmed', confirmed_at = v_now, result = v_result
-  WHERE preview.actor_id = v_actor_id AND preview.operation_id = p_operation_id;
-  RETURN v_result;
-END;
-$$;
-REVOKE ALL ON FUNCTION public.confirm_board_import_restore_p(text, uuid, bigint)
-  FROM PUBLIC, anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.confirm_board_import_restore_p(text, uuid, bigint)
-  TO authenticated;
-
 CREATE FUNCTION public.cleanup_expired_board_import_operations_p(p_limit integer DEFAULT 50)
 RETURNS integer
 LANGUAGE plpgsql
@@ -1354,6 +1079,8 @@ DECLARE
   v_board_id uuid;
   v_operation public.board_import_operations%ROWTYPE;
   v_cleaned integer := 0;
+  v_deleted integer := 0;
+  v_now timestamptz := pg_catalog.clock_timestamp();
 BEGIN
   IF p_limit IS NULL OR p_limit < 1 THEN RETURN 0; END IF;
   FOR v_board_id IN
@@ -1368,7 +1095,7 @@ BEGIN
       WHERE operation.board_id = board.id
         AND (
           (operation.status IN ('staging', 'prepared')
-            AND operation.expires_at <= pg_catalog.clock_timestamp())
+            AND operation.expires_at <= v_now)
           OR operation.status IN ('conflict', 'expired', 'cancelled')
         )
     )
@@ -1388,7 +1115,7 @@ BEGIN
       WHERE operation.board_id = v_board_id
         AND (
           (operation.status IN ('staging', 'prepared')
-            AND operation.expires_at <= pg_catalog.clock_timestamp())
+            AND operation.expires_at <= v_now)
           OR operation.status IN ('conflict', 'expired', 'cancelled')
         )
       FOR UPDATE OF operation SKIP LOCKED
@@ -1404,12 +1131,28 @@ BEGIN
       );
       v_cleaned := v_cleaned + 1;
     END LOOP;
-    UPDATE public.board_import_restore_previews AS preview
-    SET status = 'expired'
-    WHERE preview.board_id = v_board_id
-      AND preview.status = 'prepared'
-      AND preview.expires_at <= pg_catalog.clock_timestamp();
   END LOOP;
+
+  -- Receipts reconcile uncertain commits for seven days, then their actor,
+  -- board, hash, and result metadata can be discarded in bounded batches.
+  WITH stale AS (
+    SELECT operation.actor_id, operation.operation_id
+    FROM public.board_import_operations AS operation
+    WHERE (operation.status = 'confirmed'
+        AND operation.confirmed_at <= v_now - interval '168 hours')
+      OR (operation.status IN ('conflict', 'expired', 'cancelled')
+        AND operation.expires_at <= v_now - interval '168 hours')
+    ORDER BY COALESCE(operation.confirmed_at, operation.expires_at),
+      operation.actor_id, operation.operation_id
+    LIMIT LEAST(p_limit, 100)
+    FOR UPDATE OF operation SKIP LOCKED
+  )
+  DELETE FROM public.board_import_operations AS operation
+  USING stale
+  WHERE operation.actor_id = stale.actor_id
+    AND operation.operation_id = stale.operation_id;
+  GET DIAGNOSTICS v_deleted = ROW_COUNT;
+  v_cleaned := v_cleaned + v_deleted;
   RETURN v_cleaned;
 END;
 $$;

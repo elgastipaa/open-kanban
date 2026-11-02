@@ -15,9 +15,15 @@ confirm_log="$race_dir/confirm.log"
 psql=(env -u PGHOSTADDR -u PGSERVICE -u PGSERVICEFILE -u PGOPTIONS -u PGPASSWORD -u PGPASSFILE
   "$psql_bin" -X -h "$test_dir" -p "$port" -U postgres -d postgres -v ON_ERROR_STOP=1)
 
-IFS='|' read -r board_slug task_id owner_id old_generation_id < <(
+IFS='|' read -r board_slug task_id owner_id active_generation_id title_version < <(
   "${psql[@]}" -AtF '|' -c \
-    "SELECT slug, task_id, owner_id, old_generation_id FROM public.issue43_import_fixture"
+    "SELECT board.slug, task.id, fixture.owner_id, board.active_generation_id, task.field_versions->>'title'
+     FROM public.issue43_import_fixture AS fixture
+     JOIN public.boards AS board ON board.id = fixture.board_id
+     JOIN public.columns AS column_row ON column_row.board_id = board.id
+       AND column_row.generation_id = board.active_generation_id
+     JOIN public.tasks AS task ON task.column_id = column_row.id
+     ORDER BY column_row.position, task.position, task.id LIMIT 1"
 )
 
 preview_revision=$("${psql[@]}" -qAt <<SQL
@@ -44,7 +50,7 @@ SELECT set_config('request.jwt.claim.sub', '$owner_id', true);
 SELECT public.issue43_hold_board_lock_p('$board_slug', 3);
 SELECT public.edit_task_fields_p(
   'a4370000-0000-4000-8000-000000000005', '$board_slug', '$task_id',
-  '{"title":"Edit confirmada en la carrera"}'::jsonb, '{"title":2}'::jsonb
+  '{"title":"Edit confirmada en la carrera"}'::jsonb, '{"title":$title_version}'::jsonb
 );
 COMMIT;
 SQL
@@ -105,8 +111,8 @@ WHERE operation.actor_id = '$owner_id'
 SQL
 )
 board_state=$("${psql[@]}" -AtF '|' -c \
-  "SELECT board.active_generation_id, task.title FROM public.boards AS board JOIN public.issue43_import_fixture AS fixture ON fixture.board_id = board.id JOIN public.tasks AS task ON task.id = fixture.task_id WHERE board.id = fixture.board_id")
-if [[ "$result_status" != conflict || "$board_state" != "$old_generation_id|Edit confirmada en la carrera" ]]; then
+  "SELECT board.active_generation_id, task.title FROM public.boards AS board JOIN public.tasks AS task ON task.id = '$task_id' WHERE board.slug = '$board_slug'")
+if [[ "$result_status" != conflict || "$board_state" != "$active_generation_id|Edit confirmada en la carrera" ]]; then
   cat -- "$editor_log" >&2
   cat -- "$confirm_log" >&2
   echo "A concurrent edit was not preserved and rejected: operation='$result_status', board='$board_state'." >&2

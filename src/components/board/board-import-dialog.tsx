@@ -31,16 +31,7 @@ interface ImportPreview {
   expires_at: string;
   current: GenerationSummary;
   imported?: GenerationSummary;
-  restore?: GenerationSummary;
   capacity: CapacitySnapshot;
-}
-
-interface RecoveryItem {
-  generation_id: string;
-  retained_at: string;
-  expires_at: string;
-  source: string;
-  content: GenerationSummary;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -126,15 +117,12 @@ function parsePreview(value: unknown): ImportPreview | null {
   const current = parseSummary(row.current);
   const imported =
     row.imported === undefined ? undefined : parseSummary(row.imported);
-  const restore =
-    row.restore === undefined ? undefined : parseSummary(row.restore);
   const capacity = parseCapacity(row.capacity);
   if (
     revision === null ||
     !current ||
     !capacity ||
-    (row.imported !== undefined && !imported) ||
-    (row.restore !== undefined && !restore)
+    (row.imported !== undefined && !imported)
   ) {
     return null;
   }
@@ -147,37 +135,8 @@ function parsePreview(value: unknown): ImportPreview | null {
     expires_at: row.expires_at,
     current,
     imported: imported ?? undefined,
-    restore: restore ?? undefined,
     capacity,
   };
-}
-
-function parseRecoveryItems(value: unknown): RecoveryItem[] | null {
-  const row = asRecord(value);
-  if (row?.status !== "available" || !Array.isArray(row.items)) return null;
-  const items: RecoveryItem[] = [];
-  for (const valueItem of row.items) {
-    const item = asRecord(valueItem);
-    const content = parseSummary(item?.content);
-    if (
-      !item ||
-      typeof item.generation_id !== "string" ||
-      typeof item.retained_at !== "string" ||
-      typeof item.expires_at !== "string" ||
-      typeof item.source !== "string" ||
-      !content
-    ) {
-      return null;
-    }
-    items.push({
-      generation_id: item.generation_id,
-      retained_at: item.retained_at,
-      expires_at: item.expires_at,
-      source: item.source,
-      content,
-    });
-  }
-  return items;
 }
 
 function describeError(body: unknown, fallback: string): string {
@@ -231,67 +190,21 @@ export function BoardImportDialog({
   const [importPreview, setImportPreview] = useState<ImportPreview | null>(
     null,
   );
-  const [restorePreview, setRestorePreview] = useState<ImportPreview | null>(
-    null,
-  );
-  const [recoveries, setRecoveries] = useState<RecoveryItem[]>([]);
-  const [isLoadingRecoveries, setIsLoadingRecoveries] = useState(false);
   const [isPreparing, setIsPreparing] = useState(false);
   const [isConfirming, setIsConfirming] = useState(false);
-  const [restoringGenerationId, setRestoringGenerationId] = useState<
-    string | null
-  >(null);
-  const [isConfirmingRestore, setIsConfirmingRestore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
-    let active = true;
     setFile(null);
     setImportPreview(null);
-    setRestorePreview(null);
     setError(null);
     setNotice(null);
-    setIsLoadingRecoveries(true);
-    void fetch(`/api/boards/${encodeURIComponent(slug)}/import/recoveries`, {
-      cache: "no-store",
-    })
-      .then(async (response) => ({
-        response,
-        body: (await response.json()) as unknown,
-      }))
-      .then(({ response, body }) => {
-        if (!active) return;
-        const items = response.ok ? parseRecoveryItems(body) : null;
-        setRecoveries(items ?? []);
-        if (!items)
-          setError(
-            "No se pudo consultar la recuperación de versiones anteriores.",
-          );
-      })
-      .catch(() => {
-        if (active)
-          setError(
-            "No se pudo consultar la recuperación de versiones anteriores.",
-          );
-      })
-      .finally(() => {
-        if (active) setIsLoadingRecoveries(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, [open, slug]);
+  }, [open]);
 
   function handleClose() {
-    if (
-      isPreparing ||
-      isConfirming ||
-      restoringGenerationId ||
-      isConfirmingRestore
-    )
-      return;
+    if (isPreparing || isConfirming) return;
     onClose();
   }
 
@@ -385,99 +298,13 @@ export function BoardImportDialog({
     }
   }
 
-  async function prepareRestore(item: RecoveryItem) {
-    if (restoringGenerationId || isConfirmingRestore) return;
-    setRestoringGenerationId(item.generation_id);
-    setError(null);
-    setNotice(null);
-    setRestorePreview(null);
-    try {
-      const response = await fetch(
-        `/api/boards/${encodeURIComponent(slug)}/import/recoveries`,
-        {
-          method: "POST",
-          cache: "no-store",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            operation_id: crypto.randomUUID(),
-            generation_id: item.generation_id,
-          }),
-        },
-      );
-      const body: unknown = await response.json();
-      const parsed = parsePreview(body);
-      if (!response.ok || !parsed || !parsed.restore) {
-        throw new Error(
-          describeError(body, "No se pudo preparar la recuperación."),
-        );
-      }
-      setRestorePreview(parsed);
-    } catch (restoreError) {
-      setError(
-        restoreError instanceof Error
-          ? restoreError.message
-          : "No se pudo preparar la recuperación.",
-      );
-    } finally {
-      setRestoringGenerationId(null);
-    }
-  }
-
-  async function confirmRestore() {
-    if (!restorePreview || isConfirmingRestore) return;
-    setIsConfirmingRestore(true);
-    setError(null);
-    setNotice(null);
-    try {
-      const response = await fetch(
-        `/api/boards/${encodeURIComponent(slug)}/import/recoveries/${encodeURIComponent(restorePreview.operation_id)}/confirm`,
-        {
-          method: "POST",
-          cache: "no-store",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            expected_content_revision: restorePreview.content_revision,
-          }),
-        },
-      );
-      const body: unknown = await response.json();
-      if (!response.ok || asRecord(body)?.status !== "confirmed") {
-        if (asRecord(body)?.status === "conflict") setRestorePreview(null);
-        throw new Error(
-          describeError(body, "No se pudo confirmar la recuperación."),
-        );
-      }
-      setRestorePreview(null);
-      try {
-        await onConfirmed();
-        onClose();
-      } catch {
-        setNotice(
-          "La recuperación se confirmó, pero no se pudo actualizar la vista. Recarga la página para ver el contenido restaurado.",
-        );
-      }
-    } catch (restoreError) {
-      setError(
-        restoreError instanceof Error
-          ? restoreError.message
-          : "No se pudo confirmar la recuperación.",
-      );
-    } finally {
-      setIsConfirmingRestore(false);
-    }
-  }
-
-  const busy =
-    isPreparing ||
-    isConfirming ||
-    Boolean(restoringGenerationId) ||
-    isConfirmingRestore;
+  const busy = isPreparing || isConfirming;
 
   return (
     <Modal
       open={open}
       onClose={handleClose}
-      title="Importar o recuperar tablero"
+      title="Importar un respaldo v1"
       fullScreenMobile
     >
       <div className="space-y-5 text-sm text-text-secondary leading-relaxed">
@@ -497,9 +324,8 @@ export function BoardImportDialog({
             responsables, etiquetas, fechas ni series desde el archivo.
           </p>
           <p>
-            La versión anterior queda disponible durante siete días. Sus
-            adjuntos siguen contando para la capacidad mientras pueda
-            recuperarse.
+            La versión anterior se conserva durante siete días. Sus adjuntos
+            siguen contando para la capacidad mientras esté retenida.
           </p>
           <label className="block space-y-1.5 text-text-primary">
             <span>Archivo JSON del respaldo</span>
@@ -538,6 +364,7 @@ export function BoardImportDialog({
                 <strong className="text-text-primary">Respaldo v1:</strong>{" "}
                 {describeGeneration(importPreview.imported)}
               </p>
+              <p>Revisión del contenido: {importPreview.content_revision}</p>
               <p>
                 Capacidad utilizada:{" "}
                 {formatBytes(importPreview.capacity.used_bytes)} de{" "}
@@ -575,80 +402,6 @@ export function BoardImportDialog({
                 <p role="alert" className="text-priority-urgent">
                   No se puede conservar la versión anterior con la capacidad
                   actual.
-                </p>
-              ) : null}
-            </div>
-          ) : null}
-        </section>
-
-        <section
-          className="space-y-3 border-border border-t pt-4"
-          aria-labelledby="board-import-recoveries-heading"
-        >
-          <h3
-            id="board-import-recoveries-heading"
-            className="font-medium text-text-primary"
-          >
-            Versiones anteriores disponibles
-          </h3>
-          {isLoadingRecoveries ? (
-            <p aria-live="polite">Consultando versiones…</p>
-          ) : null}
-          {!isLoadingRecoveries && recoveries.length === 0 ? (
-            <p>No hay versiones anteriores dentro del plazo de recuperación.</p>
-          ) : null}
-          {recoveries.map((item) => (
-            <div
-              key={item.generation_id}
-              className="flex flex-col gap-2 rounded-md border border-border bg-surface-raised p-3 sm:flex-row sm:items-center sm:justify-between"
-            >
-              <div>
-                <p className="text-text-primary">
-                  Guardada {formatDate(item.retained_at)} · disponible hasta{" "}
-                  {formatDate(item.expires_at)}
-                </p>
-                <p>{describeGeneration(item.content)}</p>
-              </div>
-              <Button
-                onClick={() => void prepareRestore(item)}
-                disabled={busy}
-                aria-busy={restoringGenerationId === item.generation_id}
-              >
-                {restoringGenerationId === item.generation_id
-                  ? "Preparando…"
-                  : "Revisar recuperación"}
-              </Button>
-            </div>
-          ))}
-          {restorePreview?.restore ? (
-            <div className="space-y-2 rounded-md border border-border bg-surface-overlay p-3">
-              <p>
-                Se restaurará la versión anterior:{" "}
-                {describeGeneration(restorePreview.restore)}.
-              </p>
-              <p>
-                El contenido actual quedará disponible siete días, con sus
-                adjuntos contados en capacidad.
-              </p>
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  variant="primary"
-                  onClick={() => void confirmRestore()}
-                  disabled={busy || !restorePreview.capacity.can_replace}
-                  aria-busy={isConfirmingRestore}
-                >
-                  {isConfirmingRestore
-                    ? "Recuperando…"
-                    : "Confirmar recuperación"}
-                </Button>
-                <Button onClick={() => setRestorePreview(null)} disabled={busy}>
-                  Cancelar recuperación
-                </Button>
-              </div>
-              {!restorePreview.capacity.can_replace ? (
-                <p role="alert" className="text-priority-urgent">
-                  No se puede conservar la versión actual con la capacidad
-                  disponible.
                 </p>
               ) : null}
             </div>

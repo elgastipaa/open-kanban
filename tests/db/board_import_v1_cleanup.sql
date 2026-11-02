@@ -73,6 +73,46 @@ BEGIN
   END IF;
 END;
 $$;
+
+-- Keep receipts inside the seven-day replay window; delete terminal receipts after it.
+UPDATE public.board_import_operations
+SET created_at = clock_timestamp() - interval '170 hours',
+    expires_at = clock_timestamp() - interval '169 hours',
+    confirmed_at = clock_timestamp() - interval '167 hours'
+WHERE operation_id = 'a4360000-0000-4000-8000-000000000003';
+UPDATE public.board_import_operations
+SET created_at = clock_timestamp() - interval '170 hours',
+    expires_at = clock_timestamp() - interval '169 hours'
+WHERE operation_id = 'a4360000-0000-4000-8000-000000000009';
+BEGIN;
+SET LOCAL ROLE service_role;
+SELECT public.cleanup_expired_board_import_operations_p(50);
+COMMIT;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM public.board_import_operations
+      WHERE operation_id = 'a4360000-0000-4000-8000-000000000003')
+    OR EXISTS (SELECT 1 FROM public.board_import_operations
+      WHERE operation_id = 'a4360000-0000-4000-8000-000000000009') THEN
+    RAISE EXCEPTION 'Receipt cleanup did not preserve the live window and remove expired rows';
+  END IF;
+END;
+$$;
+UPDATE public.board_import_operations
+SET confirmed_at = clock_timestamp() - interval '169 hours'
+WHERE operation_id = 'a4360000-0000-4000-8000-000000000003';
+BEGIN;
+SET LOCAL ROLE service_role;
+SELECT public.cleanup_expired_board_import_operations_p(50);
+COMMIT;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM public.board_import_operations
+      WHERE operation_id = 'a4360000-0000-4000-8000-000000000003') THEN
+    RAISE EXCEPTION 'Confirmed import receipt remained after its seven-day retention';
+  END IF;
+END;
+$$;
 BEGIN;
 SET LOCAL ROLE service_role;
 SELECT public.confirm_task_attachment_purge_p(

@@ -1,4 +1,4 @@
-# Checkpoint del loop — 01/11/2026
+# Checkpoint del loop — 02/11/2026
 
 Run: thread01a16ffa-f041-7380-98e4-33b348d12d08. Alcance spec#2, hijos#3–#53 y todas P/E. LP-0.2 aceptada por el comando explícito del usuario. Autorizados implementación/pruebas aisladas, ramas codex, commits/push de esas ramas, PR acumulada en borrador y seguimiento/cierre con evidencia. Main/producción y corte#53 excluidos sin aprobación específica.
 
@@ -464,3 +464,19 @@ La lectura de GitHub muestra #31 «Heredar etiquetas activas en repeticiones» O
 ## Frontera siguiente LP-0.2 — #32 — 2026-11-02
 
 La reconciliación del tracker muestra #32 «Duplicar una tarea puntual» OPEN/`ready-for-agent`, sin asignación ni comentarios; conserva `Blocked by #15`, `#27` y `#30`. Los tres siguen OPEN/`ready-for-human` con código/evidencia integrados, pero aceptación humana pendiente. La excepción de secuencia del usuario autoriza avanzar con datos y actores sintéticos en entornos locales, sin retirar aristas ni cerrar #32 con recorridos humanos pendientes. El ticket cubre preview, copia pendiente en mismo tablero, campos permitidos, etiquetas activas, fuentes completadas/históricas, cancelación, contenido cambiante y replay seguro. La siguiente rama parte del HEAD resultante de este checkpoint documental.
+
+## Entrega integrada y publicada de #32 — 2026-11-02
+
+«Duplicar una tarea puntual» quedó integrado por fast-forward desde codex/issue-32 en codex/openkanban-1-0. Base fija 7c33b69621fa5a952e09b47f0eaacb0a2853c54b; commits 7d8b421fd59ba59bdb259f48330f0dbd0ff27ee3 y 4dc7815f133abdcf93f4a17595053818aa75f0bd. HEAD final revisado/integrado 4dc7815f133abdcf93f4a17595053818aa75f0bd, árbol bd5bd13f6d66af95a3c8f09a112c5a017f0d7144. Evidencia reproducible en docs/validation/issue-32.md; comentario en issue #32.
+
+- Migración 057 agrega preview/copia atómicos para tarea vigente autorizada; helper neutral task_copy_preview_internal_p comparte lógica entre nuevas copias e historial. Wrapper histórico privado conserva el contrato anterior. Helpers internos sin EXECUTE para clientes.
+- La copia crea una identidad nueva pendiente en el mismo tablero/columna elegida; título/descripción/prioridad, pasos sin marcar y etiquetas activas del elemento origen. Para ocurrencias usa sus etiquetas propias, no la plantilla. No copia asignación, fecha, serie, archivos, conversación ni actividad. Fuentes completadas/históricas autorizadas no cambian; papelera y cumpleaños no permiten copia.
+- Hash/preview cubre contenido copiable y etiquetas activas; los cambios invalidan y exigen revisión conservando título/destino, comentarios nuevos no invalidan y revocación/permisos se revalidan bajo lock. Receipt idempotente conserva el mismo resultado ante retry; prueba de dos sesiones confirma una sola tarea.
+- TDD, PostgreSQL descartable y actores sintéticos. Pasan DB focal #32, regresiones #27/#30 y suite completa con migraciones 001–057; 214/214 unit, Next typegen/typecheck/build, Biome focal/global, bash -n y diff-check. Ver matriz por criterio en docs/validation/issue-32.md.
+- Reviews finales sobre el mismo HEAD: Spec cero hallazgos; Standards cero infracciones ni smells accionables. El smell de alcance del nombre histórico se resolvió con helper neutral y wrapper compatible.
+- #32 permanece OPEN/ready-for-human, asignado a elgastipaa: AC1–4 y AC6 marcados; AC5 queda pendiente por Auth/browser, teclado/foco/lector, revisión visual/responsive y caída real de red. Blocked by #15/#27/#30 sigue intacto; no se aceptó QA humana. No hubo OAuth real, datos reales, SQL remoto, producción ni deploy.
+- Ramas codex/issue-32 y codex/openkanban-1-0, local/remoto, coinciden en 4dc7815. PR #54 OPEN/draft, base main, título #3–#32 e incluye evidencia #32. main conserva 46c94139bac67aaca1d491b29afc3bc999fc288f. Se preservan docs/VALIDATION.md ajeno y .scratch/ local fuera del commit.
+
+## Frontera siguiente LP-0.2 — #33 — 2026-11-02
+
+La reconciliación del tracker muestra #33 «Buscar tareas, comentarios y tableros con contexto» OPEN/ready-for-agent, sin asignación ni comentarios. Conserva Blocked by #13, #16, #27 y #30; los cuatro siguen OPEN/ready-for-human con implementación/evidencia integradas pero aceptación humana pendiente. La excepción LP-0.2 autoriza avanzar con actores y datos sintéticos en entorno local aislado, sin retirar aristas ni cerrar #33 por recorridos humanos pendientes. El ticket cubre búsqueda unificada de títulos/descripciones, comentarios actuales y tableros; sugerencias de etiquetas; relevancia, extractos/contexto, lista deduplicada, filtros heredados, historial de repeticiones, permisos antes de ranking/conteos, normalización y conservación del contexto de búsqueda. El siguiente worktree se crea desde este checkpoint documental en codex/openkanban-1-0.

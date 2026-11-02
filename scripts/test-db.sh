@@ -252,6 +252,14 @@ if [[ "${TEST_DB_FOCUS:-}" == 'issue26' ]]; then
   printf 'Issue #26 database regression tests passed (disposable PostgreSQL).\n'
   exit 0
 fi
+if [[ "${TEST_DB_FOCUS:-}" == 'issue27' ]]; then
+  "${psql[@]}" -f "$repo_dir/tests/db/repetition_series.sql"
+  "${psql[@]}" -f "$repo_dir/tests/db/repetition_series_history.sql"
+    "${psql[@]}" -f "$repo_dir/tests/db/repetition_series_lifecycle.sql"
+    "${psql[@]}" -f "$repo_dir/tests/db/repetition_series_copy.sql"
+  printf 'Issue #27 database regression tests passed (disposable PostgreSQL).\n'
+  exit 0
+fi
 "${psql[@]}" -f "$repo_dir/tests/db/closed_access.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/authentication.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/realtime_epoch.sql"

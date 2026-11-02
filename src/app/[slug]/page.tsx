@@ -92,8 +92,18 @@ export default async function BoardPage({
 
   if (!boardData) notFound();
 
+  const requestedTaskIsInBoard = Boolean(
+    requestedTaskId &&
+      boardData.columns.some((column) =>
+        column.tasks.some((task) => task.id === requestedTaskId),
+      ),
+  );
   const initialTaskId =
-    fromMyTasks || requestedCommentId ? requestedTaskId : null;
+    fromMyTasks || requestedCommentId !== null
+      ? requestedTaskId
+      : requestedTaskIsInBoard
+        ? requestedTaskId
+        : null;
   if (
     (fromMyTasks || requestedCommentId !== null) &&
     initialTaskId &&

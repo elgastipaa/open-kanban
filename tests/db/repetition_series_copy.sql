@@ -148,10 +148,10 @@ BEGIN
     '27000000-0000-4000-8000-000000000060', refs.board_id,
     refs.target_column_id, 'Tarea pendiente ajena al historial', NULL, 'medium'
   );
-  IF public.preview_historical_task_copy_p(
+  IF public.preview_task_copy_p(
     refs.board_slug, (v_unfinished->'task'->>'id')::uuid
-  )->>'status' IS DISTINCT FROM 'unavailable' THEN
-    RAISE EXCEPTION 'Historical copy preview exposed a pending non-historical task';
+  )->>'status' IS DISTINCT FROM 'available' THEN
+    RAISE EXCEPTION 'A current pending task must be eligible for a punctual copy';
   END IF;
 
   -- A source edit after preview must return a fresh preview without writing a copy.

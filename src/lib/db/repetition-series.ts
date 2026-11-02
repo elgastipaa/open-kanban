@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { RepetitionPattern } from "@/lib/db/daily-repetition";
-import type { Priority, Task } from "@/lib/types";
+import type { Priority } from "@/lib/types";
 
 export interface RepetitionSeriesListItem {
   id: string;
@@ -106,34 +106,6 @@ export interface RepetitionOccurrenceDetail {
       latest_comment_id?: string;
     };
   };
-}
-
-export interface HistoricalTaskCopyPreview {
-  status: "available" | "unavailable" | "source_changed";
-  board_id?: string;
-  source_task_id?: string;
-  source_column_id?: string;
-  target_column_id?: string;
-  title?: string;
-  description?: string | null;
-  priority?: Priority;
-  steps?: Array<{ text: string; position: number; is_completed: false }>;
-  step_count?: number;
-  source_hash?: string;
-}
-
-export interface HistoricalTaskCopyResult {
-  status: "confirmed" | "source_changed" | "unavailable" | "expired_unknown";
-  operation_id?: string;
-  task_id?: string;
-  task?: Task;
-  title?: string;
-  target_column_id?: string;
-  source_task_id?: string;
-  description?: string | null;
-  priority?: Priority;
-  steps?: Array<{ text: string; position: number; is_completed: false }>;
-  source_hash?: string;
 }
 
 export interface StopRepetitionResult {
@@ -283,39 +255,6 @@ export function getRepetitionHistoryOccurrence(
     "get_repetition_history_occurrence_p",
     { p_series_id: seriesId, p_occurrence_id: occurrenceId },
   );
-}
-
-export function previewHistoricalTaskCopy(
-  supabase: SupabaseClient,
-  slug: string,
-  taskId: string,
-) {
-  return callRpc<HistoricalTaskCopyPreview>(
-    supabase,
-    "preview_historical_task_copy_p",
-    { p_slug: slug, p_task_id: taskId },
-  );
-}
-
-export function copyHistoricalTask(
-  supabase: SupabaseClient,
-  command: {
-    operationId: string;
-    slug: string;
-    sourceTaskId: string;
-    targetColumnId: string;
-    title: string;
-    expectedSourceHash: string;
-  },
-) {
-  return callRpc<HistoricalTaskCopyResult>(supabase, "copy_historical_task_p", {
-    p_operation_id: command.operationId,
-    p_slug: command.slug,
-    p_source_task_id: command.sourceTaskId,
-    p_target_column_id: command.targetColumnId,
-    p_title: command.title,
-    p_expected_source_hash: command.expectedSourceHash,
-  });
 }
 
 export function stopRepetitionSeries(

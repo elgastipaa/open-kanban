@@ -301,6 +301,13 @@ if [[ "${TEST_DB_FOCUS:-}" == 'issue31' ]]; then
   printf 'Issue #31 database regression tests passed (disposable PostgreSQL).\n'
   exit 0
 fi
+if [[ "${TEST_DB_FOCUS:-}" == 'issue32' ]]; then
+  "${psql[@]}" -f "$repo_dir/tests/db/task_copy.sql"
+  bash "$repo_dir/scripts/test-db-issue-32-race.sh" \
+    "$pg_bin/psql" "$test_dir" 55439 "$test_dir/issue32-copy-race"
+  printf 'Issue #32 database regression tests passed (disposable PostgreSQL).\n'
+  exit 0
+fi
 "${psql[@]}" -f "$repo_dir/tests/db/closed_access.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/authentication.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/realtime_epoch.sql"
@@ -3122,4 +3129,7 @@ COMMIT;
 SQL
 echo 'PASS: concurrent admins cannot use a stale administrator authority.'
 "${psql[@]}" -f "$repo_dir/tests/db/labels.sql"
+"${psql[@]}" -f "$repo_dir/tests/db/task_copy.sql"
+bash "$repo_dir/scripts/test-db-issue-32-race.sh" \
+  "$pg_bin/psql" "$test_dir" 55439 "$test_dir/issue32-copy-race"
 printf 'Database regression tests passed (disposable PostgreSQL).\n'

@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { BirthdayPanel } from "@/components/birthdays/birthday-panel";
+import { TaskCopyAction } from "@/components/board/task-copy-action";
 import { CopyOccurrenceLinkAction } from "@/components/series/copy-occurrence-link-action";
 import { DeleteSeriesButton } from "@/components/series/delete-series-button";
-import { HistoricalTaskCopyAction } from "@/components/series/historical-task-copy-action";
 import { StopSeriesButton } from "@/components/series/stop-series-button";
 import { Logo } from "@/components/ui/logo";
 import { resolveApplicationAccess } from "@/lib/auth";
@@ -13,11 +13,11 @@ import {
   getRepetitionHistoryOccurrence,
   getRepetitionHistoryPage,
   listRepetitionSeries,
-  previewHistoricalTaskCopy,
   type RepetitionHistoryOccurrence,
   type RepetitionOccurrenceDetail,
   type RepetitionSeriesListItem,
 } from "@/lib/db/repetition-series";
+import { previewTaskCopy } from "@/lib/db/task-copy";
 import { repetitionPatternSummary } from "@/lib/repetition-pattern";
 import {
   buildRepetitionOccurrenceHref,
@@ -288,11 +288,7 @@ export default async function SeriesPage({ searchParams }: SeriesPageProps) {
         id,
         title,
       }));
-      copyPreview = await previewHistoricalTaskCopy(
-        supabase,
-        boardSlug,
-        detailTask.id,
-      );
+      copyPreview = await previewTaskCopy(supabase, boardSlug, detailTask.id);
     } catch {
       columns = [];
       copyPreview = null;
@@ -764,12 +760,14 @@ export default async function SeriesPage({ searchParams }: SeriesPageProps) {
                               </p>
                             )}
                           </section>
-                          {copyPreview ? (
+                          {copyPreview?.status === "available" && detailTask ? (
                             <div className="mt-4 border-border border-t pt-4">
-                              <HistoricalTaskCopyAction
+                              <TaskCopyAction
                                 slug={selectedHistorySeries.board_slug}
-                                preview={copyPreview}
+                                sourceTaskId={detailTask.id}
                                 columns={columns}
+                                triggerLabel="Copiar como tarea puntual"
+                                triggerSize="sm"
                               />
                             </div>
                           ) : null}

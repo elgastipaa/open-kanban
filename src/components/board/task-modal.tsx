@@ -11,6 +11,7 @@ import {
 } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { TaskConversation } from "@/components/board/task-conversation";
+import { TaskCopyAction } from "@/components/board/task-copy-action";
 import { TaskDueDate } from "@/components/board/task-due-date";
 import { TaskRepetition } from "@/components/board/task-repetition";
 import { BoardLabelPicker } from "@/components/labels/board-label-picker";
@@ -1986,6 +1987,41 @@ export function TaskModal({
                 </div>
               </div>
             )}
+          </section>
+
+          <section className="flex flex-col justify-between gap-3 border-border border-t pt-3 sm:flex-row sm:items-center">
+            <div>
+              <p className="font-medium text-sm text-text-primary">
+                Duplicar tarea puntual
+              </p>
+              <p className="mt-1 text-text-muted text-xs">
+                La copia usa el contenido guardado y conserva este origen.
+              </p>
+              {(dirty || labelsDirty) && (
+                <output
+                  className="mt-1 text-text-secondary text-xs"
+                  aria-live="polite"
+                >
+                  Guarda o descarta tus cambios antes de preparar la copia.
+                </output>
+              )}
+            </div>
+            <TaskCopyAction
+              slug={slug}
+              sourceTaskId={baseTask.id}
+              columns={columns.map(({ id, title }) => ({ id, title }))}
+              disabled={
+                isWorking ||
+                !isOnline ||
+                isSessionStale ||
+                dirty ||
+                labelsDirty ||
+                hasConflict ||
+                reconciliationRequired
+              }
+              triggerLabel="Duplicar"
+              triggerSize="sm"
+            />
           </section>
 
           <section className="flex items-center justify-between gap-3 border-border border-t pt-3">

@@ -573,6 +573,178 @@ END;
 $$;
 COMMIT;
 
+-- A confirmed Storage 404 moves an active ledger row out of the user-visible
+-- list, but keeps quota charged until the cleanup worker independently
+-- confirms absence.
+CREATE TEMP TABLE issue40_missing_attachment_fixture (
+  attachment_id uuid NOT NULL
+);
+GRANT SELECT, INSERT ON issue40_missing_attachment_fixture TO authenticated, service_role;
+
+BEGIN;
+SET LOCAL ROLE service_role;
+DO $$
+DECLARE
+  v_fixture issue40_attachment_fixture%ROWTYPE;
+  v_reservation jsonb;
+  v_publication jsonb;
+  v_denied jsonb;
+  v_missing jsonb;
+  v_missing_retry jsonb;
+  v_claimed record;
+  v_not_absent jsonb;
+  v_final_claim record;
+  v_purged jsonb;
+  v_attachment_id uuid;
+BEGIN
+  SELECT * INTO STRICT v_fixture FROM issue40_attachment_fixture;
+  v_reservation := public.reserve_task_attachment_p(
+    '74000000-0000-4000-8000-000000000002',
+    '77000000-0000-4000-8000-000000000013',
+    v_fixture.board_slug,
+    v_fixture.task_id,
+    'faltante.md',
+    7,
+    repeat('b', 64)
+  );
+  IF v_reservation->>'status' IS DISTINCT FROM 'reserved' THEN
+    RAISE EXCEPTION 'The missing-object tracer could not reserve a synthetic fixture: %', v_reservation;
+  END IF;
+  v_attachment_id := (v_reservation->>'attachment_id')::uuid;
+  v_publication := public.publish_task_attachment_p(
+    '74000000-0000-4000-8000-000000000002',
+    v_fixture.board_slug,
+    v_fixture.task_id,
+    v_attachment_id,
+    '77000000-0000-4000-8000-000000000013',
+    7,
+    repeat('b', 64)
+  );
+  IF v_publication->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'The synthetic active attachment did not publish: %', v_publication;
+  END IF;
+
+  v_denied := public.mark_task_attachment_missing_p(
+    '74000000-0000-4000-8000-000000000003',
+    v_fixture.board_slug,
+    v_fixture.task_id,
+    v_attachment_id
+  );
+  IF v_denied->>'status' IS DISTINCT FROM 'unavailable' THEN
+    RAISE EXCEPTION 'An outsider changed missing-object state: %', v_denied;
+  END IF;
+  v_missing := public.mark_task_attachment_missing_p(
+    '74000000-0000-4000-8000-000000000002',
+    v_fixture.board_slug,
+    v_fixture.task_id,
+    v_attachment_id
+  );
+  IF v_missing->>'status' IS DISTINCT FROM 'missing' THEN
+    RAISE EXCEPTION 'An authorized confirmed missing object was not recorded: %', v_missing;
+  END IF;
+  v_missing_retry := public.mark_task_attachment_missing_p(
+    '74000000-0000-4000-8000-000000000002',
+    v_fixture.board_slug,
+    v_fixture.task_id,
+    v_attachment_id
+  );
+  IF v_missing_retry->>'status' IS DISTINCT FROM 'missing' THEN
+    RAISE EXCEPTION 'Retrying missing-object diagnosis was not idempotent: %', v_missing_retry;
+  END IF;
+  INSERT INTO issue40_missing_attachment_fixture(attachment_id)
+  VALUES (v_attachment_id);
+
+  SELECT * INTO v_claimed
+  FROM public.claim_expired_task_attachment_cleanup_p(
+    '78000000-0000-4000-8000-000000000003', 1
+  );
+  IF v_claimed.attachment_id IS DISTINCT FROM v_attachment_id
+    OR v_claimed.prior_state IS DISTINCT FROM 'missing' THEN
+    RAISE EXCEPTION 'A missing object was not queued for confirmed cleanup: %', v_claimed;
+  END IF;
+  v_not_absent := public.confirm_task_attachment_purge_p(
+    v_attachment_id,
+    '78000000-0000-4000-8000-000000000003',
+    false
+  );
+  IF v_not_absent->>'status' IS DISTINCT FROM 'cleanup_pending' THEN
+    RAISE EXCEPTION 'Unconfirmed Storage absence released a missing object reservation: %', v_not_absent;
+  END IF;
+END;
+$$;
+COMMIT;
+
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '74000000-0000-4000-8000-000000000002', true);
+DO $$
+DECLARE
+  v_fixture issue40_attachment_fixture%ROWTYPE;
+  v_attachment_id uuid;
+  v_list jsonb;
+BEGIN
+  SELECT * INTO STRICT v_fixture FROM issue40_attachment_fixture;
+  SELECT missing.attachment_id INTO STRICT v_attachment_id
+  FROM issue40_missing_attachment_fixture AS missing;
+  v_list := public.list_task_attachments_p(v_fixture.board_slug, v_fixture.task_id);
+  IF v_list->>'status' IS DISTINCT FROM 'ok'
+    OR EXISTS (
+      SELECT 1 FROM jsonb_array_elements(v_list->'attachments') AS item
+      WHERE item->>'id' = v_attachment_id::text
+    ) THEN
+    RAISE EXCEPTION 'A missing attachment remained visible after its safe diagnosis: %', v_list;
+  END IF;
+END;
+$$;
+COMMIT;
+
+BEGIN;
+SET LOCAL ROLE service_role;
+DO $$
+DECLARE
+  v_pending_bytes bigint;
+  v_summary jsonb;
+BEGIN
+  v_summary := public.admin_task_attachment_storage_summary_p(
+    '74000000-0000-4000-8000-000000000004'
+  );
+  v_pending_bytes := (v_summary->>'pending_bytes')::bigint;
+  IF v_pending_bytes <> 7 THEN
+    RAISE EXCEPTION 'Missing-object diagnosis released quota before Storage confirmation: %', v_pending_bytes;
+  END IF;
+END;
+$$;
+COMMIT;
+
+BEGIN;
+SET LOCAL ROLE service_role;
+DO $$
+DECLARE
+  v_attachment_id uuid;
+  v_claimed record;
+  v_confirmed jsonb;
+BEGIN
+  SELECT missing.attachment_id INTO STRICT v_attachment_id
+  FROM issue40_missing_attachment_fixture AS missing;
+  SELECT * INTO v_claimed
+  FROM public.claim_expired_task_attachment_cleanup_p(
+    '78000000-0000-4000-8000-000000000004', 1
+  );
+  IF v_claimed.attachment_id IS DISTINCT FROM v_attachment_id THEN
+    RAISE EXCEPTION 'A failed missing-object cleanup could not be retried: %', v_claimed;
+  END IF;
+  v_confirmed := public.confirm_task_attachment_purge_p(
+    v_attachment_id,
+    '78000000-0000-4000-8000-000000000004',
+    true
+  );
+  IF v_confirmed->>'status' IS DISTINCT FROM 'purged' THEN
+    RAISE EXCEPTION 'Confirmed absence did not finalize missing-object cleanup: %', v_confirmed;
+  END IF;
+END;
+$$;
+COMMIT;
+
 DO $$
 DECLARE
   v_active_bytes bigint;

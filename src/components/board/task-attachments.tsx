@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { readTaskAttachmentDownloadResponse } from "@/lib/task-attachment-download";
 import { generateUUID } from "@/lib/utils";
 
 interface TaskAttachment {
@@ -127,6 +128,9 @@ export function TaskAttachments({
     null,
   );
   const [isUploading, setIsUploading] = useState(false);
+  const [downloadingAttachmentId, setDownloadingAttachmentId] = useState<
+    string | null
+  >(null);
   const [pendingDelete, setPendingDelete] =
     useState<PendingAttachmentAction | null>(null);
   const [pendingRestore, setPendingRestore] =
@@ -267,6 +271,53 @@ export function TaskAttachments({
     setPendingUpload(intent);
     setError("");
     void upload(intent);
+  }
+
+  async function downloadAttachment(attachment: TaskAttachment) {
+    if (!canInteract || downloadingAttachmentId !== null) return;
+    setDownloadingAttachmentId(attachment.id);
+    setError("");
+    setNotice("");
+    try {
+      const response = await fetch(`${collectionUrl}/${attachment.id}`, {
+        cache: "no-store",
+      });
+      const result = await readTaskAttachmentDownloadResponse(response);
+      if (result.status === "missing") {
+        setAttachments((current) =>
+          current.filter((item) => item.id !== attachment.id),
+        );
+        setCounts((current) => ({
+          ...current,
+          active: Math.max(0, current.active - 1),
+        }));
+        setNotice(result.message);
+        await load().catch(() => {
+          setError("No se pudo actualizar el listado de archivos.");
+        });
+        return;
+      }
+      if (result.status === "failed") {
+        setError(result.message);
+        return;
+      }
+
+      const objectUrl = URL.createObjectURL(result.blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = attachment.file_name;
+      link.referrerPolicy = "no-referrer";
+      link.hidden = true;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+      setNotice("Descarga iniciada.");
+    } catch {
+      setError("No se pudo descargar el archivo.");
+    } finally {
+      setDownloadingAttachmentId(null);
+    }
   }
 
   async function deleteAttachment() {
@@ -425,13 +476,18 @@ export function TaskAttachments({
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 {attachment.state === "active" ? (
-                  <a
-                    href={`${collectionUrl}/${attachment.id}`}
-                    referrerPolicy="no-referrer"
-                    className="inline-flex min-h-10 items-center rounded-md border border-border px-3 font-medium text-sm text-text-secondary underline-offset-4 hover:bg-surface-hover hover:text-text-primary hover:underline focus-visible:outline-2 focus-visible:outline-focus-ring focus-visible:outline-offset-2"
+                  <Button
+                    size="sm"
+                    className="min-h-10 border border-border px-3 text-sm"
+                    onClick={() => void downloadAttachment(attachment)}
+                    disabled={!canInteract || downloadingAttachmentId !== null}
+                    aria-busy={downloadingAttachmentId === attachment.id}
+                    aria-label={`Descargar ${attachment.file_name}`}
                   >
-                    Descargar
-                  </a>
+                    {downloadingAttachmentId === attachment.id
+                      ? "Descargando…"
+                      : "Descargar"}
+                  </Button>
                 ) : null}
                 {attachment.can_restore ? (
                   <Button

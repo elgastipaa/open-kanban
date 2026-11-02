@@ -4,6 +4,10 @@ import {
   TASK_ATTACHMENT_BUCKET,
 } from "@/lib/supabase/task-attachment-storage";
 import {
+  isConfirmedMissingTaskAttachmentObject,
+  TASK_ATTACHMENT_MISSING_MESSAGE,
+} from "@/lib/task-attachment-download";
+import {
   attachmentContentDisposition,
   readTaskAttachmentBody,
   readTaskAttachmentOperationId,
@@ -71,6 +75,25 @@ export async function GET(
     const { data: storedObject, error: storageError } = await service.storage
       .from(TASK_ATTACHMENT_BUCKET)
       .download(metadata.object_key);
+    if (isConfirmedMissingTaskAttachmentObject(storageError)) {
+      const { data: missingData, error: missingError } = await service.rpc(
+        "mark_task_attachment_missing_p",
+        {
+          p_actor_id: session.actorId,
+          p_slug: slug,
+          p_task_id: taskId,
+          p_attachment_id: attachmentId,
+        },
+      );
+      const missing = missingData as { status?: unknown } | null;
+      if (missingError || missing?.status !== "missing") {
+        return json({ status: "unavailable" }, 404);
+      }
+      return json(
+        { status: "missing", message: TASK_ATTACHMENT_MISSING_MESSAGE },
+        410,
+      );
+    }
     if (storageError || !storedObject)
       return json({ status: "unavailable" }, 404);
     const body = await readTaskAttachmentBody(storedObject.stream());

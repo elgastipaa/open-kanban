@@ -54,6 +54,7 @@ interface ColumnProps {
     sourceIndex: number,
     destinationIndex: number,
   ) => unknown;
+  isReorderingDisabled?: boolean;
 }
 
 export function Column({
@@ -73,6 +74,7 @@ export function Column({
   onDeleteTask,
   onCompleteTask,
   onMoveTask,
+  isReorderingDisabled = false,
 }: ColumnProps) {
   const [showCompleted, setShowCompleted] = useState(true);
   const [completedExpanded, setCompletedExpanded] = useState(true);
@@ -151,7 +153,7 @@ export function Column({
         <Droppable
           droppableId={column.id}
           type="task"
-          isDropDisabled={column.is_collapsed}
+          isDropDisabled={column.is_collapsed || isReorderingDisabled}
         >
           {(provided, snapshot) => (
             <div
@@ -161,6 +163,11 @@ export function Column({
                 snapshot.isDraggingOver ? "bg-accent-muted" : ""
               }`}
             >
+              {isReorderingDisabled && column.tasks.length === 0 ? (
+                <output className="rounded-md px-2 py-3 text-center text-text-muted text-xs">
+                  No hay tareas con estas etiquetas en esta columna.
+                </output>
+              ) : null}
               {pending.map((task, index) => {
                 const moveUp = pendingTaskMoveIndices(
                   column.tasks,
@@ -188,6 +195,7 @@ export function Column({
                     onComplete={onCompleteTask}
                     isFirst={index === 0}
                     isLast={index === pending.length - 1}
+                    isReorderingDisabled={isReorderingDisabled}
                     onMoveUp={() =>
                       moveUp &&
                       onMoveTask(
@@ -262,6 +270,7 @@ export function Column({
                           onComplete={onCompleteTask}
                           isFirst
                           isLast
+                          isReorderingDisabled
                           onMoveUp={() => undefined}
                           onMoveDown={() => undefined}
                         />

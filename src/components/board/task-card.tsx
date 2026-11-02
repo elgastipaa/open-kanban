@@ -11,6 +11,7 @@ import {
 import type { MouseEvent } from "react";
 import { createPortal } from "react-dom";
 import { TaskDueDate } from "@/components/board/task-due-date";
+import { BoardLabelBadge } from "@/components/labels/board-label-badge";
 import { getTaskChecklistProgress } from "@/lib/task-checklist-state";
 import type { Priority, Task } from "@/lib/types";
 
@@ -27,6 +28,7 @@ interface TaskCardProps {
   isLast: boolean;
   onMoveUp: () => void;
   onMoveDown: () => void;
+  isReorderingDisabled?: boolean;
 }
 
 const priorityConfig: Record<Priority, { label: string; className: string }> = {
@@ -55,6 +57,7 @@ export function TaskCard({
   isLast,
   onMoveUp,
   onMoveDown,
+  isReorderingDisabled = false,
 }: TaskCardProps) {
   const priority = priorityConfig[task.priority];
   const checklistProgress = getTaskChecklistProgress(task.steps);
@@ -64,7 +67,7 @@ export function TaskCard({
       draggableId={task.id}
       index={index}
       key={task.id}
-      isDragDisabled={isCompleted}
+      isDragDisabled={isCompleted || isReorderingDisabled}
     >
       {(provided, snapshot) => {
         const child = (
@@ -82,7 +85,7 @@ export function TaskCard({
             } ${isCompleted ? "opacity-70" : ""}`}
           >
             {/* Drag handle - distinctly separated on the left */}
-            {isCompleted ? (
+            {isCompleted || isReorderingDisabled ? (
               <span className="flex w-10 shrink-0 items-center justify-center border-border border-r bg-surface-base/40 sm:w-8" />
             ) : (
               <button
@@ -125,6 +128,13 @@ export function TaskCard({
                       {task.description}
                     </p>
                   )}
+                  {task.labels && task.labels.length > 0 ? (
+                    <span className="mt-1.5 flex flex-wrap gap-1">
+                      {task.labels.map((label) => (
+                        <BoardLabelBadge key={label.id} label={label} />
+                      ))}
+                    </span>
+                  ) : null}
                   {task.assignee_id ? (
                     <p className="mt-1 truncate text-text-muted text-xs">
                       Responsable: {assigneeName ?? "Responsable no disponible"}
@@ -179,7 +189,7 @@ export function TaskCard({
                   Completar
                 </button>
               )}
-              {isCompleted ? null : (
+              {isCompleted || isReorderingDisabled ? null : (
                 <>
                   <button
                     type="button"

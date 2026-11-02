@@ -6,6 +6,27 @@ export type TShortcut = {
 };
 
 export type Priority = "low" | "medium" | "high" | "urgent";
+export type BoardLabelColor =
+  | "red"
+  | "orange"
+  | "yellow"
+  | "green"
+  | "teal"
+  | "blue"
+  | "purple"
+  | "pink"
+  | "gray";
+
+export interface BoardLabel {
+  id: string;
+  board_id: string;
+  name: string;
+  color: BoardLabelColor;
+  created_at?: string;
+  updated_at?: string;
+  version: number;
+}
+
 export type MyTasksOrder = "due" | "created";
 export type TaskEditableField = "title" | "description" | "priority" | "due_on";
 export type TaskFieldVersions = Record<TaskEditableField, number>;
@@ -70,6 +91,7 @@ export interface Task {
   steps: TaskChecklistStep[];
   steps_order_version: number;
   checklist_version: number;
+  labels?: BoardLabel[];
 }
 
 export interface TaskCommentMention {

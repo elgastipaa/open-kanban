@@ -22,6 +22,8 @@ import { KeyboardShortcuts } from "@/components/board/keyboard-shortcuts";
 import { MobileBoard } from "@/components/board/mobile-board";
 import { TaskModal } from "@/components/board/task-modal";
 import { TaskRecoveryDialog } from "@/components/board/task-recovery-dialog";
+import { BoardLabelFilter } from "@/components/labels/board-label-filter";
+import { BoardLabelsDialog } from "@/components/labels/board-labels-dialog";
 import { useThemePreference } from "@/components/theme/theme-preference-provider";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useBoard } from "@/hooks/use-board";
@@ -34,6 +36,11 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { resolveApplicationAccess } from "@/lib/auth";
 import { hasBoardAuthorizationEpochChanged } from "@/lib/board-auth-epoch";
 import { columnDeletionSuccessMessage } from "@/lib/column-deletion-flow";
+import {
+  type BoardLabelMutationResult,
+  listBoardLabels,
+  setTaskLabels,
+} from "@/lib/db/board-labels";
 import {
   BoardRecoveryError,
   previewBoardTimeZone,
@@ -80,6 +87,7 @@ import {
 import type { TaskEditDraft } from "@/lib/task-edit-workflow";
 import type {
   AssignableBoardMember,
+  BoardLabel,
   BoardRealtimeContext,
   Board as BoardType,
   ColumnWithTasks,
@@ -348,6 +356,26 @@ function BoardWorkspace({
   const router = useRouter();
   const { isMobile, isReady } = useDevice();
   const [openColumnFormSignal, setOpenColumnFormSignal] = useState(0);
+  const labelSupabase = useMemo(() => createClient(), []);
+  const [boardLabels, setBoardLabels] = useState<BoardLabel[]>([]);
+  const [selectedLabelIds, setSelectedLabelIds] = useState<string[]>([]);
+  const [isLabelsDialogOpen, setIsLabelsDialogOpen] = useState(false);
+  const [birthdayLabelRefreshSignal, setBirthdayLabelRefreshSignal] =
+    useState(0);
+  const refreshBoardLabels = useCallback(async () => {
+    const labels = await listBoardLabels(labelSupabase, slug);
+    setBoardLabels(labels);
+    const activeIds = new Set(labels.map((label) => label.id));
+    setSelectedLabelIds((current) => current.filter((id) => activeIds.has(id)));
+  }, [labelSupabase, slug]);
+  const handleBoardLabelsChange = useCallback((labels: BoardLabel[]) => {
+    setBoardLabels(labels);
+    const activeIds = new Set(labels.map((label) => label.id));
+    setSelectedLabelIds((current) => current.filter((id) => activeIds.has(id)));
+  }, []);
+  useEffect(() => {
+    void refreshBoardLabels().catch(() => undefined);
+  }, [refreshBoardLabels]);
   const taskCommentOperations = useMemo(
     () => new TaskCommentCreateOperationStore(actorId, slug),
     [actorId, slug],
@@ -513,6 +541,43 @@ function BoardWorkspace({
     onMutation: onLocalMutation,
     onAccessLost,
   });
+
+  const handleLabelsChanged = useCallback(async () => {
+    await refreshBoardLabels();
+    await refreshFromDB().catch(() => undefined);
+    setBirthdayLabelRefreshSignal((signal) => signal + 1);
+  }, [refreshBoardLabels, refreshFromDB]);
+
+  const saveTaskLabels = useCallback(
+    async (
+      taskId: string,
+      expectedLabelIds: string[],
+      labelIds: string[],
+    ): Promise<BoardLabelMutationResult> => {
+      const result = await setTaskLabels(
+        labelSupabase,
+        slug,
+        taskId,
+        expectedLabelIds,
+        labelIds,
+      );
+      await refreshFromDB().catch(() => undefined);
+      return result;
+    },
+    [labelSupabase, refreshFromDB, slug],
+  );
+
+  const isLabelFilterActive = selectedLabelIds.length > 0;
+  const displayedColumns = useMemo(() => {
+    if (!isLabelFilterActive) return columns;
+    const selected = new Set(selectedLabelIds);
+    return columns.map((column) => ({
+      ...column,
+      tasks: column.tasks.filter((task) =>
+        task.labels?.some((label) => selected.has(label.id)),
+      ),
+    }));
+  }, [columns, isLabelFilterActive, selectedLabelIds]);
 
   // Wire the refs after useBoard returns
   refreshRef.current = refreshFromDB;
@@ -915,6 +980,7 @@ function BoardWorkspace({
   // Drag & drop handler (desktop only)
   const onDragEnd = useCallback(
     (result: DropResult) => {
+      if (isLabelFilterActive) return;
       const { source, destination } = result;
       if (!destination) return;
       if (
@@ -953,7 +1019,7 @@ function BoardWorkspace({
         destinationIndex,
       );
     },
-    [columns, moveTask],
+    [columns, isLabelFilterActive, moveTask],
   );
 
   function reportCardCompletion(result: TaskCompletionResult) {
@@ -1215,6 +1281,23 @@ function BoardWorkspace({
         }}
         onExport={handleExport}
         onImport={handleImport}
+        onOpenLabels={() => setIsLabelsDialogOpen(true)}
+      />
+
+      <BoardLabelsDialog
+        open={isLabelsDialogOpen}
+        onClose={() => setIsLabelsDialogOpen(false)}
+        slug={slug}
+        role={board?.role ?? initialBoard.role}
+        labels={boardLabels}
+        onLabelsChange={handleBoardLabelsChange}
+        onChanged={handleLabelsChanged}
+      />
+
+      <BoardLabelFilter
+        labels={boardLabels}
+        selectedIds={selectedLabelIds}
+        onChange={setSelectedLabelIds}
       />
 
       {isReady ? (
@@ -1225,6 +1308,9 @@ function BoardWorkspace({
             slug,
             timeZone: board?.time_zone ?? initialBoard.time_zone,
           }}
+          labelFilterIds={selectedLabelIds}
+          refreshSignal={birthdayLabelRefreshSignal}
+          availableLabels={boardLabels}
         />
       ) : null}
 
@@ -1253,7 +1339,8 @@ function BoardWorkspace({
       ) : isMobile ? (
         /* ── Mobile: single-column view ── */
         <MobileBoard
-          columns={columns}
+          columns={displayedColumns}
+          isReorderingDisabled={isLabelFilterActive}
           boardToday={board?.today ?? initialBoard.today}
           currentMemberNames={currentMemberNames}
           onAddColumn={addColumn}
@@ -1271,7 +1358,7 @@ function BoardWorkspace({
         <DragDropContext onDragEnd={onDragEnd}>
           <LayoutGroup>
             <div className="board-scroll flex flex-1 gap-4 overflow-x-auto p-4 md:p-6">
-              {columns.map((column, index) => (
+              {displayedColumns.map((column, index) => (
                 <Column
                   key={column.id}
                   column={column}
@@ -1290,6 +1377,7 @@ function BoardWorkspace({
                   onDeleteTask={requestDeleteTask}
                   onCompleteTask={handleCardCompletion}
                   onMoveTask={moveTask}
+                  isReorderingDisabled={isLabelFilterActive}
                 />
               ))}
               <AddColumn onAdd={addColumn} openSignal={openColumnFormSignal} />
@@ -1352,6 +1440,8 @@ function BoardWorkspace({
         onEditRepetition={editTaskRepetition}
         repetitionEditOperations={repetitionEditOperations}
         onMoveTask={moveTaskFromEditor}
+        boardLabels={boardLabels}
+        onSaveLabels={saveTaskLabels}
         onDelete={handleRequestEditorTaskDelete}
       />
 

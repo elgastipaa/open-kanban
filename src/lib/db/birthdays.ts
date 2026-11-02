@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import type { BoardLabel } from "@/lib/types";
 
 export interface BoardBirthday {
   id: string;
@@ -15,6 +16,7 @@ export interface BoardBirthday {
   created_at: string;
   updated_at: string;
   version: number;
+  labels?: BoardLabel[];
 }
 
 export interface BirthdayListResult {

@@ -38,6 +38,7 @@ interface MobileBoardProps {
     destIndex: number,
   ) => void;
   onRequestDeleteColumn: (columnId: string) => void;
+  isReorderingDisabled?: boolean;
 }
 
 /** Slide variants - direction is passed via `custom` */
@@ -69,6 +70,7 @@ export function MobileBoard({
   onCompleteTask,
   onMoveTask,
   onRequestDeleteColumn,
+  isReorderingDisabled = false,
 }: MobileBoardProps) {
   const [isAddingColumn, setIsAddingColumn] = useState(false);
   const [showCompletedByColumn, setShowCompletedByColumn] = useState<
@@ -214,10 +216,14 @@ export function MobileBoard({
                 {activeColumn.tasks.length === 0 ? (
                   <div className="flex flex-col items-center justify-center rounded-xl border border-border border-dashed py-12 text-center">
                     <p className="font-medium text-sm text-text-muted">
-                      No tasks yet
+                      {isReorderingDisabled
+                        ? "No hay tareas con estas etiquetas"
+                        : "No tasks yet"}
                     </p>
                     <p className="mt-1 text-text-muted text-xs">
-                      Tap &quot;Add task&quot; above to get started
+                      {isReorderingDisabled
+                        ? "Elegí otras etiquetas o quitá el filtro para ver más tareas."
+                        : 'Tap "Add task" above to get started'}
                     </p>
                   </div>
                 ) : (
@@ -235,6 +241,7 @@ export function MobileBoard({
                       isCompleted={false}
                       isFirst={index === 0}
                       isLast={index === pending.length - 1}
+                      isReorderingDisabled={isReorderingDisabled}
                       onEdit={onEditTask}
                       onDelete={onDeleteTask}
                       onComplete={onCompleteTask}
@@ -306,6 +313,7 @@ export function MobileBoard({
                             isCompleted
                             isFirst
                             isLast
+                            isReorderingDisabled
                             onEdit={onEditTask}
                             onDelete={onDeleteTask}
                             onComplete={onCompleteTask}

@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { getBoardLabelAssignments } from "@/lib/db/board-labels";
 import {
   classifyBoardSnapshotReadFailure,
   isTaskEditReadAccessDeniedCode,
@@ -365,7 +366,12 @@ export async function getFullBoard(
       throw new BoardSnapshotReadError(reason);
     }
   }
-  return response.data as { board: Board; columns: ColumnWithTasks[] } | null;
+  if (!response.data) return null;
+  return withBoardLabelAssignments(
+    supabase,
+    slug,
+    response.data as { board: Board; columns: ColumnWithTasks[] },
+  );
 }
 
 /** Read a board for task-edit reconciliation without hiding SQL permission denial. */
@@ -383,5 +389,42 @@ export async function getFullBoardForTaskEdit(
     }
     handleSupabaseError(response.error);
   }
-  return response.data as { board: Board; columns: ColumnWithTasks[] } | null;
+  if (!response.data) return null;
+  return withBoardLabelAssignments(
+    supabase,
+    slug,
+    response.data as { board: Board; columns: ColumnWithTasks[] },
+  );
+}
+
+async function withBoardLabelAssignments(
+  supabase: SupabaseClient,
+  slug: string,
+  snapshot: { board: Board; columns: ColumnWithTasks[] },
+): Promise<{ board: Board; columns: ColumnWithTasks[] }> {
+  try {
+    const assignments = await getBoardLabelAssignments(supabase, slug);
+    if (assignments.status !== "available") {
+      throw new BoardSnapshotReadError("denied");
+    }
+    const taskLabels = new Map(
+      assignments.tasks.map((assignment) => [
+        assignment.task_id,
+        assignment.labels,
+      ]),
+    );
+    return {
+      ...snapshot,
+      columns: snapshot.columns.map((column) => ({
+        ...column,
+        tasks: column.tasks.map((task) => ({
+          ...task,
+          labels: taskLabels.get(task.id) ?? [],
+        })),
+      })),
+    };
+  } catch (error) {
+    if (error instanceof BoardSnapshotReadError) throw error;
+    throw new BoardSnapshotReadError("retryable");
+  }
 }

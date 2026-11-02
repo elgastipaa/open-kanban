@@ -10,6 +10,7 @@ import {
 import { motion } from "motion/react";
 import { type MouseEvent, useState } from "react";
 import { TaskDueDate } from "@/components/board/task-due-date";
+import { BoardLabelBadge } from "@/components/labels/board-label-badge";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -34,6 +35,7 @@ interface MobileTaskCardProps {
   onMoveToColumn: (taskId: string, targetColumnId: string) => void;
   onMoveUp: (taskId: string) => void;
   onMoveDown: (taskId: string) => void;
+  isReorderingDisabled?: boolean;
 }
 
 const priorityConfig: Record<Priority, { label: string; className: string }> = {
@@ -67,6 +69,7 @@ export function MobileTaskCard({
   onMoveToColumn,
   onMoveUp,
   onMoveDown,
+  isReorderingDisabled = false,
 }: MobileTaskCardProps) {
   const priority = priorityConfig[task.priority];
   const checklistProgress = getTaskChecklistProgress(task.steps);
@@ -112,6 +115,13 @@ export function MobileTaskCard({
             {task.description}
           </p>
         )}
+        {task.labels && task.labels.length > 0 ? (
+          <span className="mt-1.5 flex flex-wrap gap-1">
+            {task.labels.map((label) => (
+              <BoardLabelBadge key={label.id} label={label} />
+            ))}
+          </span>
+        ) : null}
         {task.assignee_id ? (
           <p className="mt-1 truncate text-text-muted text-xs">
             Responsable: {assigneeName ?? "Responsable no disponible"}
@@ -166,7 +176,7 @@ export function MobileTaskCard({
           </button>
         )}
         {/* Move to column dropdown - only shown when there are other columns */}
-        {otherColumns.length > 0 ? (
+        {!isReorderingDisabled && otherColumns.length > 0 ? (
           <DropdownMenu open={showMoveMenu} onOpenChange={setShowMoveMenu}>
             <DropdownMenuTrigger className="flex items-center gap-1 rounded-md px-1.5 py-1 text-text-muted text-xs transition-colors hover:bg-surface-overlay hover:text-text-secondary">
               <IconArrowsRightLeft size={14} className="opacity-70" />
@@ -201,7 +211,7 @@ export function MobileTaskCard({
         <div className="flex-1" />
 
         {/* Move up / down within column */}
-        {!isCompleted && (
+        {!isCompleted && !isReorderingDisabled && (
           <div className="flex items-center gap-0.5">
             <button
               type="button"

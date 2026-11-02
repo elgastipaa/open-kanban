@@ -10,6 +10,8 @@ import {
   useMemo,
   useState,
 } from "react";
+import { BoardLabelBadge } from "@/components/labels/board-label-badge";
+import { BoardLabelPicker } from "@/components/labels/board-label-picker";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Modal } from "@/components/ui/modal";
@@ -24,7 +26,13 @@ import {
   restoreBirthday,
   updateBirthday,
 } from "@/lib/db/birthdays";
+import {
+  getBoardLabelAssignments,
+  listBoardLabels,
+  setBirthdayLabels,
+} from "@/lib/db/board-labels";
 import { createClient } from "@/lib/supabase/client";
+import type { BoardLabel } from "@/lib/types";
 import { generateUUID } from "@/lib/utils";
 
 type BirthdayMode =
@@ -53,6 +61,13 @@ function formatDate(value: string) {
     dateStyle: "medium",
     timeZone: "UTC",
   }).format(date);
+}
+
+function sameLabelIds(left: string[], right: string[]) {
+  return (
+    left.length === right.length &&
+    left.slice().sort().join("\u0000") === right.slice().sort().join("\u0000")
+  );
 }
 
 function localCalendarDay(timeZone: string, instant: Date) {
@@ -101,9 +116,17 @@ function errorForStatus(status: string) {
 
 interface BirthdayPanelProps {
   mode: BirthdayMode;
+  labelFilterIds?: string[];
+  refreshSignal?: number;
+  availableLabels?: BoardLabel[];
 }
 
-export function BirthdayPanel({ mode }: BirthdayPanelProps) {
+export function BirthdayPanel({
+  mode,
+  labelFilterIds = [],
+  refreshSignal = 0,
+  availableLabels = [],
+}: BirthdayPanelProps) {
   const supabase = useMemo(() => createClient(), []);
   const [birthdays, setBirthdays] = useState<BoardBirthday[]>([]);
   const [deletedBirthdays, setDeletedBirthdays] = useState<DeletedBirthday[]>(
@@ -121,6 +144,20 @@ export function BirthdayPanel({ mode }: BirthdayPanelProps) {
   const [pending, setPending] = useState(false);
   const [createResultExpired, setCreateResultExpired] = useState(false);
   const [restoringId, setRestoringId] = useState<string | null>(null);
+  const [selectedLabelIds, setSelectedLabelIds] = useState<string[]>([]);
+  const [savedLabelIds, setSavedLabelIds] = useState<string[]>([]);
+  const [latestLabelConflict, setLatestLabelConflict] = useState<
+    BoardLabel[] | null
+  >(null);
+  const [showLabelCloseChoices, setShowLabelCloseChoices] = useState(false);
+  const [pendingLabelAction, setPendingLabelAction] = useState<
+    "close" | "delete" | null
+  >(null);
+  const [seriesLabelCatalogs, setSeriesLabelCatalogs] = useState<
+    Record<string, BoardLabel[]>
+  >({});
+  const [labelsSaving, setLabelsSaving] = useState(false);
+  const [labelsNotice, setLabelsNotice] = useState("");
   const nameId = useId();
   const monthId = useId();
   const dayId = useId();
@@ -131,11 +168,22 @@ export function BirthdayPanel({ mode }: BirthdayPanelProps) {
   const modeBoardId = mode.boardId;
   const modeSlug = mode.type === "board" ? mode.slug : null;
   const boardTimeZone = mode.type === "board" ? mode.timeZone : null;
+  const labelsDirty =
+    editingBirthday !== null && !sameLabelIds(selectedLabelIds, savedLabelIds);
   const timeZones = useMemo(() => {
     const fromBirthdays = birthdays.map((birthday) => birthday.board_time_zone);
     const selectedBoardZone = boardTimeZone ? [boardTimeZone] : [];
     return Array.from(new Set([...fromBirthdays, ...selectedBoardZone]));
   }, [birthdays, boardTimeZone]);
+  const visibleBirthdays = useMemo(() => {
+    if (mode.type !== "board" || labelFilterIds.length === 0) {
+      return birthdays;
+    }
+    const selected = new Set(labelFilterIds);
+    return birthdays.filter((birthday) =>
+      birthday.labels?.some((label) => selected.has(label.id)),
+    );
+  }, [birthdays, labelFilterIds, mode.type]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: A zone change must recreate the callback so its refresh effect fetches server-resolved dates again.
   const refresh = useCallback(async () => {
@@ -155,7 +203,70 @@ export function BirthdayPanel({ mode }: BirthdayPanelProps) {
         setError("No se pudo confirmar el acceso a estos cumpleaños.");
         return;
       }
-      setBirthdays(active.birthdays);
+      if (modeType === "board") {
+        const assignments = await getBoardLabelAssignments(
+          supabase,
+          modeSlug ?? "",
+        );
+        if (assignments.status !== "available") {
+          setBirthdays([]);
+          setDeletedBirthdays([]);
+          setError("No se pudieron confirmar las etiquetas de este tablero.");
+          return;
+        }
+        const labelsByBirthday = new Map(
+          assignments.birthdays.map((assignment) => [
+            assignment.birthday_id,
+            assignment.labels,
+          ]),
+        );
+        setBirthdays(
+          active.birthdays.map((birthday) => ({
+            ...birthday,
+            labels: labelsByBirthday.get(birthday.id) ?? [],
+          })),
+        );
+      } else {
+        const boardEntries = Array.from(
+          new Map(
+            active.birthdays.map((birthday) => [
+              birthday.board_id,
+              { slug: birthday.board_slug },
+            ]),
+          ),
+        );
+        const boardReads = await Promise.all(
+          boardEntries.map(async ([boardId, board]) => {
+            try {
+              const [assignments, catalog] = await Promise.all([
+                getBoardLabelAssignments(supabase, board.slug),
+                listBoardLabels(supabase, board.slug),
+              ]);
+              return { boardId, assignments, catalog };
+            } catch {
+              return null;
+            }
+          }),
+        );
+        const labelsByBirthday = new Map<string, BoardLabel[]>();
+        const catalogsByBoard: Record<string, BoardLabel[]> = {};
+        for (const boardRead of boardReads) {
+          if (!boardRead || boardRead.assignments.status !== "available") {
+            continue;
+          }
+          catalogsByBoard[boardRead.boardId] = boardRead.catalog;
+          for (const assignment of boardRead.assignments.birthdays) {
+            labelsByBirthday.set(assignment.birthday_id, assignment.labels);
+          }
+        }
+        setSeriesLabelCatalogs(catalogsByBoard);
+        setBirthdays(
+          active.birthdays.map((birthday) => ({
+            ...birthday,
+            labels: labelsByBirthday.get(birthday.id) ?? [],
+          })),
+        );
+      }
       if (deleted && deleted.status === "available") {
         setDeletedBirthdays(deleted.birthdays);
       } else {
@@ -168,7 +279,7 @@ export function BirthdayPanel({ mode }: BirthdayPanelProps) {
     } finally {
       setLoading(false);
     }
-  }, [boardTimeZone, modeBoardId, modeSlug, modeType, supabase]);
+  }, [boardTimeZone, modeBoardId, modeSlug, modeType, refreshSignal, supabase]);
 
   useEffect(() => {
     void refresh();
@@ -209,6 +320,11 @@ export function BirthdayPanel({ mode }: BirthdayPanelProps) {
     setError(null);
     setNotice(null);
     setCreateResultExpired(false);
+    setSelectedLabelIds([]);
+    setSavedLabelIds([]);
+    setLatestLabelConflict(null);
+    setShowLabelCloseChoices(false);
+    setPendingLabelAction(null);
     setEditorOpen(true);
   }
 
@@ -225,8 +341,127 @@ export function BirthdayPanel({ mode }: BirthdayPanelProps) {
     setError(null);
     setNotice(null);
     setCreateResultExpired(false);
+    const labels = birthday.labels?.map((label) => label.id) ?? [];
+    setSelectedLabelIds(labels);
+    setSavedLabelIds(labels);
+    setLatestLabelConflict(null);
+    setShowLabelCloseChoices(false);
+    setPendingLabelAction(null);
     setEditorOpen(true);
   }
+
+  async function saveBirthdayLabelAssignments() {
+    if (!editingBirthday || labelsSaving || selectedLabelIds.length > 10) {
+      return false;
+    }
+    setLabelsSaving(true);
+    setError(null);
+    setLabelsNotice("");
+    setNotice(null);
+    try {
+      const result = await setBirthdayLabels(
+        supabase,
+        editingBirthday.board_slug,
+        editingBirthday.id,
+        savedLabelIds,
+        selectedLabelIds,
+      );
+      if (result.status !== "confirmed") {
+        if (
+          result.reason === "stale_selection" &&
+          Array.isArray(result.labels)
+        ) {
+          setLatestLabelConflict(result.labels);
+          setError(
+            "Las etiquetas del cumpleaños cambiaron mientras editabas. Tu borrador sigue intacto; revisá la selección actual antes de volver a guardarlo.",
+          );
+          return false;
+        }
+        setError(
+          result.reason === "too_many_labels"
+            ? "El cumpleaños ya tiene 10 etiquetas. Actualizá la lista antes de guardar."
+            : "No se pudo confirmar el cambio de etiquetas. Revisá el cumpleaños e intentá de nuevo.",
+        );
+        return false;
+      }
+      setSavedLabelIds(selectedLabelIds);
+      setLatestLabelConflict(null);
+      setLabelsNotice("Se guardaron las etiquetas del cumpleaños.");
+      await refresh();
+      return true;
+    } catch {
+      setError(
+        "No se pudo confirmar el cambio. Revisá las etiquetas actuales antes de volver a intentar.",
+      );
+      return false;
+    } finally {
+      setLabelsSaving(false);
+    }
+  }
+
+  function reviewLatestLabelConflict() {
+    if (!latestLabelConflict) return;
+    setSavedLabelIds(latestLabelConflict.map((label) => label.id));
+    setLatestLabelConflict(null);
+    setError(null);
+    setLabelsNotice(
+      "Actualizamos la base de comparación. Tu borrador sigue intacto; revisalo y guardá las etiquetas cuando termines.",
+    );
+  }
+
+  function continueAfterLabelResolution() {
+    const action = pendingLabelAction;
+    setPendingLabelAction(null);
+    setShowLabelCloseChoices(false);
+    if (action === "delete" && editingBirthday) {
+      setDeleteTarget(editingBirthday);
+    }
+    setEditorOpen(false);
+  }
+
+  async function saveLabelsAndContinue() {
+    if (await saveBirthdayLabelAssignments()) continueAfterLabelResolution();
+  }
+
+  function discardLabelsAndContinue() {
+    setSelectedLabelIds(savedLabelIds);
+    setLatestLabelConflict(null);
+    setError(null);
+    continueAfterLabelResolution();
+  }
+
+  function cancelLabelActionAndKeepEditing() {
+    setPendingLabelAction(null);
+    setShowLabelCloseChoices(false);
+  }
+
+  function requestEditorClose() {
+    if (pending || labelsSaving) return;
+    if (labelsDirty) {
+      setPendingLabelAction("close");
+      setShowLabelCloseChoices(true);
+      return;
+    }
+    setEditorOpen(false);
+  }
+
+  function requestBirthdayDelete() {
+    if (!editingBirthday || pending || labelsSaving) return;
+    if (labelsDirty) {
+      setPendingLabelAction("delete");
+      setShowLabelCloseChoices(true);
+      return;
+    }
+    setDeleteTarget(editingBirthday);
+    setEditorOpen(false);
+  }
+
+  const editorLabels =
+    mode.type === "board"
+      ? availableLabels
+      : editingBirthday
+        ? (seriesLabelCatalogs[editingBirthday.board_id] ?? [])
+        : [];
 
   async function saveBirthday(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -288,6 +523,29 @@ export function BirthdayPanel({ mode }: BirthdayPanelProps) {
         ) {
           await refresh();
         }
+        return;
+      }
+      if (editingBirthday && labelsDirty) {
+        setEditingBirthday({
+          ...editingBirthday,
+          name,
+          birth_month: month,
+          birth_day: day,
+          advance_days: advanceDays,
+          version: result.version ?? editingBirthday.version + 1,
+        });
+        setDraft((current) => ({
+          ...current,
+          name,
+          month: String(month),
+          day: String(day),
+          advanceDays: advanceDays === null ? "" : String(advanceDays),
+          operationId: generateUUID(),
+        }));
+        setNotice(
+          "Se guardaron los datos del cumpleaños. Las etiquetas siguen como borrador y todavía puedes guardarlas o descartarlas.",
+        );
+        await refresh();
         return;
       }
       setEditorOpen(false);
@@ -419,13 +677,15 @@ export function BirthdayPanel({ mode }: BirthdayPanelProps) {
         <p className="mt-3 text-sm text-text-muted" aria-live="polite">
           Cargando cumpleaños…
         </p>
-      ) : birthdays.length === 0 && deletedBirthdays.length === 0 ? (
+      ) : visibleBirthdays.length === 0 && deletedBirthdays.length === 0 ? (
         <p className="mt-3 text-sm text-text-secondary">
-          {isSeries
-            ? "Todavía no hay cumpleaños en tus tableros."
-            : "No hay cumpleaños visibles ahora. Los que estén fuera de su ventana siguen disponibles en Series."}
+          {mode.type === "board" && labelFilterIds.length > 0
+            ? "No hay cumpleaños visibles con estas etiquetas. Los que estén fuera de su ventana siguen disponibles en Series."
+            : isSeries
+              ? "Todavía no hay cumpleaños en tus tableros."
+              : "No hay cumpleaños visibles ahora. Los que estén fuera de su ventana siguen disponibles en Series."}
         </p>
-      ) : birthdays.length === 0 ? (
+      ) : visibleBirthdays.length === 0 ? (
         <p className="mt-3 text-sm text-text-secondary">
           No hay cumpleaños visibles en este momento. Los cumpleaños fuera de su
           ventana se encuentran en Series.
@@ -438,7 +698,7 @@ export function BirthdayPanel({ mode }: BirthdayPanelProps) {
               : "mt-2 flex max-w-full gap-2 overflow-x-auto pb-1"
           }
         >
-          {birthdays.map((birthday) => (
+          {visibleBirthdays.map((birthday) => (
             <li
               key={birthday.id}
               className={
@@ -464,6 +724,18 @@ export function BirthdayPanel({ mode }: BirthdayPanelProps) {
                       {birthday.board_time_zone}
                     </span>
                   ) : null}
+                  {birthday.labels && birthday.labels.length > 0 ? (
+                    <ul
+                      className="mt-1 flex flex-wrap gap-1"
+                      aria-label={`Etiquetas de ${birthday.name}`}
+                    >
+                      {birthday.labels.map((label) => (
+                        <li key={label.id}>
+                          <BoardLabelBadge label={label} />
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
                 </div>
               ) : null}
               {isSeries ? (
@@ -488,20 +760,34 @@ export function BirthdayPanel({ mode }: BirthdayPanelProps) {
                   </button>
                 </div>
               ) : (
-                <button
-                  type="button"
-                  onClick={() => openEdit(birthday)}
-                  aria-label={`Abrir cumpleaños ${birthday.name}`}
-                  title="Ver o editar cumpleaños"
-                  className="max-w-64 rounded-lg border border-border bg-surface-base px-3 py-2 text-left hover:border-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
-                >
-                  <span className="block truncate font-medium text-sm text-text-primary">
-                    {birthday.name}
-                  </span>
-                  <span className="block text-text-secondary text-xs">
-                    {formatDate(birthday.next_on)}
-                  </span>
-                </button>
+                <div className="max-w-64">
+                  <button
+                    type="button"
+                    onClick={() => openEdit(birthday)}
+                    aria-label={`Abrir cumpleaños ${birthday.name}`}
+                    title="Ver o editar cumpleaños"
+                    className="w-full rounded-lg border border-border bg-surface-base px-3 py-2 text-left hover:border-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                  >
+                    <span className="block truncate font-medium text-sm text-text-primary">
+                      {birthday.name}
+                    </span>
+                    <span className="block text-text-secondary text-xs">
+                      {formatDate(birthday.next_on)}
+                    </span>
+                  </button>
+                  {birthday.labels && birthday.labels.length > 0 ? (
+                    <ul
+                      className="mt-1 flex flex-wrap gap-1"
+                      aria-label={`Etiquetas de ${birthday.name}`}
+                    >
+                      {birthday.labels.map((label) => (
+                        <li key={label.id}>
+                          <BoardLabelBadge label={label} />
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
               )}
             </li>
           ))}
@@ -546,9 +832,7 @@ export function BirthdayPanel({ mode }: BirthdayPanelProps) {
 
       <Modal
         open={editorOpen}
-        onClose={() => {
-          if (!pending) setEditorOpen(false);
-        }}
+        onClose={requestEditorClose}
         title={editingBirthday ? "Cumpleaños" : "Agregar cumpleaños"}
         fullScreenMobile
       >
@@ -646,6 +930,118 @@ export function BirthdayPanel({ mode }: BirthdayPanelProps) {
               ventana sigue en Series.
             </p>
           </div>
+          {editingBirthday ? (
+            <section className="space-y-2 border-border border-t pt-3">
+              <BoardLabelPicker
+                labels={editorLabels}
+                selectedIds={selectedLabelIds}
+                onChange={(next) => {
+                  setSelectedLabelIds(next);
+                  setLabelsNotice("");
+                  setError(null);
+                }}
+                disabled={labelsSaving || pending}
+                idPrefix={`birthday-label-${editingBirthday.id}`}
+              />
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-text-muted text-xs">
+                  Las etiquetas se guardan por separado de la fecha.
+                </p>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => void saveBirthdayLabelAssignments()}
+                  disabled={
+                    labelsSaving ||
+                    pending ||
+                    latestLabelConflict !== null ||
+                    selectedLabelIds.length > 10 ||
+                    !labelsDirty
+                  }
+                >
+                  {labelsSaving ? "Guardando…" : "Guardar etiquetas"}
+                </Button>
+              </div>
+              {latestLabelConflict ? (
+                <div className="rounded-md border border-border bg-surface-raised p-3">
+                  <p className="text-sm text-text-secondary">
+                    Selección guardada actual:{" "}
+                    {latestLabelConflict.length > 0
+                      ? latestLabelConflict
+                          .map((label) => label.name)
+                          .join(", ")
+                      : "sin etiquetas"}
+                    . Tu borrador sigue marcado en el selector.
+                  </p>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="mt-2"
+                    onClick={reviewLatestLabelConflict}
+                  >
+                    Revisar cambios actuales y conservar mi borrador
+                  </Button>
+                </div>
+              ) : null}
+              {labelsNotice ? (
+                <output
+                  className="block text-status-connected text-xs"
+                  aria-live="polite"
+                >
+                  {labelsNotice}
+                </output>
+              ) : null}
+            </section>
+          ) : null}
+          {showLabelCloseChoices ? (
+            <section
+              className="rounded-md border border-border bg-surface-raised p-4"
+              aria-labelledby="birthday-label-close-heading"
+            >
+              <h3
+                id="birthday-label-close-heading"
+                className="font-semibold text-sm text-text-primary"
+              >
+                Hay etiquetas sin guardar
+              </h3>
+              <p className="mt-1 text-sm text-text-secondary">
+                Puedes guardar o descartar el selector antes de continuar. Los
+                datos del cumpleaños se guardan por separado.
+              </p>
+              <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
+                <Button
+                  type="button"
+                  variant="primary"
+                  onClick={() => void saveLabelsAndContinue()}
+                  disabled={
+                    !labelsDirty ||
+                    labelsSaving ||
+                    pending ||
+                    latestLabelConflict !== null
+                  }
+                >
+                  Guardar etiquetas y continuar
+                </Button>
+                <Button
+                  type="button"
+                  variant="danger"
+                  onClick={discardLabelsAndContinue}
+                  disabled={labelsSaving || pending}
+                >
+                  Descartar etiquetas y continuar
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={cancelLabelActionAndKeepEditing}
+                  disabled={labelsSaving || pending}
+                >
+                  Seguir editando
+                </Button>
+              </div>
+            </section>
+          ) : null}
           {error ? (
             <p
               id={errorId}
@@ -660,10 +1056,7 @@ export function BirthdayPanel({ mode }: BirthdayPanelProps) {
               <Button
                 type="button"
                 variant="danger"
-                onClick={() => {
-                  setDeleteTarget(editingBirthday);
-                  setEditorOpen(false);
-                }}
+                onClick={requestBirthdayDelete}
                 disabled={pending}
               >
                 <IconTrash size={16} aria-hidden="true" />
@@ -673,7 +1066,7 @@ export function BirthdayPanel({ mode }: BirthdayPanelProps) {
                 <Button
                   type="button"
                   variant="ghost"
-                  onClick={() => setEditorOpen(false)}
+                  onClick={requestEditorClose}
                   disabled={pending}
                 >
                   Cancelar
@@ -688,7 +1081,7 @@ export function BirthdayPanel({ mode }: BirthdayPanelProps) {
               <Button
                 type="button"
                 variant="ghost"
-                onClick={() => setEditorOpen(false)}
+                onClick={requestEditorClose}
                 disabled={pending}
               >
                 Cancelar

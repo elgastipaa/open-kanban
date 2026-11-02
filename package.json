@@ -16,6 +16,7 @@
     "test:db:issue-27": "bash scripts/test-db-issue-27.sh",
     "test:db:issue-28": "bash scripts/test-db-issue-28.sh",
     "test:db:issue-29": "bash scripts/test-db-issue-29.sh",
+    "test:db:issue-30": "bash scripts/test-db-issue-30.sh",
     "test:db:issue-26": "bash scripts/test-db-issue-26.sh",
     "test:db": "bash scripts/test-db.sh",
     "test:db:issue-23": "bash scripts/test-db-issue-23.sh",

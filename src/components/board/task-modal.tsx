@@ -13,6 +13,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { TaskConversation } from "@/components/board/task-conversation";
 import { TaskDueDate } from "@/components/board/task-due-date";
 import { TaskRepetition } from "@/components/board/task-repetition";
+import { BoardLabelPicker } from "@/components/labels/board-label-picker";
 import { ThemePreferenceControl } from "@/components/theme/theme-preference-provider";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -25,6 +26,7 @@ import {
 import { Modal } from "@/components/ui/modal";
 import type { RepetitionEditOperationStore } from "@/lib/daily-repetition-edit-state";
 import type { RepetitionOperationStore } from "@/lib/daily-repetition-state";
+import type { BoardLabelMutationResult } from "@/lib/db/board-labels";
 import type {
   RepetitionCreateCommand,
   RepetitionCreateResult,
@@ -72,6 +74,7 @@ import {
 } from "@/lib/task-edit-workflow";
 import type {
   AssignableBoardMember,
+  BoardLabel,
   ColumnWithTasks,
   Priority,
   Task,
@@ -153,6 +156,12 @@ interface TaskModalProps {
     taskId: string,
     targetColumnId: string,
   ) => Promise<TaskOrderResult | null>;
+  boardLabels: BoardLabel[];
+  onSaveLabels: (
+    taskId: string,
+    expectedLabelIds: string[],
+    labelIds: string[],
+  ) => Promise<BoardLabelMutationResult>;
   onDelete: (taskId: string) => void;
 }
 
@@ -222,6 +231,13 @@ function fieldLabel(field: TaskEditableField) {
     case "due_on":
       return "Fecha límite";
   }
+}
+
+function sameLabelIds(left: string[], right: string[]) {
+  return (
+    left.length === right.length &&
+    left.slice().sort().join("\u0000") === right.slice().sort().join("\u0000")
+  );
 }
 
 function displayValue(field: TaskEditableField, value: string | null) {
@@ -301,6 +317,8 @@ export function TaskModal({
   checklistAddOperations,
   onMutateChecklist,
   onMoveTask,
+  boardLabels,
+  onSaveLabels,
   onDelete,
 }: TaskModalProps) {
   const initialRestoration =
@@ -364,6 +382,19 @@ export function TaskModal({
   const [selectedAssigneeId, setSelectedAssigneeId] = useState(
     task?.assignee_id ?? "",
   );
+  const [selectedLabelIds, setSelectedLabelIds] = useState<string[]>(
+    () => task?.labels?.map((label) => label.id) ?? [],
+  );
+  const [savedLabelIds, setSavedLabelIds] = useState<string[]>(
+    () => task?.labels?.map((label) => label.id) ?? [],
+  );
+  const [latestLabelConflict, setLatestLabelConflict] = useState<
+    BoardLabel[] | null
+  >(null);
+  const [showLabelCloseChoices, setShowLabelCloseChoices] = useState(false);
+  const [isSavingLabels, setIsSavingLabels] = useState(false);
+  const [labelsNotice, setLabelsNotice] = useState("");
+  const [labelsError, setLabelsError] = useState("");
   const [isAssigning, setIsAssigning] = useState(false);
   const [assigneeNotice, setAssigneeNotice] = useState("");
   const [dueOnError, setDueOnError] = useState("");
@@ -430,6 +461,13 @@ export function TaskModal({
     setEditingChecklistStepId(null);
     setEditingChecklistStepText("");
     setSelectedAssigneeId(task.assignee_id ?? "");
+    setSelectedLabelIds(task.labels?.map((label) => label.id) ?? []);
+    setSavedLabelIds(task.labels?.map((label) => label.id) ?? []);
+    setLatestLabelConflict(null);
+    setShowLabelCloseChoices(false);
+    setIsSavingLabels(false);
+    setLabelsNotice("");
+    setLabelsError("");
     setIsAssigning(false);
     setAssigneeNotice("");
     setDueOnError("");
@@ -446,15 +484,103 @@ export function TaskModal({
     [baseTask, draft],
   );
   const dirty = dirtyFields.length > 0;
+  const labelsDirty = !sameLabelIds(selectedLabelIds, savedLabelIds);
   const hasConflict = Object.keys(conflicts).length > 0;
   const isSaving = workflow.status === "saving";
   const isWorking =
     isSaving ||
+    isSavingLabels ||
     isReconciling ||
     isMoving ||
     isCompleting ||
     isAssigning ||
     isChecklistWorking;
+
+  async function saveLabels() {
+    if (!task || isSavingLabels) return false;
+    setIsSavingLabels(true);
+    setLabelsError("");
+    setLabelsNotice("");
+    try {
+      const result = await onSaveLabels(
+        task.id,
+        savedLabelIds,
+        selectedLabelIds,
+      );
+      if (result.status !== "confirmed") {
+        if (
+          result.reason === "stale_selection" &&
+          Array.isArray(result.labels)
+        ) {
+          setLatestLabelConflict(result.labels);
+          setLabelsError(
+            "Las etiquetas cambiaron mientras editabas. Tu borrador sigue intacto; revisa la selección actual antes de volver a guardarlo.",
+          );
+          return false;
+        }
+        setLabelsError(
+          result.reason === "too_many_labels"
+            ? "La tarea ya tiene 10 etiquetas. Actualizá el tablero antes de guardar."
+            : "No se pudo confirmar el cambio de etiquetas. Revisá el tablero e intentá de nuevo.",
+        );
+        return false;
+      }
+      setSavedLabelIds(selectedLabelIds);
+      setLatestLabelConflict(null);
+      setLabelsNotice("Se guardaron las etiquetas de la tarea.");
+      return true;
+    } catch {
+      setLabelsError(
+        "No se pudo confirmar el cambio. Revisá las etiquetas actuales antes de volver a intentar.",
+      );
+      return false;
+    } finally {
+      setIsSavingLabels(false);
+    }
+  }
+
+  function reviewLatestLabelConflict() {
+    if (!latestLabelConflict) return;
+    setSavedLabelIds(latestLabelConflict.map((label) => label.id));
+    setLatestLabelConflict(null);
+    setLabelsError("");
+    setLabelsNotice(
+      "Actualizamos la base de comparación. Tu borrador sigue intacto; guarda las etiquetas cuando termines de revisarlo.",
+    );
+  }
+
+  function continueAfterLabelResolution() {
+    setShowLabelCloseChoices(false);
+    if (dirty) {
+      setShowCloseChoices(true);
+      return;
+    }
+    requestTaskAction(closeAction, {
+      moveTargetId: pendingMoveTargetId ?? undefined,
+      completionTarget: pendingCompletionTarget ?? undefined,
+      afterSave: true,
+      labelsResolved: true,
+    });
+  }
+
+  async function saveLabelsAndContinue() {
+    if (await saveLabels()) continueAfterLabelResolution();
+  }
+
+  function discardLabelsAndContinue() {
+    setSelectedLabelIds(savedLabelIds);
+    setLatestLabelConflict(null);
+    setLabelsError("");
+    continueAfterLabelResolution();
+  }
+
+  function cancelLabelActionAndKeepEditing() {
+    setShowLabelCloseChoices(false);
+    setCloseAction("close");
+    setPendingMoveTargetId(null);
+    setPendingCompletionTarget(null);
+    setCloseNotice("");
+  }
 
   useEffect(() => {
     if (!task || !baseTask) return;
@@ -474,14 +600,14 @@ export function TaskModal({
   ]);
 
   useEffect(() => {
-    if (!open || !dirty) return;
+    if (!open || (!dirty && !labelsDirty)) return;
     function warnBeforeUnload(event: BeforeUnloadEvent) {
       event.preventDefault();
       event.returnValue = "";
     }
     window.addEventListener("beforeunload", warnBeforeUnload);
     return () => window.removeEventListener("beforeunload", warnBeforeUnload);
-  }, [dirty, open]);
+  }, [dirty, labelsDirty, open]);
 
   function updateDraft(nextDraft: TaskEditDraft) {
     setWorkflow((current) => changeTaskEditDraft(current, nextDraft));
@@ -559,42 +685,73 @@ export function TaskModal({
     }
   }
 
-  function requestClose() {
-    if (pendingChecklistReview) {
+  function requestTaskAction(
+    action: "close" | "delete" | "move" | "complete",
+    options: {
+      moveTargetId?: string;
+      completionTarget?: boolean;
+      taskSnapshot?: Task | null;
+      afterSave?: boolean;
+      labelsResolved?: boolean;
+    } = {},
+  ) {
+    if (action === "close" && pendingChecklistReview) {
       cancelChecklistCompletionReview();
       return;
     }
-    if (isWorking) {
-      setCloseNotice("Espera a que termine el guardado antes de cerrar.");
-      return;
-    }
-    if (dirty) {
-      setCloseAction("close");
-      setPendingMoveTargetId(null);
-      setPendingCompletionTarget(null);
-      setShowCloseChoices(true);
-      setCloseNotice("");
-      return;
-    }
-    onClose();
-  }
-
-  function requestDelete() {
-    if (isWorking) {
+    if (isWorking && !options.afterSave) {
       setCloseNotice("Espera a que termine el guardado antes de continuar.");
       return;
     }
-    if (dirty) {
-      setCloseAction("delete");
-      setPendingMoveTargetId(null);
-      setPendingCompletionTarget(null);
+
+    setCloseAction(action);
+    setPendingMoveTargetId(
+      action === "move" ? (options.moveTargetId ?? null) : null,
+    );
+    setPendingCompletionTarget(
+      action === "complete" ? (options.completionTarget ?? null) : null,
+    );
+    setCloseNotice("");
+    setShowCloseChoices(false);
+
+    if (labelsDirty && !options.labelsResolved) {
+      setShowLabelCloseChoices(true);
+      return;
+    }
+    if (dirty && !options.afterSave) {
       setShowCloseChoices(true);
       return;
     }
-    if (task) onDelete(task.id);
+
+    if (action === "close") {
+      onClose();
+    } else if (action === "delete") {
+      if (task) onDelete(task.id);
+    } else if (action === "move") {
+      if (options.moveTargetId) void performMove(options.moveTargetId);
+    } else if (options.completionTarget !== undefined) {
+      void performCompletion(
+        options.completionTarget,
+        options.taskSnapshot ?? baseTask ?? undefined,
+        options.afterSave ?? false,
+      );
+    }
+  }
+
+  function requestClose() {
+    requestTaskAction("close");
+  }
+
+  function requestDelete() {
+    requestTaskAction("delete");
   }
 
   function discardAndContinue() {
+    if (labelsDirty) {
+      setShowCloseChoices(false);
+      setShowLabelCloseChoices(true);
+      return;
+    }
     if (closeAction === "move") {
       const targetColumnId = pendingMoveTargetId;
       if (!targetColumnId || !baseTask) return;
@@ -603,7 +760,10 @@ export function TaskModal({
       setShowCloseChoices(false);
       setMoveNotice("");
       if (taskMoveFollowUp("discard") === "move") {
-        void performMove(targetColumnId);
+        requestTaskAction("move", {
+          moveTargetId: targetColumnId,
+          afterSave: true,
+        });
       }
       return;
     }
@@ -616,7 +776,11 @@ export function TaskModal({
       setShowCloseChoices(false);
       setCompletionNotice("");
       if (taskCompletionFollowUp("discard") === "complete") {
-        void performCompletion(target, currentTask);
+        requestTaskAction("complete", {
+          completionTarget: target,
+          taskSnapshot: currentTask,
+          afterSave: true,
+        });
       }
       return;
     }
@@ -625,11 +789,11 @@ export function TaskModal({
         setWorkflow(createTaskEditWorkflow(draftFor(baseTask)));
         setConflicts({});
         setShowCloseChoices(false);
-        onDelete(task.id);
+        requestTaskAction("delete", { afterSave: true });
       }
       return;
     }
-    onClose();
+    requestTaskAction("close", { afterSave: true });
   }
 
   async function performCompletion(
@@ -879,7 +1043,7 @@ export function TaskModal({
   }
 
   function requestCompletion() {
-    if (!task || !baseTask || isWorking) return;
+    if (!task || !baseTask) return;
     const target = !baseTask.is_completed;
     if (!isOnline) {
       setCompletionNotice(
@@ -894,15 +1058,7 @@ export function TaskModal({
       return;
     }
     setCompletionNotice("");
-    if (dirty) {
-      setCloseAction("complete");
-      setPendingMoveTargetId(null);
-      setPendingCompletionTarget(target);
-      setShowCloseChoices(true);
-      setCloseNotice("");
-      return;
-    }
-    void performCompletion(target, baseTask);
+    requestTaskAction("complete", { completionTarget: target });
   }
 
   function buildOperation(): TaskEditCommand | null {
@@ -983,7 +1139,6 @@ export function TaskModal({
   }
 
   function requestMove(targetColumnId: string) {
-    if (isWorking) return;
     if (!isOnline) {
       setMoveNotice("Estás sin conexión. La tarea no se moverá.");
       return;
@@ -992,16 +1147,8 @@ export function TaskModal({
       setMoveNotice("Resuelve o consulta primero el resultado del guardado.");
       return;
     }
-    if (dirty) {
-      setCloseAction("move");
-      setPendingMoveTargetId(targetColumnId);
-      setPendingCompletionTarget(null);
-      setShowCloseChoices(true);
-      setCloseNotice("");
-      setMoveNotice("");
-      return;
-    }
-    void performMove(targetColumnId);
+    setMoveNotice("");
+    requestTaskAction("move", { moveTargetId: targetColumnId });
   }
 
   async function save(
@@ -1027,14 +1174,20 @@ export function TaskModal({
     const retry = retryTaskEditSave(workflow);
     const operation = retry?.operation ?? buildOperation();
     if (!operation) {
-      if (taskEditSaveFollowUp(intent, "confirmed") === "close") onClose();
+      if (taskEditSaveFollowUp(intent, "confirmed") === "close") {
+        requestTaskAction("close", { afterSave: true });
+      }
       if (
         completeAfterSave &&
         closeAction === "complete" &&
         pendingCompletionTarget !== null &&
         taskCompletionFollowUp("save", "confirmed") === "complete"
       ) {
-        await performCompletion(pendingCompletionTarget, baseTask, true);
+        requestTaskAction("complete", {
+          completionTarget: pendingCompletionTarget,
+          taskSnapshot: baseTask,
+          afterSave: true,
+        });
       }
       return;
     }
@@ -1070,22 +1223,33 @@ export function TaskModal({
       setReconciliationError("");
       setShowCloseChoices(false);
       const followUp = taskEditSaveFollowUp(intent, "confirmed");
-      if (followUp === "close") onClose();
-      if (followUp === "confirm-delete") onDelete(task.id);
+      if (followUp === "close") {
+        requestTaskAction("close", { afterSave: true });
+      }
+      if (followUp === "confirm-delete") {
+        requestTaskAction("delete", { afterSave: true });
+      }
       if (
         completeAfterSave &&
         closeAction === "complete" &&
         pendingCompletionTarget !== null &&
         taskCompletionFollowUp("save", "confirmed") === "complete"
       ) {
-        await performCompletion(pendingCompletionTarget, result.task, true);
+        requestTaskAction("complete", {
+          completionTarget: pendingCompletionTarget,
+          taskSnapshot: result.task,
+          afterSave: true,
+        });
       } else if (
         moveAfterSave &&
         closeAction === "move" &&
         pendingMoveTargetId &&
         taskMoveFollowUp("save", "confirmed") === "move"
       ) {
-        await performMove(pendingMoveTargetId);
+        requestTaskAction("move", {
+          moveTargetId: pendingMoveTargetId,
+          afterSave: true,
+        });
       } else if (closeAction === "move") {
         setCloseAction("close");
         setPendingMoveTargetId(null);
@@ -1608,6 +1772,75 @@ export function TaskModal({
             ) : null}
           </section>
 
+          <section
+            className="border-border border-t pt-3"
+            aria-label="Etiquetas de la tarea"
+          >
+            <BoardLabelPicker
+              labels={boardLabels}
+              selectedIds={selectedLabelIds}
+              onChange={(next) => {
+                setSelectedLabelIds(next);
+                setLabelsNotice("");
+                setLabelsError("");
+              }}
+              disabled={isWorking || !isOnline}
+              idPrefix={`task-label-${task.id}`}
+            />
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+              <p className="text-text-muted text-xs">
+                Las etiquetas se guardan por separado de los demás cambios.
+              </p>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => void saveLabels()}
+                disabled={
+                  isSavingLabels ||
+                  !isOnline ||
+                  !labelsDirty ||
+                  latestLabelConflict !== null ||
+                  selectedLabelIds.length > 10
+                }
+              >
+                {isSavingLabels ? "Guardando…" : "Guardar etiquetas"}
+              </Button>
+            </div>
+            {latestLabelConflict ? (
+              <div className="mt-2 rounded-md border border-border bg-surface-raised p-3">
+                <p className="text-sm text-text-secondary">
+                  Selección guardada actual:{" "}
+                  {latestLabelConflict.length > 0
+                    ? latestLabelConflict.map((label) => label.name).join(", ")
+                    : "sin etiquetas"}
+                  . Tu borrador sigue marcado en el selector.
+                </p>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="mt-2"
+                  onClick={reviewLatestLabelConflict}
+                >
+                  Revisar cambios actuales y conservar mi borrador
+                </Button>
+              </div>
+            ) : null}
+            {labelsNotice ? (
+              <output
+                className="mt-2 block text-status-connected text-xs"
+                aria-live="polite"
+              >
+                {labelsNotice}
+              </output>
+            ) : null}
+            {labelsError ? (
+              <p className="mt-2 text-priority-urgent text-xs" role="alert">
+                {labelsError}
+              </p>
+            ) : null}
+          </section>
+
           <section className="border-border border-t pt-3">
             <button
               type="button"
@@ -1948,6 +2181,52 @@ export function TaskModal({
                   </div>
                 );
               })}
+            </section>
+          )}
+
+          {showLabelCloseChoices && (
+            <section
+              className="rounded-md border border-border bg-surface-raised p-4"
+              aria-labelledby="task-label-close-heading"
+            >
+              <h3
+                id="task-label-close-heading"
+                className="font-semibold text-sm text-text-primary"
+              >
+                Hay etiquetas sin guardar
+              </h3>
+              <p className="mt-1 text-sm text-text-secondary">
+                Puedes guardar o descartar este selector antes de continuar. Los
+                campos de la tarea se resuelven por separado.
+              </p>
+              <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
+                <Button
+                  variant="primary"
+                  onClick={() => void saveLabelsAndContinue()}
+                  disabled={
+                    !labelsDirty ||
+                    !isOnline ||
+                    isWorking ||
+                    latestLabelConflict !== null
+                  }
+                >
+                  Guardar etiquetas y continuar
+                </Button>
+                <Button
+                  variant="danger"
+                  onClick={discardLabelsAndContinue}
+                  disabled={isWorking}
+                >
+                  Descartar etiquetas y continuar
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={cancelLabelActionAndKeepEditing}
+                  disabled={isWorking}
+                >
+                  Seguir editando
+                </Button>
+              </div>
             </section>
           )}
 

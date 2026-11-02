@@ -5,6 +5,7 @@ import {
   IconDownload,
   IconLogout,
   IconPencil,
+  IconTag,
   IconTrash,
   IconUpload,
   IconUsers,
@@ -53,6 +54,7 @@ interface BoardToolbarProps {
   onDeleteBoard: () => void;
   onExport: () => void;
   onImport: () => void;
+  onOpenLabels: () => void;
 }
 
 export function BoardToolbar({
@@ -76,6 +78,7 @@ export function BoardToolbar({
   onDeleteBoard,
   onExport,
   onImport,
+  onOpenLabels,
 }: BoardToolbarProps) {
   const [title, setTitle] = useState(name);
   const [editValue, setEditValue] = useState(name);
@@ -336,6 +339,16 @@ export function BoardToolbar({
             <span className="hidden sm:inline">Importar</span>
           </Button>
         ) : null}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onOpenLabels}
+          aria-label="Administrar etiquetas del tablero"
+          title="Administrar etiquetas del tablero"
+        >
+          <IconTag size={16} aria-hidden="true" />
+          <span className="hidden sm:inline">Etiquetas</span>
+        </Button>
         <Button
           variant="ghost"
           size="sm"

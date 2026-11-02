@@ -61,4 +61,6 @@ REVOKE ALL ON FUNCTION public.mark_task_attachment_missing_p(uuid, text, uuid, u
 GRANT EXECUTE ON FUNCTION public.mark_task_attachment_missing_p(uuid, text, uuid, uuid)
   TO service_role;
 
+NOTIFY pgrst, 'reload schema';
+
 COMMIT;

@@ -298,6 +298,7 @@ export function TaskAttachments({
         return;
       }
       if (result.status === "failed") {
+        await load().catch(() => undefined);
         setError(result.message);
         return;
       }
@@ -482,7 +483,11 @@ export function TaskAttachments({
                     onClick={() => void downloadAttachment(attachment)}
                     disabled={!canInteract || downloadingAttachmentId !== null}
                     aria-busy={downloadingAttachmentId === attachment.id}
-                    aria-label={`Descargar ${attachment.file_name}`}
+                    aria-label={
+                      downloadingAttachmentId === attachment.id
+                        ? `Descargando ${attachment.file_name}`
+                        : `Descargar ${attachment.file_name}`
+                    }
                   >
                     {downloadingAttachmentId === attachment.id
                       ? "Descargando…"

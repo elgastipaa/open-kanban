@@ -5,7 +5,9 @@ import {
 } from "@/lib/supabase/task-attachment-storage";
 import {
   isConfirmedMissingTaskAttachmentObject,
+  isTaskAttachmentStorageNotFound,
   TASK_ATTACHMENT_MISSING_MESSAGE,
+  TASK_ATTACHMENT_OBJECT_INVENTORY_LIMIT,
 } from "@/lib/task-attachment-download";
 import {
   attachmentContentDisposition,
@@ -75,7 +77,29 @@ export async function GET(
     const { data: storedObject, error: storageError } = await service.storage
       .from(TASK_ATTACHMENT_BUCKET)
       .download(metadata.object_key);
-    if (isConfirmedMissingTaskAttachmentObject(storageError)) {
+    if (isTaskAttachmentStorageNotFound(storageError)) {
+      const { data: listedObjects, error: inventoryError } =
+        await service.storage.from(TASK_ATTACHMENT_BUCKET).list("attachments", {
+          limit: TASK_ATTACHMENT_OBJECT_INVENTORY_LIMIT,
+          search: attachmentId,
+        });
+      if (
+        !isConfirmedMissingTaskAttachmentObject(
+          storageError,
+          listedObjects,
+          inventoryError,
+          `attachments/${attachmentId}`,
+        )
+      ) {
+        return json(
+          {
+            status: "error",
+            message: "No se pudo comprobar la disponibilidad del archivo.",
+          },
+          503,
+        );
+      }
+
       const { data: missingData, error: missingError } = await service.rpc(
         "mark_task_attachment_missing_p",
         {
@@ -94,8 +118,12 @@ export async function GET(
         410,
       );
     }
-    if (storageError || !storedObject)
-      return json({ status: "unavailable" }, 404);
+    if (storageError || !storedObject) {
+      return json(
+        { status: "error", message: "No se pudo descargar el archivo." },
+        503,
+      );
+    }
     const body = await readTaskAttachmentBody(storedObject.stream());
     if (!body.ok) return json({ status: "unavailable" }, 404);
     const validated = validateTaskAttachmentPayload(

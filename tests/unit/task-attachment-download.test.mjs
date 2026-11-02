@@ -2,35 +2,171 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   isConfirmedMissingTaskAttachmentObject,
+  isTaskAttachmentObjectAbsentFromCompleteInventory,
   readTaskAttachmentDownloadResponse,
   TASK_ATTACHMENT_MISSING_MESSAGE,
 } from "../../src/lib/task-attachment-download.ts";
 
-test("classifies only a confirmed Supabase Storage object 404 as missing", () => {
+test("only a complete exact-key inventory confirms object absence", () => {
   assert.equal(
-    isConfirmedMissingTaskAttachmentObject({
-      __isStorageError: true,
-      name: "StorageApiError",
-      status: 404,
-      statusCode: "404",
-    }),
+    isTaskAttachmentObjectAbsentFromCompleteInventory(
+      [],
+      null,
+      "attachments/id-1",
+    ),
     true,
   );
   assert.equal(
-    isConfirmedMissingTaskAttachmentObject({
-      __isStorageError: true,
-      name: "StorageApiError",
-      status: 503,
-      statusCode: "503",
-    }),
+    isTaskAttachmentObjectAbsentFromCompleteInventory(
+      [{ name: "id-1" }],
+      null,
+      "attachments/id-1",
+    ),
     false,
   );
   assert.equal(
-    isConfirmedMissingTaskAttachmentObject({
-      name: "Error",
-      status: 404,
-      message: "network proxy returned 404",
-    }),
+    isTaskAttachmentObjectAbsentFromCompleteInventory(
+      [{ name: "id-1-suffix" }],
+      null,
+      "attachments/id-1",
+    ),
+    true,
+  );
+  assert.equal(
+    isTaskAttachmentObjectAbsentFromCompleteInventory(
+      [{ name: "id-1-suffix" }, { name: "other-id-1" }],
+      null,
+      "attachments/id-1",
+    ),
+    false,
+  );
+  assert.equal(
+    isTaskAttachmentObjectAbsentFromCompleteInventory(
+      [],
+      { message: "Bucket not found" },
+      "attachments/id-1",
+    ),
+    false,
+  );
+  assert.equal(
+    isTaskAttachmentObjectAbsentFromCompleteInventory(
+      [{ name: null }],
+      null,
+      "attachments/id-1",
+    ),
+    false,
+  );
+});
+
+test("confirms a missing object only after a successful exact-key inventory", () => {
+  const object404 = {
+    __isStorageError: true,
+    name: "StorageApiError",
+    status: 404,
+    statusCode: "NoSuchKey",
+    message: "Object not found",
+  };
+  const bucket404 = {
+    __isStorageError: true,
+    name: "StorageApiError",
+    status: 404,
+    statusCode: "NoSuchBucket",
+    message: "Bucket not found",
+  };
+  const sdkHttpOnly404 = { ...object404, statusCode: "404" };
+
+  assert.equal(
+    isConfirmedMissingTaskAttachmentObject(
+      object404,
+      [],
+      null,
+      "attachments/id-1",
+    ),
+    true,
+  );
+  assert.equal(
+    isConfirmedMissingTaskAttachmentObject(
+      sdkHttpOnly404,
+      [],
+      null,
+      "attachments/id-1",
+    ),
+    true,
+  );
+  assert.equal(
+    isConfirmedMissingTaskAttachmentObject(
+      bucket404,
+      null,
+      bucket404,
+      "attachments/id-1",
+    ),
+    false,
+  );
+  assert.equal(
+    isConfirmedMissingTaskAttachmentObject(
+      { ...bucket404, statusCode: "404" },
+      [],
+      null,
+      "attachments/id-1",
+    ),
+    false,
+  );
+  assert.equal(
+    isConfirmedMissingTaskAttachmentObject(
+      {
+        name: "Error",
+        status: 404,
+        message: "network proxy returned 404",
+      },
+      [],
+      null,
+      "attachments/id-1",
+    ),
+    false,
+  );
+  assert.equal(
+    isConfirmedMissingTaskAttachmentObject(
+      object404,
+      [{ name: "id-1" }],
+      null,
+      "attachments/id-1",
+    ),
+    false,
+  );
+  assert.equal(
+    isConfirmedMissingTaskAttachmentObject(
+      object404,
+      null,
+      null,
+      "attachments/id-1",
+    ),
+    false,
+  );
+  assert.equal(
+    isConfirmedMissingTaskAttachmentObject(
+      { ...object404, status: 503 },
+      [],
+      null,
+      "attachments/id-1",
+    ),
+    false,
+  );
+  assert.equal(
+    isConfirmedMissingTaskAttachmentObject(
+      object404,
+      [{ name: "id-1-other" }],
+      null,
+      "attachments/id-1",
+    ),
+    true,
+  );
+  assert.equal(
+    isConfirmedMissingTaskAttachmentObject(
+      object404,
+      [{ name: "id-1-other" }, { name: "another-id-1" }],
+      null,
+      "attachments/id-1",
+    ),
     false,
   );
 });

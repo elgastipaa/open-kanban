@@ -1,6 +1,10 @@
 import "server-only";
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import {
+  isTaskAttachmentObjectAbsentFromCompleteInventory,
+  TASK_ATTACHMENT_OBJECT_INVENTORY_LIMIT,
+} from "@/lib/task-attachment-download";
 
 export const TASK_ATTACHMENT_BUCKET = "task-attachments";
 const UUID_PATTERN =
@@ -40,11 +44,14 @@ export async function removeTaskAttachmentObjectAndConfirmAbsent(
     if (removeError) return false;
     const { data: objects, error: listError } = await service.storage
       .from(TASK_ATTACHMENT_BUCKET)
-      .list("attachments", { limit: 2, search: attachmentId });
-    return (
-      !listError &&
-      objects !== null &&
-      !objects.some((object) => object.name === attachmentId)
+      .list("attachments", {
+        limit: TASK_ATTACHMENT_OBJECT_INVENTORY_LIMIT,
+        search: attachmentId,
+      });
+    return isTaskAttachmentObjectAbsentFromCompleteInventory(
+      objects,
+      listError,
+      objectKey,
     );
   } catch {
     return false;

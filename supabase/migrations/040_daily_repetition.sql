@@ -1234,7 +1234,10 @@ BEGIN
   FROM public.daily_repetition_series AS series
   WHERE series.id = v_occurrence.series_id FOR UPDATE;
   IF NOT FOUND THEN RETURN NEW; END IF;
-  IF v_series.state = 'active' AND v_series.next_due_on IS NOT NULL
+  IF v_series.state IS DISTINCT FROM 'active' THEN
+    RETURN NEW;
+  END IF;
+  IF v_series.next_due_on IS NOT NULL
     AND NEW.due_on IS NOT NULL AND NEW.due_on >= v_series.next_due_on THEN
     RAISE EXCEPTION 'La fecha excepcional debe ser anterior a la próxima repetición (%).',
       v_series.next_due_on

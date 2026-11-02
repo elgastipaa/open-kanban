@@ -12,6 +12,22 @@ CREATE TEMP TABLE issue23_refs (
 GRANT SELECT, INSERT ON issue23_refs TO authenticated;
 CREATE TEMP TABLE issue23_results (series_id uuid NOT NULL);
 GRANT INSERT, SELECT ON issue23_results TO authenticated;
+CREATE TEMP TABLE issue23_transfer_results (
+  series_a uuid NOT NULL,
+  series_b uuid,
+  revision_after_stop bigint,
+  consumed_count_after_stop bigint,
+  latest_on_after_stop date,
+  start_on_after_stop date,
+  end_on_after_stop date,
+  occurrence_count_after_stop bigint,
+  occurrence_id_after_stop uuid,
+  occurrence_on_after_stop date,
+  occurrence_task_id_after_stop uuid,
+  occurrence_override_after_stop date,
+  occurrence_created_at_after_stop timestamptz
+);
+GRANT INSERT, SELECT, UPDATE ON issue23_transfer_results TO authenticated;
 
 -- The focused runner does not execute the authentication regression first.
 -- Admit only these synthetic principals through the same Google identity gate.
@@ -35,11 +51,13 @@ DECLARE
   v_column record;
   v_created jsonb;
   v_weekly_created jsonb;
+  v_transfer_created jsonb;
   v_due_edit jsonb;
   v_step_result jsonb;
   v_comment_result jsonb;
   v_task_id uuid;
   v_weekly_task_id uuid;
+  v_transfer_task_id uuid;
   v_step_id uuid;
   v_operation_id uuid := '23000000-0000-4000-8000-000000000001';
 BEGIN
@@ -103,6 +121,22 @@ BEGIN
   INSERT INTO issue23_refs(purpose, board_id, slug, column_id, task_id, operation_id)
   VALUES ('weekly_preview', v_board.id, v_board.slug, v_column.id,
     v_weekly_task_id, '23000000-0000-4000-8000-000000000033');
+
+  v_transfer_created := public.create_task_p(
+    '23000000-0000-4000-8000-000000000034', v_board.id, v_column.id,
+    'Transferir serie detenida', NULL, 'medium'
+  );
+  v_transfer_task_id := (v_transfer_created->>'task_id')::uuid;
+  v_due_edit := public.edit_task_fields_p(
+    '23000000-0000-4000-8000-000000000035', v_board.slug, v_transfer_task_id,
+    '{"due_on":"2026-11-05"}'::jsonb, '{"due_on":1}'::jsonb
+  );
+  IF v_due_edit->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Synthetic stopped-series transfer task setup failed: %', v_due_edit;
+  END IF;
+  INSERT INTO issue23_refs(purpose, board_id, slug, column_id, task_id, operation_id)
+  VALUES ('series_transfer', v_board.id, v_board.slug, v_column.id,
+    v_transfer_task_id, '23000000-0000-4000-8000-000000000036');
 END;
 $$;
 COMMIT;
@@ -134,6 +168,158 @@ BEGIN
 END;
 $$;
 COMMIT;
+
+-- C112: changing the first date while transferring a stopped series to a new
+-- series must not rewrite the old occurrence's exception/history.
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);
+DO $$
+DECLARE
+  v_ref issue23_refs%ROWTYPE;
+  v_series_a uuid;
+  v_result jsonb;
+BEGIN
+  SELECT * INTO v_ref FROM issue23_refs WHERE purpose = 'series_transfer';
+  v_result := public.create_daily_repetition_p(
+    v_ref.operation_id, v_ref.slug, v_ref.task_id,
+    '2026-11-05'::date, NULL, 3, 2, false, NULL
+  );
+  IF v_result->>'status' IS DISTINCT FROM 'confirmed'
+    OR (v_result->>'task_id')::uuid IS DISTINCT FROM v_ref.task_id THEN
+    RAISE EXCEPTION 'Synthetic source series creation failed: %', v_result;
+  END IF;
+  v_series_a := (v_result->>'series_id')::uuid;
+  INSERT INTO issue23_transfer_results(series_a) VALUES (v_series_a);
+END;
+$$;
+COMMIT;
+
+BEGIN;
+DO $$
+DECLARE
+  v_series_a uuid;
+BEGIN
+  SELECT series_a INTO v_series_a FROM issue23_transfer_results;
+  UPDATE public.daily_repetition_jobs AS job
+  SET state = 'superseded', lease_token = NULL, lease_expires_at = NULL,
+      completed_at = '2026-11-05 12:00:00+00'::timestamptz,
+      updated_at = '2026-11-05 12:00:00+00'::timestamptz
+  WHERE job.series_id = v_series_a AND job.state IN ('queued', 'retry_wait', 'leased');
+  UPDATE public.daily_repetition_series AS series
+  SET state = 'stopped', next_due_on = NULL,
+      stopped_at = '2026-11-05 12:00:00+00'::timestamptz,
+      revision = series.revision + 1,
+      updated_at = '2026-11-05 12:00:00+00'::timestamptz
+  WHERE series.id = v_series_a AND series.state = 'active';
+  IF NOT FOUND THEN RAISE EXCEPTION 'Synthetic source series could not be stopped'; END IF;
+
+  UPDATE issue23_transfer_results AS snapshot
+  SET revision_after_stop = series.revision,
+      consumed_count_after_stop = series.consumed_count,
+      latest_on_after_stop = series.latest_occurrence_on,
+      start_on_after_stop = series.start_on,
+      end_on_after_stop = series.end_on,
+      occurrence_count_after_stop = occurrence_stats.occurrence_count,
+      occurrence_id_after_stop = occurrence.id,
+      occurrence_on_after_stop = occurrence.occurrence_on,
+      occurrence_task_id_after_stop = occurrence.task_id,
+      occurrence_override_after_stop = occurrence.due_on_override,
+      occurrence_created_at_after_stop = occurrence.created_at
+  FROM public.daily_repetition_series AS series
+  JOIN public.daily_repetition_occurrences AS occurrence
+    ON occurrence.series_id = series.id
+  CROSS JOIN LATERAL (
+    SELECT pg_catalog.count(*) AS occurrence_count
+    FROM public.daily_repetition_occurrences AS all_occurrences
+    WHERE all_occurrences.series_id = series.id
+  ) AS occurrence_stats
+  WHERE snapshot.series_a = series.id;
+END;
+$$;
+COMMIT;
+
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);
+DO $$
+DECLARE
+  v_ref issue23_refs%ROWTYPE;
+  v_series_a uuid;
+  v_series_b uuid;
+  v_result jsonb;
+BEGIN
+  SELECT * INTO v_ref FROM issue23_refs WHERE purpose = 'series_transfer';
+  SELECT series_a INTO v_series_a FROM issue23_transfer_results;
+  v_result := public.create_daily_repetition_p(
+    '23000000-0000-4000-8000-000000000037', v_ref.slug, v_ref.task_id,
+    '2026-11-06'::date, NULL, 3, 2, true, v_series_a
+  );
+  IF v_result->>'status' IS DISTINCT FROM 'confirmed'
+    OR (v_result->>'task_id')::uuid IS DISTINCT FROM v_ref.task_id
+    OR (v_result->>'due_on')::date IS DISTINCT FROM '2026-11-06'::date THEN
+    RAISE EXCEPTION 'New series did not preserve the source task identity and chosen first date: %', v_result;
+  END IF;
+  v_series_b := (v_result->>'series_id')::uuid;
+  UPDATE issue23_transfer_results SET series_b = v_series_b;
+END;
+$$;
+COMMIT;
+
+DO $$
+DECLARE
+  v_ref issue23_refs%ROWTYPE;
+  v_series_a uuid;
+  v_series_b uuid;
+  v_snapshot issue23_transfer_results%ROWTYPE;
+BEGIN
+  SELECT * INTO v_ref FROM issue23_refs WHERE purpose = 'series_transfer';
+  SELECT * INTO v_snapshot FROM issue23_transfer_results;
+  v_series_a := v_snapshot.series_a;
+  v_series_b := v_snapshot.series_b;
+  IF (SELECT series.state FROM public.daily_repetition_series AS series
+      WHERE series.id = v_series_a) IS DISTINCT FROM 'stopped'
+    OR (SELECT series.next_due_on FROM public.daily_repetition_series AS series
+      WHERE series.id = v_series_a) IS NOT NULL
+    OR (SELECT series.revision FROM public.daily_repetition_series AS series
+      WHERE series.id = v_series_a) IS DISTINCT FROM v_snapshot.revision_after_stop
+    OR (SELECT series.consumed_count FROM public.daily_repetition_series AS series
+      WHERE series.id = v_series_a) IS DISTINCT FROM v_snapshot.consumed_count_after_stop
+    OR (SELECT series.latest_occurrence_on FROM public.daily_repetition_series AS series
+      WHERE series.id = v_series_a) IS DISTINCT FROM v_snapshot.latest_on_after_stop
+    OR (SELECT series.start_on FROM public.daily_repetition_series AS series
+      WHERE series.id = v_series_a) IS DISTINCT FROM v_snapshot.start_on_after_stop
+    OR (SELECT series.end_on FROM public.daily_repetition_series AS series
+      WHERE series.id = v_series_a) IS DISTINCT FROM v_snapshot.end_on_after_stop
+    OR (SELECT pg_catalog.count(*) FROM public.daily_repetition_occurrences AS occurrence
+      WHERE occurrence.series_id = v_series_a) IS DISTINCT FROM v_snapshot.occurrence_count_after_stop
+    OR (SELECT series.state FROM public.daily_repetition_series AS series
+      WHERE series.id = v_series_b) IS DISTINCT FROM 'active'
+    OR (SELECT occurrence.id FROM public.daily_repetition_occurrences AS occurrence
+      WHERE occurrence.series_id = v_series_a) IS DISTINCT FROM v_snapshot.occurrence_id_after_stop
+    OR (SELECT occurrence.task_id FROM public.daily_repetition_occurrences AS occurrence
+      WHERE occurrence.series_id = v_series_a) IS DISTINCT FROM v_snapshot.occurrence_task_id_after_stop
+    OR (SELECT occurrence.occurrence_on FROM public.daily_repetition_occurrences AS occurrence
+      WHERE occurrence.series_id = v_series_a) IS DISTINCT FROM v_snapshot.occurrence_on_after_stop
+    OR (SELECT occurrence.state FROM public.daily_repetition_occurrences AS occurrence
+      WHERE occurrence.series_id = v_series_a) IS DISTINCT FROM 'transferred'
+    OR (SELECT occurrence.transferred_to_series_id
+      FROM public.daily_repetition_occurrences AS occurrence
+      WHERE occurrence.series_id = v_series_a) IS DISTINCT FROM v_series_b
+    OR (SELECT occurrence.due_on_override FROM public.daily_repetition_occurrences AS occurrence
+      WHERE occurrence.series_id = v_series_a) IS DISTINCT FROM v_snapshot.occurrence_override_after_stop
+    OR (SELECT occurrence.created_at FROM public.daily_repetition_occurrences AS occurrence
+      WHERE occurrence.series_id = v_series_a) IS DISTINCT FROM v_snapshot.occurrence_created_at_after_stop
+    OR (SELECT occurrence.task_id FROM public.daily_repetition_occurrences AS occurrence
+      WHERE occurrence.series_id = v_series_b) IS DISTINCT FROM v_ref.task_id
+    OR (SELECT occurrence.occurrence_on FROM public.daily_repetition_occurrences AS occurrence
+      WHERE occurrence.series_id = v_series_b) IS DISTINCT FROM '2026-11-06'::date
+    OR (SELECT occurrence.state FROM public.daily_repetition_occurrences AS occurrence
+      WHERE occurrence.series_id = v_series_b) IS DISTINCT FROM 'current' THEN
+    RAISE EXCEPTION 'C112 transfer changed source history or failed to preserve the new first occurrence';
+  END IF;
+END;
+$$;
 
 BEGIN;
 SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);

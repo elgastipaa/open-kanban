@@ -4,7 +4,7 @@
 
 **Base fija:** `db5d3490163cc8f71c577b015c8f6705b57060d9`.
 **Commit de código candidato:** `8044c08c6079ec78a76a13bf736a4dce027b26ba` (`fix: preview description links in task detail (#39)`).
-**Estado:** implementación local aislada en `codex/issue-39`; no integrada ni publicada. El issue permanece abierto; se conservaron las aristas `Blocked by #15/#16` y no se tocó PR #54, que sigue en borrador.
+**Estado:** código final `8044c08c6079ec78a76a13bf736a4dce027b26ba`; reviews Spec/Standards dieron PASS sobre el árbol `91607d24efb2d7e0697449c963076959c82e6784`. La actualización posterior es solo documental y no cambia código. Sigue aislado en `codex/issue-39`, sin integración ni publicación. El issue permanece abierto; se conservaron las aristas `Blocked by #15/#16` y PR #54 sigue en borrador.
 
 ## Alcance implementado
 
@@ -43,7 +43,7 @@ Entorno de desarrollo local Windows/PowerShell, Node `v24.14.1`, pnpm `11.25.0`,
 
 ## Gates pendientes
 
-- Revisión fresca de normas/spec sobre el commit candidato; esta implementación no incluye revisión final.
+- Reviews finales Spec y Standards: PASS sobre el código `91607d24efb2d7e0697449c963076959c82e6784`; el commit posterior de evidencia solo registra la vista previa y el resultado de esas revisiones, sin cambios de código.
 - Prueba manual en navegador con teclado, clic en tarjeta y enlace, vista móvil y lector de pantalla; QA humana pendiente.
 - No se probó Auth real ni navegación externa desde una sesión real. Esos recorridos no se infieren de los tests sintéticos.
 - No se actualizó ni cerró el issue y no se integró/publicó el commit. Los estados de #15/#16 y PR #54 no se modificaron.

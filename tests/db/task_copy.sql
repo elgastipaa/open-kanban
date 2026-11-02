@@ -112,6 +112,7 @@ DECLARE
   v_trash_task_id uuid;
   v_birthday_id uuid;
   v_preview jsonb;
+  v_historical_preview jsonb;
   v_changed jsonb;
   v_copy jsonb;
   v_replay jsonb;
@@ -185,6 +186,45 @@ BEGIN
   v_preview := public.preview_task_copy_p(
     v_board.slug, (v_created->'task'->>'id')::uuid
   );
+  v_historical_preview := public.preview_historical_task_copy_p(
+    v_board.slug, (v_created->'task'->>'id')::uuid
+  );
+  IF pg_catalog.to_regprocedure(
+      'public.task_copy_preview_internal_p(uuid,uuid,uuid)'
+    ) IS NULL
+    OR pg_catalog.to_regprocedure(
+      'public.historical_task_copy_preview_internal_p(uuid,uuid,uuid)'
+    ) IS NULL
+    OR has_function_privilege(
+      'authenticated',
+      'public.task_copy_preview_internal_p(uuid,uuid,uuid)', 'EXECUTE'
+    )
+    OR has_function_privilege(
+      'anon',
+      'public.task_copy_preview_internal_p(uuid,uuid,uuid)', 'EXECUTE'
+    )
+    OR has_function_privilege(
+      'service_role',
+      'public.task_copy_preview_internal_p(uuid,uuid,uuid)', 'EXECUTE'
+    )
+    OR has_function_privilege(
+      'authenticated',
+      'public.historical_task_copy_preview_internal_p(uuid,uuid,uuid)', 'EXECUTE'
+    )
+    OR has_function_privilege(
+      'anon',
+      'public.historical_task_copy_preview_internal_p(uuid,uuid,uuid)', 'EXECUTE'
+    )
+    OR has_function_privilege(
+      'service_role',
+      'public.historical_task_copy_preview_internal_p(uuid,uuid,uuid)', 'EXECUTE'
+    )
+    OR v_historical_preview->>'status' IS DISTINCT FROM 'available'
+    OR v_historical_preview->>'source_hash' IS DISTINCT FROM v_preview->>'source_hash'
+    OR v_historical_preview->>'title' IS DISTINCT FROM v_preview->>'title' THEN
+    RAISE EXCEPTION 'The authenticated historical wrapper must delegate to the private general preview helper: % / %',
+      v_preview, v_historical_preview;
+  END IF;
   IF v_preview->>'status' IS DISTINCT FROM 'available'
     OR v_preview->>'title' IS DISTINCT FROM 'Fuente pendiente'
     OR v_preview->>'description' IS DISTINCT FROM 'Descripción fuente'

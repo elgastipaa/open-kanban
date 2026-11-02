@@ -21,6 +21,10 @@
 
 El source hash contiene título, descripción, prioridad, pasos y las IDs/nombres de etiquetas activas. No incluye asignación, fecha, serie ni conversación. La creación y la aplicación de etiquetas ocurren en una transacción y bajo el lock del tablero; un fallo de la asignación revierte también la tarea/receipt.
 
+## Corrección de revisión: preview interno neutral
+
+La migración `057_task_copy.sql` usa `task_copy_preview_internal_p` como helper privado común, porque atiende tanto fuentes vigentes como históricas. Conserva `historical_task_copy_preview_internal_p` como wrapper privado de compatibilidad para las rutas históricas preexistentes; el wrapper delega al helper común. Ambos tienen `EXECUTE` revocado de `PUBLIC`, `anon`, `authenticated` y `service_role`. `tests/db/task_copy.sql` verifica el wrapper histórico y el preview puntual: ambos entregan el mismo hash y título disponibles; `authenticated`, `anon` y `service_role` no pueden ejecutar ninguno de los helpers.
+
 ## Verificaciones reproducibles
 
 | Comando | Resultado |
@@ -36,6 +40,8 @@ El source hash contiene título, descripción, prioridad, pasos y las IDs/nombre
 | `pnpm exec biome check --formatter-enabled=false` | PASS, 223 archivos revisados. |
 | `bash -n scripts/test-db.sh scripts/test-db-issue-32.sh scripts/test-db-issue-32-race.sh` | PASS. |
 | `git diff --check` | PASS. |
+
+Tras esa corrección se repitieron `pnpm test:db:issue-32` y `pnpm test:db:issue-27` (PASS, exit 0), y la suite completa `pnpm test:db` (PASS, exit 0; migraciones 001–057). También se repitió `pnpm test:unit` (214/214), seguido secuencialmente por `pnpm exec next typegen` y `pnpm typecheck` (ambos exit 0). La migración cambia solo SQL; el build y Biome ya habían pasado sobre el mismo código de aplicación antes de esta corrección.
 
 La migración se comprobó desde una base PostgreSQL temporal recién creada; no hubo consultas SQL remotas.
 

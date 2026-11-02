@@ -3,7 +3,7 @@ BEGIN;
 -- E04 copies are available from any current task the member may access,
 -- including a pending task. Historical sources continue to use the same
 -- current task/occurrence authorization path; deleted sources stay unavailable.
-CREATE OR REPLACE FUNCTION public.historical_task_copy_preview_internal_p(
+CREATE OR REPLACE FUNCTION public.task_copy_preview_internal_p(
   p_board_id uuid,
   p_generation_id uuid,
   p_task_id uuid
@@ -107,6 +107,28 @@ BEGIN
   );
 END;
 $$;
+REVOKE ALL ON FUNCTION public.task_copy_preview_internal_p(uuid, uuid, uuid)
+  FROM PUBLIC, anon, authenticated, service_role;
+
+-- Keep the original internal entry point for the legacy historical wrapper
+-- and copy implementation, but route it through the general task preview.
+CREATE OR REPLACE FUNCTION public.historical_task_copy_preview_internal_p(
+  p_board_id uuid,
+  p_generation_id uuid,
+  p_task_id uuid
+)
+RETURNS jsonb
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = pg_catalog, public, pg_temp
+AS $$
+  SELECT public.task_copy_preview_internal_p(
+    p_board_id, p_generation_id, p_task_id
+  );
+$$;
+REVOKE ALL ON FUNCTION public.historical_task_copy_preview_internal_p(
+  uuid, uuid, uuid
+) FROM PUBLIC, anon, authenticated, service_role;
 
 CREATE FUNCTION public.preview_task_copy_p(
   p_slug text,

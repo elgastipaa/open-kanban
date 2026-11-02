@@ -1,5 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
+  parseTaskNotificationBatchCheckResult,
+  type TaskNotificationBatchCheckResult,
+} from "@/lib/task-notification-batch-state";
+import {
   parseTaskNotificationPage,
   parseTaskNotificationTarget,
   type TaskNotificationCursor,
@@ -14,6 +18,76 @@ export class TaskNotificationError extends Error {
     super("No se pudieron cargar las novedades.");
     this.name = "TaskNotificationError";
   }
+}
+
+export class TaskNotificationBatchError extends Error {
+  constructor() {
+    super("No se pudo confirmar el lote de novedades.");
+    this.name = "TaskNotificationBatchError";
+  }
+}
+
+const notificationIdPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function validateBatch(operationId: string, notificationIds: string[]): void {
+  if (
+    !notificationIdPattern.test(operationId) ||
+    notificationIds.length < 1 ||
+    notificationIds.length > 100 ||
+    notificationIds.some((id) => !notificationIdPattern.test(id)) ||
+    new Set(notificationIds).size !== notificationIds.length
+  ) {
+    throw new TaskNotificationBatchError();
+  }
+}
+
+function parseBatchResponse(
+  data: unknown,
+  operationId: string,
+  notificationIds: string[],
+): TaskNotificationBatchCheckResult {
+  const result = parseTaskNotificationBatchCheckResult(
+    data,
+    operationId,
+    notificationIds,
+  );
+  if (!result) throw new TaskNotificationBatchError();
+  return result;
+}
+
+export async function markMyTaskNotificationsBatch(
+  supabase: SupabaseClient,
+  operationId: string,
+  notificationIds: string[],
+  retryFailed = false,
+): Promise<TaskNotificationBatchCheckResult> {
+  validateBatch(operationId, notificationIds);
+  if (typeof retryFailed !== "boolean") throw new TaskNotificationBatchError();
+  const { data, error } = await supabase.rpc(
+    "mark_my_task_notifications_batch_p",
+    {
+      p_operation_id: operationId,
+      p_notification_ids: notificationIds,
+      p_retry_failed: retryFailed,
+    },
+  );
+  if (error) throw new TaskNotificationBatchError();
+  return parseBatchResponse(data, operationId, notificationIds);
+}
+
+export async function getMyTaskNotificationBatch(
+  supabase: SupabaseClient,
+  operationId: string,
+  notificationIds: string[],
+): Promise<TaskNotificationBatchCheckResult> {
+  validateBatch(operationId, notificationIds);
+  const { data, error } = await supabase.rpc(
+    "get_my_task_notification_batch_p",
+    { p_operation_id: operationId },
+  );
+  if (error) throw new TaskNotificationBatchError();
+  return parseBatchResponse(data, operationId, notificationIds);
 }
 
 export async function listMyTaskNotifications(

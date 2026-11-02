@@ -337,6 +337,12 @@ if [[ "${TEST_DB_FOCUS:-}" == 'issue37' ]]; then
   printf 'Issue #37 database regression tests passed (disposable PostgreSQL).\n'
   exit 0
 fi
+if [[ "${TEST_DB_FOCUS:-}" == 'issue38' ]]; then
+  "${psql[@]}" -f "$repo_dir/tests/db/task_notifications.sql" \
+    -f "$repo_dir/tests/db/task_notification_batches.sql"
+  printf 'Issue #38 database regression tests passed (disposable PostgreSQL).\n'
+  exit 0
+fi
 "${psql[@]}" -f "$repo_dir/tests/db/closed_access.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/authentication.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/realtime_epoch.sql"
@@ -3163,5 +3169,6 @@ bash "$repo_dir/scripts/test-db-issue-32-race.sh" \
   "$pg_bin/psql" "$test_dir" 55439 "$test_dir/issue32-copy-race"
 "${psql[@]}" -f "$repo_dir/tests/db/unified_search.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/task_activity.sql"
-"${psql[@]}" -f "$repo_dir/tests/db/task_notifications.sql"
+"${psql[@]}" -f "$repo_dir/tests/db/task_notifications.sql" \
+  -f "$repo_dir/tests/db/task_notification_batches.sql"
 printf 'Database regression tests passed (disposable PostgreSQL).\n'

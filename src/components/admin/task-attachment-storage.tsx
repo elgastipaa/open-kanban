@@ -5,23 +5,14 @@ import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
+  type AdminTaskAttachmentStorageSummary,
+  parseAdminTaskAttachmentStorageSummary,
+} from "@/lib/admin-task-attachment-storage-summary";
+import {
   type AdminTaskAttachmentCleanupCandidate as CleanupCandidate,
   parseAdminTaskAttachmentCleanupCandidate,
 } from "@/lib/task-attachment-admin-candidate";
 import { generateUUID } from "@/lib/utils";
-
-interface StorageSummary {
-  limit_bytes: number;
-  used_bytes: number;
-  active_bytes: number;
-  recoverable_bytes: number;
-  reserved_bytes: number;
-  pending_bytes: number;
-  active_count: number;
-  recoverable_count: number;
-  reserved_count: number;
-  pending_count: number;
-}
 
 interface CleanupCursor {
   created_at: string;
@@ -29,7 +20,7 @@ interface CleanupCursor {
 }
 
 interface AdminAttachmentPage {
-  summary: StorageSummary;
+  summary: AdminTaskAttachmentStorageSummary;
   items: CleanupCandidate[];
   hasMore: boolean;
   nextCursor: CleanupCursor | null;
@@ -43,40 +34,6 @@ type AdminAction = {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isSafeCount(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value);
-}
-
-function parseSummary(value: unknown): StorageSummary | null {
-  if (!isRecord(value) || value.status !== "ok") return null;
-  if (
-    !isSafeCount(value.limit_bytes) ||
-    !isSafeCount(value.used_bytes) ||
-    !isSafeCount(value.active_bytes) ||
-    !isSafeCount(value.recoverable_bytes) ||
-    !isSafeCount(value.reserved_bytes) ||
-    !isSafeCount(value.pending_bytes) ||
-    !isSafeCount(value.active_count) ||
-    !isSafeCount(value.recoverable_count) ||
-    !isSafeCount(value.reserved_count) ||
-    !isSafeCount(value.pending_count)
-  ) {
-    return null;
-  }
-  return {
-    limit_bytes: value.limit_bytes,
-    used_bytes: value.used_bytes,
-    active_bytes: value.active_bytes,
-    recoverable_bytes: value.recoverable_bytes,
-    reserved_bytes: value.reserved_bytes,
-    pending_bytes: value.pending_bytes,
-    active_count: value.active_count,
-    recoverable_count: value.recoverable_count,
-    reserved_count: value.reserved_count,
-    pending_count: value.pending_count,
-  };
 }
 
 function parseCursor(value: unknown): CleanupCursor | null {
@@ -95,7 +52,7 @@ function parseCursor(value: unknown): CleanupCursor | null {
 
 function parsePage(value: unknown): AdminAttachmentPage | null {
   if (!isRecord(value) || value.status !== "ok") return null;
-  const summary = parseSummary(value.summary);
+  const summary = parseAdminTaskAttachmentStorageSummary(value.summary);
   const items = Array.isArray(value.items)
     ? value.items.map(parseAdminTaskAttachmentCleanupCandidate)
     : null;
@@ -152,7 +109,8 @@ function candidateState(item: CleanupCandidate): string {
 }
 
 export function AdminTaskAttachmentStorage() {
-  const [summary, setSummary] = useState<StorageSummary | null>(null);
+  const [summary, setSummary] =
+    useState<AdminTaskAttachmentStorageSummary | null>(null);
   const [items, setItems] = useState<CleanupCandidate[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [nextCursor, setNextCursor] = useState<CleanupCursor | null>(null);
@@ -324,7 +282,7 @@ export function AdminTaskAttachmentStorage() {
         </output>
       ) : summary ? (
         <>
-          <dl className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <dl className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
             <div className="rounded-lg border border-border bg-surface-raised p-4">
               <dt className="text-text-muted text-xs">Uso global</dt>
               <dd className="mt-1 font-semibold text-text-primary">
@@ -347,14 +305,17 @@ export function AdminTaskAttachmentStorage() {
               </dd>
             </div>
             <div className="rounded-lg border border-border bg-surface-raised p-4">
-              <dt className="text-text-muted text-xs">
-                Reservas y limpieza pendiente
-              </dt>
+              <dt className="text-text-muted text-xs">Reservas</dt>
               <dd className="mt-1 font-semibold text-text-primary">
-                {formatDecimalMegabytes(
-                  summary.reserved_bytes + summary.pending_bytes,
-                )}{" "}
-                · {summary.reserved_count + summary.pending_count}
+                {formatDecimalMegabytes(summary.reserved_bytes)} ·{" "}
+                {summary.reserved_count}
+              </dd>
+            </div>
+            <div className="rounded-lg border border-border bg-surface-raised p-4">
+              <dt className="text-text-muted text-xs">Limpieza pendiente</dt>
+              <dd className="mt-1 font-semibold text-text-primary">
+                {formatDecimalMegabytes(summary.pending_bytes)} ·{" "}
+                {summary.pending_count}
               </dd>
             </div>
           </dl>

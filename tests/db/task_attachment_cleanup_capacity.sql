@@ -454,3 +454,87 @@ END;
 $$;
 
 \echo 'PASS: the attachment quota ledger trigger creates personal threshold notices immediately on a real ledger crossing.'
+
+\echo 'Testing the privacy-minimal global admin capacity breakdown'
+
+BEGIN;
+DO $$
+DECLARE
+  v_fixture issue41_attachment_fixture%ROWTYPE;
+  v_admin uuid := '74100000-0000-4000-8000-000000000003';
+  v_non_admin uuid := '74100000-0000-4000-8000-000000000001';
+  v_before jsonb;
+  v_after jsonb;
+  v_denied jsonb;
+  v_now timestamptz := pg_catalog.clock_timestamp();
+  v_keys text[];
+BEGIN
+  SELECT * INTO STRICT v_fixture FROM issue41_attachment_fixture;
+  v_before := public.admin_task_attachment_storage_summary_p(v_admin);
+  IF v_before->>'status' IS DISTINCT FROM 'ok' THEN
+    RAISE EXCEPTION 'An enabled admin could not read the aggregate storage summary: %', v_before;
+  END IF;
+
+  INSERT INTO public.task_attachments(
+    id, board_id, task_id, uploaded_by, upload_operation_id, file_name,
+    size_bytes, sha256, object_key, state, reservation_expires_at,
+    deleted_at, deleted_by, deletion_cause, expires_at
+  ) VALUES
+    (
+      '77100000-0000-4000-8000-000000000010', v_fixture.board_id, v_fixture.task_id,
+      '74100000-0000-4000-8000-000000000001', '78100000-0000-4000-8000-000000000010',
+      'capacity-active.md', 7, decode(repeat('c', 64), 'hex'),
+      'attachments/issue41-capacity-active', 'active', NULL, NULL, NULL, NULL, NULL
+    ),
+    (
+      '77100000-0000-4000-8000-000000000011', v_fixture.board_id, v_fixture.task_id,
+      '74100000-0000-4000-8000-000000000001', '78100000-0000-4000-8000-000000000011',
+      'capacity-recoverable.md', 11, decode(repeat('d', 64), 'hex'),
+      'attachments/issue41-capacity-recoverable', 'recoverable', NULL,
+      v_now, '74100000-0000-4000-8000-000000000001', 'admin_cleanup', v_now + interval '168 hours'
+    ),
+    (
+      '77100000-0000-4000-8000-000000000012', v_fixture.board_id, v_fixture.task_id,
+      '74100000-0000-4000-8000-000000000001', '78100000-0000-4000-8000-000000000012',
+      'capacity-reserved.md', 13, decode(repeat('e', 64), 'hex'),
+      'attachments/issue41-capacity-reserved', 'reserved', v_now + interval '15 minutes',
+      NULL, NULL, NULL, NULL
+    ),
+    (
+      '77100000-0000-4000-8000-000000000013', v_fixture.board_id, v_fixture.task_id,
+      '74100000-0000-4000-8000-000000000001', '78100000-0000-4000-8000-000000000013',
+      'capacity-pending.md', 17, decode(repeat('f', 64), 'hex'),
+      'attachments/issue41-capacity-pending', 'missing', NULL, NULL, NULL, NULL, NULL
+    );
+
+  v_after := public.admin_task_attachment_storage_summary_p(v_admin);
+  SELECT pg_catalog.array_agg(key ORDER BY key) INTO v_keys
+  FROM pg_catalog.jsonb_object_keys(v_after) AS keys(key);
+  IF v_after->>'status' IS DISTINCT FROM 'ok'
+    OR (v_after->>'active_bytes')::bigint - (v_before->>'active_bytes')::bigint <> 7
+    OR (v_after->>'recoverable_bytes')::bigint - (v_before->>'recoverable_bytes')::bigint <> 11
+    OR (v_after->>'reserved_bytes')::bigint - (v_before->>'reserved_bytes')::bigint <> 13
+    OR (v_after->>'pending_bytes')::bigint - (v_before->>'pending_bytes')::bigint <> 17
+    OR (v_after->>'active_count')::bigint - (v_before->>'active_count')::bigint <> 1
+    OR (v_after->>'recoverable_count')::bigint - (v_before->>'recoverable_count')::bigint <> 1
+    OR (v_after->>'reserved_count')::bigint - (v_before->>'reserved_count')::bigint <> 1
+    OR (v_after->>'pending_count')::bigint - (v_before->>'pending_count')::bigint <> 1
+    OR (v_after->>'used_bytes')::bigint - (v_before->>'used_bytes')::bigint <> 48
+    OR v_keys IS DISTINCT FROM ARRAY[
+      'active_bytes', 'active_count', 'limit_bytes', 'pending_bytes', 'pending_count',
+      'recoverable_bytes', 'recoverable_count', 'reserved_bytes', 'reserved_count',
+      'status', 'used_bytes'
+    ]::text[] THEN
+    RAISE EXCEPTION 'The admin summary did not keep global states separate and metadata-minimal: before %, after %, keys %',
+      v_before, v_after, v_keys;
+  END IF;
+
+  v_denied := public.admin_task_attachment_storage_summary_p(v_non_admin);
+  IF v_denied->>'status' IS DISTINCT FROM 'unavailable' OR v_denied ? 'used_bytes' THEN
+    RAISE EXCEPTION 'A non-admin received aggregate global storage metadata: %', v_denied;
+  END IF;
+END;
+$$;
+COMMIT;
+
+\echo 'PASS: global active, recoverable, reserved, and pending capacity stay distinct and aggregate-only for admins.'

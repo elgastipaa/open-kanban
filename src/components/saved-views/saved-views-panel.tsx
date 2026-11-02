@@ -25,6 +25,7 @@ import {
 interface SavedViewsPanelProps {
   context: SavedViewContext;
   currentDefinition: SavedViewDefinition;
+  canEditCurrentDefinition?: boolean;
   initialSnapshot: SavedViewsSnapshot;
   onApply: (
     definition: SavedViewDefinition,
@@ -88,6 +89,7 @@ function replaceView(views: SavedView[], next: SavedView): SavedView[] {
 export function SavedViewsPanel({
   context,
   currentDefinition,
+  canEditCurrentDefinition = true,
   initialSnapshot,
   onApply,
 }: SavedViewsPanelProps) {
@@ -156,10 +158,9 @@ export function SavedViewsPanel({
     () => deletedViews.find((view) => view.id === deletedId) ?? null,
     [deletedId, deletedViews],
   );
-  const currentDefinitionValid = isSavedViewDefinition(
-    context,
-    currentDefinition,
-  );
+  const currentDefinitionValid =
+    canEditCurrentDefinition &&
+    isSavedViewDefinition(context, currentDefinition);
 
   useEffect(() => {
     if (initialSnapshot.status === "available") {

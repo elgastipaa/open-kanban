@@ -265,6 +265,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
       : undefined;
   return (
     <UnifiedSearchClient
+      key={authData.user.id}
       accountId={authData.user.id}
       boards={boards}
       assignees={assignees}

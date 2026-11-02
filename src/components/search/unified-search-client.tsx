@@ -263,6 +263,10 @@ export function UnifiedSearchClient({
     null,
   );
   const [message, setMessage] = useState("");
+  const [pendingBoardScopeReview, setPendingBoardScopeReview] = useState<{
+    definition: SavedViewDefinition;
+    invalidReferences: SavedViewReferenceField[];
+  } | null>(null);
   const [accessUnavailable, setAccessUnavailable] = useState(false);
   const [scopeUnavailable, setScopeUnavailable] = useState(
     initialScopeUnavailable,
@@ -307,7 +311,8 @@ export function UnifiedSearchClient({
     );
   }
   function preferenceControlProps(key: string) {
-    const disabled = isPreferenceBlocked(key);
+    const disabled =
+      Boolean(pendingBoardScopeReview) || isPreferenceBlocked(key);
     return {
       disabled,
       "aria-busy": isPreferenceSaving(key),
@@ -397,6 +402,7 @@ export function UnifiedSearchClient({
   useEffect(() => {
     if (!viewPreferences.state.accessLost) return;
     requestId.current += 1;
+    setPendingBoardScopeReview(null);
     setResults([]);
     setHasMore(false);
     setNextCursor(null);
@@ -414,7 +420,12 @@ export function UnifiedSearchClient({
     const currentRequestId = requestId.current;
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
-      if (accessUnavailable || scopeUnavailable || viewPreferences.isLoading) {
+      if (
+        accessUnavailable ||
+        scopeUnavailable ||
+        pendingBoardScopeReview ||
+        viewPreferences.isLoading
+      ) {
         setLoading(false);
         return;
       }
@@ -466,6 +477,7 @@ export function UnifiedSearchClient({
           return;
         }
         if (data.status === "unavailable") {
+          setPendingBoardScopeReview(null);
           setResults([]);
           setHasMore(false);
           setNextCursor(null);
@@ -522,6 +534,7 @@ export function UnifiedSearchClient({
     accessUnavailable,
     accountId,
     pageCursor,
+    pendingBoardScopeReview,
     refreshNonce,
     scopeUnavailable,
     state,
@@ -632,11 +645,21 @@ export function UnifiedSearchClient({
       definition.scope === "board"
         ? boards.find((board) => board.id === definition.boardId)
         : null;
-    const scope: UnifiedSearchScope =
+    const boardScopeNeedsReplacement =
       definition.scope === "board" &&
-      (!requestedBoard || invalidReferences.includes("boardId"))
-        ? "all"
-        : definition.scope;
+      (!requestedBoard || invalidReferences.includes("boardId"));
+    if (boardScopeNeedsReplacement) {
+      setPendingBoardScopeReview({ definition, invalidReferences });
+      setResults([]);
+      setHasMore(false);
+      setNextCursor(null);
+      setPageCursor(null);
+      setMessage(
+        "El tablero de esta vista ya no está disponible. Elige un tablero específico y accesible en «Buscar en» para reemplazar su alcance; la búsqueda no se ampliará mientras tanto. La consulta y los filtros quedan pausados hasta resolver o cancelar la revisión.",
+      );
+      return;
+    }
+    const scope: UnifiedSearchScope = definition.scope;
     const boardSlug = scope === "board" ? (requestedBoard?.slug ?? null) : null;
     const nextPreferenceContext: ViewPreferenceContext =
       scope === "my_tasks"
@@ -684,6 +707,9 @@ export function UnifiedSearchClient({
           }),
       order: definition.order,
     });
+    setPendingBoardScopeReview(null);
+    setScopeUnavailable(false);
+    setMessage("");
   }
 
   function toggleLabel(result: UnifiedSearchResult) {
@@ -780,6 +806,7 @@ export function UnifiedSearchClient({
         key={accountId}
         context="search"
         currentDefinition={currentSavedViewDefinition}
+        canEditCurrentDefinition={!pendingBoardScopeReview}
         initialSnapshot={initialSavedViews}
         onApply={applySavedView}
       />
@@ -798,7 +825,7 @@ export function UnifiedSearchClient({
             Ir al inicio
           </Link>
         </section>
-      ) : scopeUnavailable ? (
+      ) : scopeUnavailable && !pendingBoardScopeReview ? (
         <section className="rounded-2xl border border-border bg-surface-raised p-6">
           <h2 className="font-semibold text-lg">Tablero no disponible</h2>
           <p className="mt-2 text-sm text-text-secondary">
@@ -840,6 +867,7 @@ export function UnifiedSearchClient({
                 type="search"
                 maxLength={200}
                 value={state.query}
+                disabled={Boolean(pendingBoardScopeReview)}
                 onChange={(event) => updateState({ query: event.target.value })}
                 placeholder="Tarea, comentario o tablero"
                 className="min-h-12 w-full bg-transparent text-sm outline-none placeholder:text-text-muted"
@@ -847,6 +875,7 @@ export function UnifiedSearchClient({
               {state.query ? (
                 <button
                   type="button"
+                  disabled={Boolean(pendingBoardScopeReview)}
                   onClick={() => updateState({ query: "" })}
                   aria-label="Borrar consulta"
                   className="rounded p-1 text-text-secondary hover:bg-surface-hover"
@@ -870,6 +899,27 @@ export function UnifiedSearchClient({
                   : state.scope
               }
               onChange={(event) => {
+                if (pendingBoardScopeReview) {
+                  if (event.target.value.startsWith("board:")) {
+                    const replacementBoard = boards.find(
+                      (board) =>
+                        board.slug ===
+                        event.target.value.slice("board:".length),
+                    );
+                    if (!replacementBoard) return;
+                    const { definition, invalidReferences } =
+                      pendingBoardScopeReview;
+                    void applySavedView(
+                      { ...definition, boardId: replacementBoard.id },
+                      invalidReferences.filter((field) => field !== "boardId"),
+                    );
+                    return;
+                  }
+                  setMessage(
+                    "Para conservar el alcance limitado, elige un tablero específico y accesible.",
+                  );
+                  return;
+                }
                 if (
                   event.target.value === "all" ||
                   event.target.value === "my_tasks"
@@ -934,7 +984,10 @@ export function UnifiedSearchClient({
               </p>
             ) : null}
 
-            <fieldset className="mt-5 space-y-2 border-0 p-0">
+            <fieldset
+              disabled={Boolean(pendingBoardScopeReview)}
+              className="mt-5 space-y-2 border-0 p-0"
+            >
               <legend className="mb-2 font-medium text-sm">Incluir</legend>
               <label className="flex items-center gap-2 text-sm">
                 <input
@@ -1116,7 +1169,10 @@ export function UnifiedSearchClient({
                 <button
                   type="button"
                   onClick={viewPreferences.resetPreferences}
-                  disabled={viewPreferences.state.accessLost}
+                  disabled={
+                    viewPreferences.state.accessLost ||
+                    Boolean(pendingBoardScopeReview)
+                  }
                   className="rounded-lg border border-border px-3 py-2 text-sm text-text-secondary hover:bg-surface-hover disabled:opacity-50"
                 >
                   Reiniciar preferencias
@@ -1124,6 +1180,7 @@ export function UnifiedSearchClient({
                 {state.scope !== "all" ? (
                   <button
                     type="button"
+                    disabled={Boolean(pendingBoardScopeReview)}
                     onClick={() => changeScope("all", null)}
                     className="rounded-lg border border-border px-3 py-2 text-sm text-text-secondary hover:bg-surface-hover"
                   >
@@ -1133,6 +1190,7 @@ export function UnifiedSearchClient({
                 <button
                   type="button"
                   disabled={
+                    Boolean(pendingBoardScopeReview) ||
                     isClearBlocked ||
                     (!state.query &&
                       !state.filterBoardId &&
@@ -1152,6 +1210,7 @@ export function UnifiedSearchClient({
                 {state.mode === "suggestions" ? (
                   <button
                     type="button"
+                    disabled={Boolean(pendingBoardScopeReview)}
                     onClick={() => updateState({ mode: "tasks" })}
                     className="rounded-lg bg-accent px-3 py-2 font-medium text-accent-foreground text-sm hover:bg-accent-hover"
                   >
@@ -1177,6 +1236,7 @@ export function UnifiedSearchClient({
                     </label>
                     <button
                       type="button"
+                      disabled={Boolean(pendingBoardScopeReview)}
                       onClick={() => updateState({ mode: "suggestions" })}
                       className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-surface-hover"
                     >
@@ -1207,6 +1267,18 @@ export function UnifiedSearchClient({
                 className="mb-3 block rounded-lg border border-border bg-surface-raised px-4 py-3 text-sm text-text-secondary"
               >
                 <span>{message}</span>
+                {pendingBoardScopeReview ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPendingBoardScopeReview(null);
+                      setMessage("");
+                    }}
+                    className="ml-3 underline underline-offset-4"
+                  >
+                    Cancelar revisión
+                  </button>
+                ) : null}
                 {message.startsWith("No se pudo buscar") ? (
                   <button
                     type="button"
@@ -1316,7 +1388,9 @@ export function UnifiedSearchClient({
             {state.mode === "tasks" && hasMore ? (
               <button
                 type="button"
-                disabled={loading || !nextCursor}
+                disabled={
+                  loading || !nextCursor || Boolean(pendingBoardScopeReview)
+                }
                 onClick={() => setPageCursor(nextCursor)}
                 className="mt-3 min-h-11 w-full rounded-lg border border-border px-4 py-2 text-sm hover:bg-surface-hover disabled:opacity-60"
               >

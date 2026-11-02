@@ -9,6 +9,13 @@ const panelSource = await readFile(
   ),
   "utf8",
 );
+const searchSource = await readFile(
+  new URL(
+    "../../src/components/search/unified-search-client.tsx",
+    import.meta.url,
+  ),
+  "utf8",
+);
 
 test("changing the selected view cannot replay the initial server snapshot", () => {
   const snapshotEffect = panelSource.match(
@@ -66,5 +73,56 @@ test("a catalog refresh surfaces newer versions and blocks updates until review"
     panelSource,
     /disabled=\{\s*selectedView\.needs_review\s*\|\|\s*busy\s*\|\|\s*Boolean\(updateConflict\)\s*\}/,
     "applying the selected view must wait for an explicit conflict choice",
+  );
+});
+
+test("reviewing a revoked board scope stays blocked instead of broadening to all boards", () => {
+  const apply = searchSource.match(
+    /async function applySavedView\(([\s\S]*?)\n {2}\}/,
+  );
+
+  assert.ok(apply, "saved search definitions have one application seam");
+  assert.match(
+    apply[1],
+    /boardScopeNeedsReplacement[\s\S]*?setPendingBoardScopeReview\(\{ definition, invalidReferences \}\)[\s\S]*?setResults\(\[\]\)[\s\S]*?return;/,
+    "a revoked board reference must block results and preserve its definition for explicit replacement",
+  );
+  assert.match(
+    searchSource,
+    /pendingBoardScopeReview[\s\S]*?replacementBoard\.id[\s\S]*?invalidReferences\.filter\(\(field\) => field !== "boardId"\)/,
+    "only an explicit accessible-board choice may replace the saved scope",
+  );
+  assert.doesNotMatch(
+    apply[1],
+    /invalidReferences\.includes\("boardId"\)[\s\S]*?\?\s*"all"/,
+    "review must never silently widen a board-only view",
+  );
+});
+
+test("a pending board-scope review exposes the replacement control but pauses searches", () => {
+  assert.match(
+    searchSource,
+    /scopeUnavailable\s*&&\s*!pendingBoardScopeReview/,
+    "the unavailable-board placeholder must not hide the explicit replacement control",
+  );
+  assert.match(
+    searchSource,
+    /accessUnavailable\s*\|\|\s*scopeUnavailable\s*\|\|\s*pendingBoardScopeReview\s*\|\|\s*viewPreferences\.isLoading/,
+    "a saved view must not submit or expose results before its scope is reviewed",
+  );
+  assert.match(
+    searchSource,
+    /id="unified-search-query"[\s\S]*?disabled=\{Boolean\(pendingBoardScopeReview\)\}/,
+    "query editing must wait until the saved scope is explicitly reviewed",
+  );
+  assert.match(
+    searchSource,
+    /const disabled =\s*Boolean\(pendingBoardScopeReview\)\s*\|\|\s*isPreferenceBlocked\(key\)/,
+    "filter and preference controls must pause with the query",
+  );
+  assert.match(
+    searchSource,
+    /disabled=\{Boolean\(pendingBoardScopeReview\)\}[\s\S]*?onClick=\{\(\) => changeScope\("all", null\)\}/,
+    "the direct widen-to-all action must not bypass pending review",
   );
 });

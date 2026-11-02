@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { CopyOccurrenceLinkAction } from "@/components/series/copy-occurrence-link-action";
 import { HistoricalTaskCopyAction } from "@/components/series/historical-task-copy-action";
 import { StopSeriesButton } from "@/components/series/stop-series-button";
 import { Logo } from "@/components/ui/logo";
@@ -16,7 +17,10 @@ import {
   type RepetitionSeriesListItem,
 } from "@/lib/db/repetition-series";
 import { repetitionPatternSummary } from "@/lib/repetition-pattern";
-import { buildSeriesTaskEditorHref } from "@/lib/repetition-series-navigation";
+import {
+  buildRepetitionOccurrenceHref,
+  buildSeriesTaskEditorHref,
+} from "@/lib/repetition-series-navigation";
 import { createClient } from "@/lib/supabase/server";
 import type { Board, Column, TaskComment } from "@/lib/types";
 
@@ -295,6 +299,20 @@ export default async function SeriesPage({ searchParams }: SeriesPageProps) {
 
   const selectedHistorySeries = history?.series;
   const selectedOccurrence = occurrenceDetail?.occurrence;
+  const selectedCommentForLink =
+    selectedCommentId &&
+    historyComments.some((comment) => comment.id === selectedCommentId)
+      ? selectedCommentId
+      : null;
+  const selectedOccurrenceHref =
+    selectedHistorySeries && selectedOccurrence
+      ? buildRepetitionOccurrenceHref({
+          boardId: selectedHistorySeries.board_id,
+          seriesId: selectedHistorySeries.id,
+          occurrenceId: selectedOccurrence.id,
+          commentId: selectedCommentForLink,
+        })
+      : null;
   const currentOccurrence = history?.occurrences.find(
     (occurrence) => occurrence.state === "current" && occurrence.task_id,
   );
@@ -619,6 +637,11 @@ export default async function SeriesPage({ searchParams }: SeriesPageProps) {
                         {formatDate(selectedOccurrence.occurrence_on)} ·{" "}
                         {occurrenceLabel(selectedOccurrence)}
                       </p>
+                      {selectedOccurrenceHref ? (
+                        <CopyOccurrenceLinkAction
+                          href={selectedOccurrenceHref}
+                        />
+                      ) : null}
                       {selectedOccurrence.content_available &&
                       selectedOccurrence.task ? (
                         <>

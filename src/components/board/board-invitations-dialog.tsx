@@ -3,6 +3,7 @@
 import { IconLink, IconRefresh, IconUserPlus } from "@tabler/icons-react";
 import { useCallback, useEffect, useState } from "react";
 import { Modal } from "@/components/ui/modal";
+import { copyLinkToClipboard } from "@/lib/copy-link-clipboard";
 import type { BoardInvitation } from "@/lib/db/invitations";
 import {
   createDirectInvitation,
@@ -161,14 +162,14 @@ export function BoardInvitationsDialog({
 
   async function copyLink() {
     if (!linkUrl) return;
-    try {
-      await navigator.clipboard.writeText(linkUrl);
-      setLinkMessage("Enlace copiado.");
-    } catch {
-      setLinkMessage(
-        "No se pudo copiar. Selecciona el enlace para copiarlo manualmente.",
-      );
-    }
+    const copied = await copyLinkToClipboard(linkUrl, (text) =>
+      navigator.clipboard.writeText(text),
+    );
+    setLinkMessage(
+      copied
+        ? "Enlace copiado."
+        : "No se pudo copiar. Selecciona el enlace para copiarlo manualmente.",
+    );
   }
 
   async function renew(invitation: BoardInvitation) {

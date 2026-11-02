@@ -33,9 +33,40 @@ export interface SeriesTaskEditorIntent {
   returnHref: string | null;
 }
 
+export interface RepetitionOccurrenceLink {
+  boardId: string;
+  seriesId: string;
+  occurrenceId: string;
+  commentId?: string | null;
+}
+
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const slugPattern = /^[a-z0-9-]{1,100}$/i;
+
+export function buildRepetitionOccurrenceHref({
+  boardId,
+  seriesId,
+  occurrenceId,
+  commentId,
+}: RepetitionOccurrenceLink): string | null {
+  if (
+    !uuidPattern.test(boardId) ||
+    !uuidPattern.test(seriesId) ||
+    !uuidPattern.test(occurrenceId) ||
+    (commentId != null && !uuidPattern.test(commentId))
+  ) {
+    return null;
+  }
+
+  const query = new URLSearchParams({
+    board: boardId,
+    series: seriesId,
+    occurrence: occurrenceId,
+  });
+  if (commentId) query.set("comment", commentId);
+  return `/series?${query.toString()}${commentId ? `#comment-${commentId}` : ""}`;
+}
 
 function isSeriesState(value: string | null): value is RepetitionSeriesState {
   return value === "active" || value === "stopped" || value === "finished";

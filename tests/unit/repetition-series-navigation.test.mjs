@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  buildRepetitionOccurrenceHref,
   buildSeriesTaskEditorHref,
   resolveSeriesTaskEditorIntent,
 } from "../../src/lib/repetition-series-navigation.ts";
@@ -14,6 +15,38 @@ const occurrenceId = "27000000-0000-4000-8000-000000000095";
 const commentId = "27000000-0000-4000-8000-000000000094";
 const historyBeforeOn = "2026-10-26";
 const historyBeforeId = "27000000-0000-4000-8000-000000000093";
+
+test("an occurrence link uses stable private IDs and preserves an anchored comment", () => {
+  const href = buildRepetitionOccurrenceHref({
+    boardId,
+    seriesId,
+    occurrenceId,
+    commentId,
+  });
+  assert.equal(
+    href,
+    `/series?board=${boardId}&series=${seriesId}&occurrence=${occurrenceId}&comment=${commentId}#comment-${commentId}`,
+  );
+  assert.equal(
+    buildRepetitionOccurrenceHref({
+      boardId,
+      seriesId,
+      occurrenceId,
+      commentId: null,
+    }),
+    `/series?board=${boardId}&series=${seriesId}&occurrence=${occurrenceId}`,
+  );
+  assert.equal(
+    buildRepetitionOccurrenceHref({
+      boardId: "not-a-board-id",
+      seriesId,
+      occurrenceId,
+      commentId,
+    }),
+    null,
+  );
+  assert.doesNotMatch(href ?? "", /title|token|invite/i);
+});
 
 test("an accessible series opens the existing task editor and returns to its filtered list", () => {
   const href = buildSeriesTaskEditorHref({

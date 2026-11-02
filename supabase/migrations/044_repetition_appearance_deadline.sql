@@ -446,4 +446,3 @@ END;
 $$;
 REVOKE ALL ON FUNCTION public.guard_daily_occurrence_due_on_tg()
   FROM PUBLIC, anon, authenticated, service_role;
-

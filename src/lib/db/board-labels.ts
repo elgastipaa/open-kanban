@@ -46,6 +46,13 @@ export interface BoardLabelMutationResult {
   labels?: BoardLabel[];
 }
 
+export class BoardLabelsUnavailableError extends Error {
+  constructor() {
+    super("El catálogo de etiquetas no está disponible con el acceso actual.");
+    this.name = "BoardLabelsUnavailableError";
+  }
+}
+
 const palette: readonly BoardLabelColor[] = [
   "red",
   "orange",
@@ -104,6 +111,9 @@ export async function listBoardLabels(
     status: string;
     labels?: unknown;
   }>(supabase, "list_board_labels_p", { p_slug: slug });
+  if (result.status === "unavailable") {
+    throw new BoardLabelsUnavailableError();
+  }
   if (
     result.status !== "available" ||
     !Array.isArray(result.labels) ||

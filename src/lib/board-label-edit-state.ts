@@ -10,6 +10,11 @@ export interface BoardLabelDraft {
 
 export type BoardLabelDrafts = Record<string, BoardLabelDraft>;
 
+export interface BoardLabelDraftConflict {
+  current: BoardLabel;
+  proposal: BoardLabelDraft;
+}
+
 export interface OrphanedBoardLabelDraft {
   slug: string;
   label: BoardLabel;
@@ -21,6 +26,7 @@ export type OrphanedBoardLabelDrafts = Record<string, OrphanedBoardLabelDraft>;
 export interface BoardLabelCatalogEditorState {
   drafts: BoardLabelDrafts;
   orphanedDrafts: OrphanedBoardLabelDrafts;
+  pendingConflicts: Record<string, BoardLabelDraftConflict>;
 }
 
 export function createBoardLabelDraft(label: BoardLabel): BoardLabelDraft {
@@ -82,10 +88,11 @@ export function reconcileBoardLabelCatalogRead(
     | { status: "unavailable" },
 ): BoardLabelCatalogEditorState {
   if (result.status === "unavailable") {
-    return { drafts: {}, orphanedDrafts: {} };
+    return { drafts: {}, orphanedDrafts: {}, pendingConflicts: {} };
   }
 
   const activeIds = new Set(result.labels.map((label) => label.id));
+  const pendingConflicts: Record<string, BoardLabelDraftConflict> = {};
   const orphanedDrafts = Object.fromEntries(
     Object.entries(result.orphanedDrafts).filter(
       ([, orphan]) =>
@@ -96,12 +103,13 @@ export function reconcileBoardLabelCatalogRead(
 
   for (const label of result.labels) {
     const recovered = result.orphanedDrafts[label.id];
-    if (recovered?.slug === result.slug && !drafts[label.id]) {
-      drafts[label.id] = {
-        ...recovered.draft,
-        baseName: label.name,
-        baseColor: label.color,
-        baseVersion: label.version,
+    if (recovered?.slug === result.slug) {
+      pendingConflicts[label.id] = {
+        current: label,
+        proposal:
+          drafts[label.id] && isBoardLabelDraftDirty(drafts[label.id])
+            ? drafts[label.id]
+            : recovered.draft,
       };
     }
   }
@@ -119,5 +127,6 @@ export function reconcileBoardLabelCatalogRead(
   return {
     drafts: reconcileBoardLabelDrafts(result.labels, drafts),
     orphanedDrafts,
+    pendingConflicts,
   };
 }

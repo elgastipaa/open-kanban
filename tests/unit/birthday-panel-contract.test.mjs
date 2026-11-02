@@ -9,6 +9,10 @@ import {
   resolveBoardLabelDraftConflict,
 } from "../../src/lib/board-label-edit-state.ts";
 import { reconcileRestoreSelection } from "../../src/lib/board-label-restore-state.ts";
+import {
+  BoardLabelsUnavailableError,
+  listBoardLabels,
+} from "../../src/lib/db/board-labels.ts";
 
 const panelSource = await readFile(
   new URL("../../src/components/birthdays/birthday-panel.tsx", import.meta.url),
@@ -23,6 +27,10 @@ const labelsDialogSource = await readFile(
     "../../src/components/labels/board-labels-dialog.tsx",
     import.meta.url,
   ),
+  "utf8",
+);
+const boardSource = await readFile(
+  new URL("../../src/components/board/board.tsx", import.meta.url),
   "utf8",
 );
 
@@ -273,57 +281,162 @@ test("authorized refresh retains deleted-label drafts, while lost access clears 
 
   assert.deepEqual(
     reconcileBoardLabelCatalogRead({ status: "unavailable" }),
-    { drafts: {}, orphanedDrafts: {} },
+    { drafts: {}, orphanedDrafts: {}, pendingConflicts: {} },
     "a catalog read that loses authorization clears every private draft",
   );
+});
 
+test("a reappeared label ID requires explicit conflict resolution", () => {
+  const label = {
+    id: "label-one",
+    board_id: "board-one",
+    name: "Etiqueta restaurada por owner",
+    color: "green",
+    version: 4,
+  };
+  const proposal = {
+    name: "Propuesta vieja",
+    color: "red",
+    baseName: "Etiqueta borrada",
+    baseColor: "blue",
+    baseVersion: 3,
+  };
+  const reconciled = reconcileBoardLabelCatalogRead({
+    status: "available",
+    slug: "board-one",
+    labels: [label],
+    previousLabels: [],
+    drafts: {},
+    orphanedDrafts: {
+      "label-one": {
+        slug: "board-one",
+        label: {
+          ...label,
+          name: "Etiqueta borrada",
+          color: "blue",
+          version: 3,
+        },
+        draft: proposal,
+      },
+    },
+  });
+  assert.deepEqual(reconciled.pendingConflicts, {
+    "label-one": { current: label, proposal },
+  });
+  assert.equal(reconciled.drafts["label-one"].name, label.name);
+  assert.deepEqual(reconciled.orphanedDrafts, {});
+  assert.match(
+    labelsDialogSource,
+    /editorState\.pendingConflicts[\s\S]*?setLabelConflicts/,
+  );
+  const saveLabelBody = labelsDialogSource.match(
+    /async function saveLabel\(label: BoardLabel\) \{[\s\S]*?\n {2}\}/,
+  );
+  assert.ok(saveLabelBody);
+  assert.match(
+    saveLabelBody[0],
+    /if \(!draft \|\| labelConflicts\[label\.id\] \|\| loading\) return/,
+  );
+  assert.match(
+    labelsDialogSource,
+    /Tu edición:[\s\S]*?Versión actual:[\s\S]*?Usar versión actual[\s\S]*?Revisar mis cambios/,
+  );
+});
+
+test("closing label administration retains drafts and board filters", () => {
   assert.match(
     labelsDialogSource,
     /reconcileBoardLabelCatalogRead\(\{\s*status: "available"[\s\S]*?orphanedDrafts/,
   );
-  const clearPrivateContent = labelsDialogSource.match(
-    /clearPrivateCatalogContent = useCallback\(\(\) => \{[\s\S]*?\n {2}\}/,
-  );
-  assert.ok(
-    clearPrivateContent,
-    "private catalog state has a shared clear path",
-  );
-  for (const clearedState of [
-    /status: "unavailable"/,
-    /onLabelsChange\(\[\]\)/,
-    /setTrash\(\[\]\)/,
-    /setDrafts\(privateState\.drafts\)/,
-    /setOrphanedDrafts\(privateState\.orphanedDrafts\)/,
-    /setLabelConflicts\(\{\}\)/,
-    /setPreview\(null\)/,
-    /setRestoreTarget\(null\)/,
-    /setRestoreName\(""\)/,
-    /setSelectedTasks\(\[\]\)/,
-    /setSelectedBirthdays\(\[\]\)/,
-    /setNewName\(""\)/,
-  ]) {
-    assert.match(clearPrivateContent[0], clearedState);
-  }
   assert.match(
     labelsDialogSource,
-    /catch \{\s*clearPrivateCatalogContent\(\);\s*return null;/,
-    "an authorized catalog refresh failure clears private UI state",
+    /clearPrivateCatalogContent = useCallback\(\(\) => \{[\s\S]*?clearDialogDrafts\(\)[\s\S]*?onLabelsChange\(\[\]\)/,
+  );
+  assert.match(
+    labelsDialogSource,
+    /failure instanceof BoardLabelsUnavailableError[\s\S]*?clearPrivateCatalogContent\(\)/,
+    "an authoritative access denial clears private UI state",
   );
   const closeHandler = labelsDialogSource.match(
     /function handleClose\(\) \{[\s\S]*?\n {2}\}/,
   );
-  assert.ok(
-    closeHandler,
-    "closing the dialog has a private-state cleanup path",
-  );
-  assert.match(closeHandler[0], /clearPrivateCatalogContent\(\)/);
+  assert.ok(closeHandler, "closing the dialog has a dedicated close path");
   assert.match(closeHandler[0], /onClose\(\)/);
+  assert.doesNotMatch(
+    closeHandler[0],
+    /clearDialogDrafts|clearPrivateCatalogContent|onLabelsChange|setDrafts|setOrphanedDrafts|setLabelConflicts|setPreview/,
+  );
   assert.match(labelsDialogSource, /<Modal[\s\S]*?onClose=\{handleClose\}/);
+  assert.match(boardSource, /const \[selectedLabelIds, setSelectedLabelIds\]/);
+  assert.match(boardSource, /onLabelsChange=\{handleBoardLabelsChange\}/);
+  assert.doesNotMatch(closeHandler[0], /setSelectedLabelIds|setBoardLabels/);
+});
+
+test("unavailable RPC clears access state while transport errors retain edits", () => {
   assert.match(
     labelsDialogSource,
-    /result\.status === "unavailable"[\s\S]*?refreshCatalog\(\)[\s\S]*?La etiqueta ya no está disponible[\s\S]*?Descartar borrador/,
-    "a still-authorized refresh keeps the removed label draft visible and discardable",
+    /result\.status === "unavailable"[\s\S]*?clearPrivateCatalogContent\(\)/,
+    "an explicit unavailable RPC result clears private catalog state",
   );
+  const saveLabelBody = labelsDialogSource.match(
+    /async function saveLabel\(label: BoardLabel\) \{[\s\S]*?\n {2}\}/,
+  );
+  assert.ok(saveLabelBody);
+  const transportFailure = saveLabelBody[0].match(
+    /catch \(failure\) \{([\s\S]*?)\n {4}\}/,
+  );
+  assert.ok(transportFailure, "save errors have a transport failure path");
+  assert.match(transportFailure[0], /conservamos los cambios escritos/i);
+  assert.match(transportFailure[0], /reintent/);
+  assert.doesNotMatch(transportFailure[0], /clearPrivateCatalogContent/);
+  assert.match(transportFailure[0], /setError/);
+  assert.match(labelsDialogSource, /Reintentar lectura del catálogo/);
+  assert.match(
+    labelsDialogSource,
+    /catch \(failure\)[\s\S]*?failure instanceof BoardLabelsUnavailableError[\s\S]*?clearPrivateCatalogContent/,
+  );
+  assert.match(boardSource, /const \[selectedLabelIds, setSelectedLabelIds\]/);
+});
+
+test("catalog RPC unavailability is distinct from transport and parse errors", async () => {
+  await assert.rejects(
+    listBoardLabels(
+      {
+        rpc: async () => ({ data: { status: "unavailable" }, error: null }),
+      },
+      "board-one",
+    ),
+    BoardLabelsUnavailableError,
+  );
+  await assert.rejects(
+    listBoardLabels(
+      {
+        rpc: async () => ({
+          data: null,
+          error: new Error("temporary network"),
+        }),
+      },
+      "board-one",
+    ),
+    (error) =>
+      error instanceof Error && !(error instanceof BoardLabelsUnavailableError),
+  );
+  await assert.rejects(
+    listBoardLabels(
+      {
+        rpc: async () => ({
+          data: { status: "available", labels: "malformed" },
+          error: null,
+        }),
+      },
+      "board-one",
+    ),
+    (error) =>
+      error instanceof Error && !(error instanceof BoardLabelsUnavailableError),
+  );
+});
+
+test("orphan label drafts remain visible and discard-only", () => {
   assert.match(
     labelsDialogSource,
     /Etiqueta ya no disponible[\s\S]*?No se reenviará automáticamente/,

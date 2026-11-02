@@ -14,6 +14,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Modal } from "@/components/ui/modal";
 import {
   type BoardLabelDraft,
+  type BoardLabelDraftConflict,
   createBoardLabelDraft,
   isBoardLabelDraftDirty,
   type OrphanedBoardLabelDrafts,
@@ -24,6 +25,7 @@ import {
 import { reconcileRestoreSelection } from "@/lib/board-label-restore-state";
 import {
   type BoardLabelRestorePreview,
+  BoardLabelsUnavailableError,
   createBoardLabel,
   type DeletedBoardLabel,
   deleteBoardLabel,
@@ -97,7 +99,7 @@ export function BoardLabelsDialog({
   const [trash, setTrash] = useState<DeletedBoardLabel[]>([]);
   const [drafts, setDrafts] = useState<Record<string, BoardLabelDraft>>({});
   const [labelConflicts, setLabelConflicts] = useState<
-    Record<string, { current: BoardLabel; proposal: BoardLabelDraft }>
+    Record<string, BoardLabelDraftConflict>
   >({});
   const [orphanedDrafts, setOrphanedDrafts] =
     useState<OrphanedBoardLabelDrafts>({});
@@ -113,19 +115,16 @@ export function BoardLabelsDialog({
   const [selectedTasks, setSelectedTasks] = useState<string[]>([]);
   const [selectedBirthdays, setSelectedBirthdays] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
+  const [catalogReadFailed, setCatalogReadFailed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const nameId = useId();
   const errorId = useId();
 
-  const clearPrivateCatalogContent = useCallback(() => {
-    const privateState = reconcileBoardLabelCatalogRead({
-      status: "unavailable",
-    });
-    onLabelsChange([]);
+  const clearDialogDrafts = useCallback(() => {
     setTrash([]);
-    setDrafts(privateState.drafts);
-    setOrphanedDrafts(privateState.orphanedDrafts);
+    setDrafts({});
+    setOrphanedDrafts({});
     setLabelConflicts({});
     setDeleteTarget(null);
     setRestoreTarget(null);
@@ -138,10 +137,15 @@ export function BoardLabelsDialog({
     setNewColor("blue");
     setNotice(null);
     setError(null);
-  }, [onLabelsChange]);
+    setCatalogReadFailed(false);
+  }, []);
+
+  const clearPrivateCatalogContent = useCallback(() => {
+    clearDialogDrafts();
+    onLabelsChange([]);
+  }, [clearDialogDrafts, onLabelsChange]);
 
   function handleClose() {
-    clearPrivateCatalogContent();
     onClose();
   }
 
@@ -154,6 +158,7 @@ export function BoardLabelsDialog({
     let disposed = false;
     setError(null);
     setNotice(null);
+    setCatalogReadFailed(false);
     setLoading(true);
     Promise.all([
       listBoardLabels(supabase, slug),
@@ -166,10 +171,17 @@ export function BoardLabelsDialog({
         onLabelsChange(active);
         setTrash(deleted);
       })
-      .catch(() => {
+      .catch((failure: unknown) => {
         if (!disposed) {
-          clearPrivateCatalogContent();
-          setError("No se pudo verificar el acceso al catálogo de etiquetas.");
+          if (failure instanceof BoardLabelsUnavailableError) {
+            clearPrivateCatalogContent();
+            setError("El tablero ya no está disponible con tu acceso actual.");
+          } else {
+            setCatalogReadFailed(true);
+            setError(
+              "No se pudo cargar el catálogo. Conservamos las etiquetas, filtros y borradores; revisá la conexión y reintentá.",
+            );
+          }
         }
       })
       .finally(() => {
@@ -180,14 +192,19 @@ export function BoardLabelsDialog({
     };
   }, [clearPrivateCatalogContent, onLabelsChange, open, role, slug, supabase]);
 
-  async function refreshCatalog(): Promise<BoardLabel[] | null> {
+  async function refreshCatalog(): Promise<BoardLabel[]> {
     let active: BoardLabel[];
     try {
       active = await listBoardLabels(supabase, slug);
-    } catch {
-      clearPrivateCatalogContent();
-      return null;
+    } catch (failure) {
+      if (failure instanceof BoardLabelsUnavailableError) {
+        clearPrivateCatalogContent();
+      } else {
+        setCatalogReadFailed(true);
+      }
+      throw failure;
     }
+    setCatalogReadFailed(false);
     const editorState = reconcileBoardLabelCatalogRead({
       status: "available",
       slug,
@@ -199,14 +216,15 @@ export function BoardLabelsDialog({
     setDrafts(editorState.drafts);
     setOrphanedDrafts(editorState.orphanedDrafts);
     onLabelsChange(active);
-    setLabelConflicts((current) =>
-      Object.fromEntries(
+    setLabelConflicts((current) => {
+      const refreshed = Object.fromEntries(
         Object.entries(current).flatMap(([labelId, conflict]) => {
           const latest = active.find((label) => label.id === labelId);
           return latest ? [[labelId, { ...conflict, current: latest }]] : [];
         }),
-      ),
-    );
+      );
+      return { ...refreshed, ...editorState.pendingConflicts };
+    });
     if (role === "owner") {
       try {
         setTrash(await listDeletedBoardLabels(supabase, slug));
@@ -218,6 +236,25 @@ export function BoardLabelsDialog({
     }
     await onChanged();
     return active;
+  }
+
+  async function retryCatalogRead() {
+    if (loading) return;
+    setLoading(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await refreshCatalog();
+      setNotice("Se actualizó el catálogo de etiquetas.");
+    } catch (failure) {
+      setError(
+        failure instanceof BoardLabelsUnavailableError
+          ? "El tablero ya no está disponible con tu acceso actual. Limpiamos el contenido privado."
+          : "La lectura sigue sin completarse. Conservamos los datos locales; reintentá cuando vuelva la conexión.",
+      );
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function createLabel(event: FormEvent<HTMLFormElement>) {
@@ -233,16 +270,25 @@ export function BoardLabelsDialog({
         color: newColor,
       });
       if (result.status !== "confirmed") {
+        if (result.status === "unavailable") {
+          clearPrivateCatalogContent();
+          setError(
+            "El tablero ya no está disponible con tu acceso actual. Limpiamos el contenido privado.",
+          );
+          return;
+        }
         setError(resultMessage(result.status, result.reason));
         return;
       }
       setNewName("");
       setNotice("Se creó la etiqueta.");
-      if (!(await refreshCatalog())) {
-        setError("No se pudo volver a verificar el acceso al catálogo.");
-      }
-    } catch {
-      setError("No se pudo crear la etiqueta. Conservamos el nombre escrito.");
+      await refreshCatalog();
+    } catch (failure) {
+      setError(
+        failure instanceof BoardLabelsUnavailableError
+          ? "El tablero ya no está disponible con tu acceso actual. Limpiamos el contenido privado."
+          : "No se pudo crear la etiqueta. Conservamos el nombre escrito; podés reintentar.",
+      );
     } finally {
       setLoading(false);
     }
@@ -264,30 +310,15 @@ export function BoardLabelsDialog({
       });
       if (result.status !== "confirmed") {
         if (result.status === "unavailable") {
-          const active = await refreshCatalog();
-          if (!active) {
-            setError(
-              "Se perdió el acceso al catálogo; ocultamos y limpiamos los borradores privados.",
-            );
-          } else if (!active.some((item) => item.id === label.id)) {
-            setError(null);
-            setNotice(
-              "La etiqueta ya no está disponible. Conservamos tu borrador local para que puedas descartarlo; no se guardará automáticamente.",
-            );
-          } else {
-            setError(resultMessage(result.status, result.reason));
-          }
+          clearPrivateCatalogContent();
+          setError(
+            "El tablero ya no está disponible con tu acceso actual. Limpiamos el contenido privado.",
+          );
           return;
         }
         if (result.reason === "stale_version") {
           setError(null);
           const active = await refreshCatalog();
-          if (!active) {
-            setError(
-              "Se perdió el acceso al catálogo; ocultamos y limpiamos los borradores privados.",
-            );
-            return;
-          }
           const current = active.find((item) => item.id === label.id);
           if (current) {
             setLabelConflicts((existing) => ({
@@ -305,12 +336,6 @@ export function BoardLabelsDialog({
       }
       setNotice("Se guardaron el nombre y el color.");
       const active = await refreshCatalog();
-      if (!active) {
-        setError(
-          "Se perdió el acceso al catálogo; ocultamos y limpiamos los borradores privados.",
-        );
-        return;
-      }
       const updated = active.find((item) => item.id === label.id);
       if (updated) {
         setDrafts((current) => ({
@@ -322,9 +347,11 @@ export function BoardLabelsDialog({
         const { [label.id]: _removed, ...remaining } = current;
         return remaining;
       });
-    } catch {
+    } catch (failure) {
       setError(
-        "No se pudo guardar la etiqueta. Conservamos los cambios escritos.",
+        failure instanceof BoardLabelsUnavailableError
+          ? "El tablero ya no está disponible con tu acceso actual. Limpiamos el contenido privado."
+          : "No se pudo guardar la etiqueta. Conservamos los cambios escritos; podés reintentar.",
       );
     } finally {
       setLoading(false);
@@ -379,6 +406,13 @@ export function BoardLabelsDialog({
         expectedVersion: deleteTarget.version,
       });
       if (result.status !== "confirmed") {
+        if (result.status === "unavailable") {
+          clearPrivateCatalogContent();
+          setError(
+            "El tablero ya no está disponible con tu acceso actual. Limpiamos el contenido privado.",
+          );
+          return;
+        }
         setError(resultMessage(result.status, result.reason));
         await refreshCatalog();
         return;
@@ -388,8 +422,12 @@ export function BoardLabelsDialog({
         "La etiqueta quedó oculta y se puede recuperar durante 7 días.",
       );
       await refreshCatalog();
-    } catch {
-      setError("No se pudo confirmar el borrado de la etiqueta.");
+    } catch (failure) {
+      setError(
+        failure instanceof BoardLabelsUnavailableError
+          ? "El tablero ya no está disponible con tu acceso actual. Limpiamos el contenido privado."
+          : "No se pudo confirmar el borrado. Conservamos el estado local; podés reintentar.",
+      );
     } finally {
       setLoading(false);
     }
@@ -411,6 +449,13 @@ export function BoardLabelsDialog({
         labelId: label.id,
         name,
       });
+      if (next.status === "unavailable") {
+        clearPrivateCatalogContent();
+        setError(
+          "El tablero ya no está disponible con tu acceso actual. Limpiamos el contenido privado.",
+        );
+        return false;
+      }
       setRestoreTarget(next.label ?? label);
       setRestoreName(name);
       setPreview(next);
@@ -434,8 +479,12 @@ export function BoardLabelsDialog({
         setError(resultMessage("expired"));
       }
       return next.status === "preview" && next.label !== undefined;
-    } catch {
-      setError("No se pudo preparar la vista previa de recuperación.");
+    } catch (failure) {
+      setError(
+        failure instanceof BoardLabelsUnavailableError
+          ? "El tablero ya no está disponible con tu acceso actual. Limpiamos el contenido privado."
+          : "No se pudo preparar la vista previa. Conservamos tu borrador; podés reintentar.",
+      );
       return false;
     } finally {
       setLoading(false);
@@ -472,6 +521,13 @@ export function BoardLabelsDialog({
         birthdayIds: selectedBirthdays,
       });
       if (result.status !== "confirmed") {
+        if (result.status === "unavailable") {
+          clearPrivateCatalogContent();
+          setError(
+            "El tablero ya no está disponible con tu acceso actual. Limpiamos el contenido privado.",
+          );
+          return;
+        }
         const staleVersion = result.reason === "stale_version";
         setError(
           staleVersion ? null : resultMessage(result.status, result.reason),
@@ -487,9 +543,11 @@ export function BoardLabelsDialog({
       setRestoreNeedsReview(false);
       setNotice("Se recuperó la etiqueta y las relaciones elegidas.");
       await refreshCatalog();
-    } catch {
+    } catch (failure) {
       setError(
-        "No se pudo confirmar la recuperación. Revisá la vista previa e intentá de nuevo.",
+        failure instanceof BoardLabelsUnavailableError
+          ? "El tablero ya no está disponible con tu acceso actual. Limpiamos el contenido privado."
+          : "No se pudo confirmar la recuperación. Conservamos la vista previa; revisá la conexión y reintentá.",
       );
     } finally {
       setLoading(false);
@@ -541,13 +599,26 @@ export function BoardLabelsDialog({
             </output>
           ) : null}
           {error ? (
-            <p
-              id={errorId}
-              className="text-priority-urgent text-sm"
-              role="alert"
-            >
-              {error}
-            </p>
+            <div className="space-y-2">
+              <p
+                id={errorId}
+                className="text-priority-urgent text-sm"
+                role="alert"
+              >
+                {error}
+              </p>
+              {catalogReadFailed ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void retryCatalogRead()}
+                  disabled={loading}
+                >
+                  Reintentar lectura del catálogo
+                </Button>
+              ) : null}
+            </div>
           ) : null}
 
           <form

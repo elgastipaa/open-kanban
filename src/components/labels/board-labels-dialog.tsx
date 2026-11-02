@@ -1,7 +1,14 @@
 "use client";
 
 import { IconTag, IconTrash } from "@tabler/icons-react";
-import { type FormEvent, useEffect, useId, useMemo, useState } from "react";
+import {
+  type FormEvent,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useState,
+} from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Modal } from "@/components/ui/modal";
@@ -9,6 +16,8 @@ import {
   type BoardLabelDraft,
   createBoardLabelDraft,
   isBoardLabelDraftDirty,
+  type OrphanedBoardLabelDrafts,
+  reconcileBoardLabelCatalogRead,
   reconcileBoardLabelDrafts,
   resolveBoardLabelDraftConflict,
 } from "@/lib/board-label-edit-state";
@@ -90,6 +99,8 @@ export function BoardLabelsDialog({
   const [labelConflicts, setLabelConflicts] = useState<
     Record<string, { current: BoardLabel; proposal: BoardLabelDraft }>
   >({});
+  const [orphanedDrafts, setOrphanedDrafts] =
+    useState<OrphanedBoardLabelDrafts>({});
   const [newName, setNewName] = useState("");
   const [newColor, setNewColor] = useState<BoardLabelColor>("blue");
   const [deleteTarget, setDeleteTarget] = useState<BoardLabel | null>(null);
@@ -107,6 +118,33 @@ export function BoardLabelsDialog({
   const nameId = useId();
   const errorId = useId();
 
+  const clearPrivateCatalogContent = useCallback(() => {
+    const privateState = reconcileBoardLabelCatalogRead({
+      status: "unavailable",
+    });
+    onLabelsChange([]);
+    setTrash([]);
+    setDrafts(privateState.drafts);
+    setOrphanedDrafts(privateState.orphanedDrafts);
+    setLabelConflicts({});
+    setDeleteTarget(null);
+    setRestoreTarget(null);
+    setPreview(null);
+    setRestoreNeedsReview(false);
+    setRestoreName("");
+    setSelectedTasks([]);
+    setSelectedBirthdays([]);
+    setNewName("");
+    setNewColor("blue");
+    setNotice(null);
+    setError(null);
+  }, [onLabelsChange]);
+
+  function handleClose() {
+    clearPrivateCatalogContent();
+    onClose();
+  }
+
   useEffect(() => {
     setDrafts((current) => reconcileBoardLabelDrafts(labels, current));
   }, [labels]);
@@ -120,7 +158,7 @@ export function BoardLabelsDialog({
     Promise.all([
       listBoardLabels(supabase, slug),
       role === "owner"
-        ? listDeletedBoardLabels(supabase, slug)
+        ? listDeletedBoardLabels(supabase, slug).catch(() => [])
         : Promise.resolve([]),
     ])
       .then(([active, deleted]) => {
@@ -129,7 +167,10 @@ export function BoardLabelsDialog({
         setTrash(deleted);
       })
       .catch(() => {
-        if (!disposed) setError("No se pudo cargar el catálogo de etiquetas.");
+        if (!disposed) {
+          clearPrivateCatalogContent();
+          setError("No se pudo verificar el acceso al catálogo de etiquetas.");
+        }
       })
       .finally(() => {
         if (!disposed) setLoading(false);
@@ -137,10 +178,26 @@ export function BoardLabelsDialog({
     return () => {
       disposed = true;
     };
-  }, [onLabelsChange, open, role, slug, supabase]);
+  }, [clearPrivateCatalogContent, onLabelsChange, open, role, slug, supabase]);
 
-  async function refreshCatalog() {
-    const active = await listBoardLabels(supabase, slug);
+  async function refreshCatalog(): Promise<BoardLabel[] | null> {
+    let active: BoardLabel[];
+    try {
+      active = await listBoardLabels(supabase, slug);
+    } catch {
+      clearPrivateCatalogContent();
+      return null;
+    }
+    const editorState = reconcileBoardLabelCatalogRead({
+      status: "available",
+      slug,
+      labels: active,
+      previousLabels: labels,
+      drafts,
+      orphanedDrafts,
+    });
+    setDrafts(editorState.drafts);
+    setOrphanedDrafts(editorState.orphanedDrafts);
     onLabelsChange(active);
     setLabelConflicts((current) =>
       Object.fromEntries(
@@ -150,9 +207,15 @@ export function BoardLabelsDialog({
         }),
       ),
     );
-    setTrash(
-      role === "owner" ? await listDeletedBoardLabels(supabase, slug) : [],
-    );
+    if (role === "owner") {
+      try {
+        setTrash(await listDeletedBoardLabels(supabase, slug));
+      } catch {
+        setTrash([]);
+      }
+    } else {
+      setTrash([]);
+    }
     await onChanged();
     return active;
   }
@@ -175,7 +238,9 @@ export function BoardLabelsDialog({
       }
       setNewName("");
       setNotice("Se creó la etiqueta.");
-      await refreshCatalog();
+      if (!(await refreshCatalog())) {
+        setError("No se pudo volver a verificar el acceso al catálogo.");
+      }
     } catch {
       setError("No se pudo crear la etiqueta. Conservamos el nombre escrito.");
     } finally {
@@ -198,9 +263,31 @@ export function BoardLabelsDialog({
         color: draft.color,
       });
       if (result.status !== "confirmed") {
+        if (result.status === "unavailable") {
+          const active = await refreshCatalog();
+          if (!active) {
+            setError(
+              "Se perdió el acceso al catálogo; ocultamos y limpiamos los borradores privados.",
+            );
+          } else if (!active.some((item) => item.id === label.id)) {
+            setError(null);
+            setNotice(
+              "La etiqueta ya no está disponible. Conservamos tu borrador local para que puedas descartarlo; no se guardará automáticamente.",
+            );
+          } else {
+            setError(resultMessage(result.status, result.reason));
+          }
+          return;
+        }
         if (result.reason === "stale_version") {
           setError(null);
           const active = await refreshCatalog();
+          if (!active) {
+            setError(
+              "Se perdió el acceso al catálogo; ocultamos y limpiamos los borradores privados.",
+            );
+            return;
+          }
           const current = active.find((item) => item.id === label.id);
           if (current) {
             setLabelConflicts((existing) => ({
@@ -218,6 +305,12 @@ export function BoardLabelsDialog({
       }
       setNotice("Se guardaron el nombre y el color.");
       const active = await refreshCatalog();
+      if (!active) {
+        setError(
+          "Se perdió el acceso al catálogo; ocultamos y limpiamos los borradores privados.",
+        );
+        return;
+      }
       const updated = active.find((item) => item.id === label.id);
       if (updated) {
         setDrafts((current) => ({
@@ -264,6 +357,14 @@ export function BoardLabelsDialog({
         ? "Descartaste tu edición y aplicaste la versión actual de la etiqueta."
         : "Conservamos tu edición sobre la versión actual. Revisala y guardala cuando quieras.",
     );
+  }
+
+  function discardOrphanedDraft(labelId: string) {
+    setOrphanedDrafts((current) => {
+      const { [labelId]: _removed, ...remaining } = current;
+      return remaining;
+    });
+    setNotice("Descartaste el borrador local de la etiqueta ya no disponible.");
   }
 
   async function confirmDelete() {
@@ -410,6 +511,9 @@ export function BoardLabelsDialog({
     preview.can_restore === true &&
     !restoreNeedsReview &&
     !hasSelectedOverflow;
+  const visibleOrphanedDrafts = Object.values(orphanedDrafts).filter(
+    (orphan) => orphan.slug === slug,
+  );
   const blockedByTombstoneCapacity = preview?.reasons?.some(
     (reason) =>
       reason === "task_recovery_limit" || reason === "birthday_recovery_limit",
@@ -419,7 +523,7 @@ export function BoardLabelsDialog({
     <>
       <Modal
         open={open}
-        onClose={onClose}
+        onClose={handleClose}
         title="Etiquetas del tablero"
         fullScreenMobile
       >
@@ -642,6 +746,44 @@ export function BoardLabelsDialog({
               })}
             </ul>
           )}
+
+          {visibleOrphanedDrafts.length > 0 ? (
+            <section
+              aria-labelledby="orphaned-label-drafts-title"
+              className="space-y-3 border-border border-t pt-4"
+              aria-live="polite"
+            >
+              <h3
+                id="orphaned-label-drafts-title"
+                className="font-semibold text-sm text-text-primary"
+              >
+                Borradores de etiquetas ya no disponibles
+              </h3>
+              {visibleOrphanedDrafts.map(({ label, draft }) => (
+                <div
+                  key={label.id}
+                  className="space-y-2 rounded-lg border border-border bg-surface-base p-3 text-sm"
+                >
+                  <p>Etiqueta ya no disponible: “{label.name}”.</p>
+                  <p>
+                    Tu borrador local: “{draft.name}”, color{" "}
+                    {colors.find((color) => color.value === draft.color)
+                      ?.label ?? draft.color}
+                    . No se reenviará automáticamente.
+                  </p>
+                  <div className="flex justify-end">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => discardOrphanedDraft(label.id)}
+                    >
+                      Descartar borrador
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </section>
+          ) : null}
 
           {role === "owner" ? (
             <section

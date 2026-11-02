@@ -10,6 +10,19 @@ export interface BoardLabelDraft {
 
 export type BoardLabelDrafts = Record<string, BoardLabelDraft>;
 
+export interface OrphanedBoardLabelDraft {
+  slug: string;
+  label: BoardLabel;
+  draft: BoardLabelDraft;
+}
+
+export type OrphanedBoardLabelDrafts = Record<string, OrphanedBoardLabelDraft>;
+
+export interface BoardLabelCatalogEditorState {
+  drafts: BoardLabelDrafts;
+  orphanedDrafts: OrphanedBoardLabelDrafts;
+}
+
 export function createBoardLabelDraft(label: BoardLabel): BoardLabelDraft {
   return {
     name: label.name,
@@ -53,5 +66,58 @@ export function resolveBoardLabelDraftConflict(
     baseName: current.name,
     baseColor: current.color,
     baseVersion: current.version,
+  };
+}
+
+export function reconcileBoardLabelCatalogRead(
+  result:
+    | {
+        status: "available";
+        slug: string;
+        labels: BoardLabel[];
+        previousLabels: BoardLabel[];
+        drafts: BoardLabelDrafts;
+        orphanedDrafts: OrphanedBoardLabelDrafts;
+      }
+    | { status: "unavailable" },
+): BoardLabelCatalogEditorState {
+  if (result.status === "unavailable") {
+    return { drafts: {}, orphanedDrafts: {} };
+  }
+
+  const activeIds = new Set(result.labels.map((label) => label.id));
+  const orphanedDrafts = Object.fromEntries(
+    Object.entries(result.orphanedDrafts).filter(
+      ([, orphan]) =>
+        orphan.slug === result.slug && !activeIds.has(orphan.label.id),
+    ),
+  );
+  const drafts = { ...result.drafts };
+
+  for (const label of result.labels) {
+    const recovered = result.orphanedDrafts[label.id];
+    if (recovered?.slug === result.slug && !drafts[label.id]) {
+      drafts[label.id] = {
+        ...recovered.draft,
+        baseName: label.name,
+        baseColor: label.color,
+        baseVersion: label.version,
+      };
+    }
+  }
+
+  for (const [labelId, draft] of Object.entries(result.drafts)) {
+    if (activeIds.has(labelId) || !isBoardLabelDraftDirty(draft)) continue;
+    const label = result.previousLabels.find((item) => item.id === labelId);
+    if (label) {
+      orphanedDrafts[labelId] = { slug: result.slug, label, draft };
+    } else if (orphanedDrafts[labelId]) {
+      orphanedDrafts[labelId] = { ...orphanedDrafts[labelId], draft };
+    }
+  }
+
+  return {
+    drafts: reconcileBoardLabelDrafts(result.labels, drafts),
+    orphanedDrafts,
   };
 }

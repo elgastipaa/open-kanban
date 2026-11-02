@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   createBoardLabelDraft,
   isBoardLabelDraftDirty,
+  reconcileBoardLabelCatalogRead,
   reconcileBoardLabelDrafts,
   resolveBoardLabelDraftConflict,
 } from "../../src/lib/board-label-edit-state.ts";
@@ -221,6 +222,119 @@ test("catalog refresh keeps drafts and offers explicit current-version or keep-d
     labelsDialogSource,
     /Tu edición:[\s\S]*?Versión actual:[\s\S]*?Usar versión actual[\s\S]*?Revisar mis cambios/,
   );
+});
+
+test("authorized refresh retains deleted-label drafts, while lost access clears them", () => {
+  const deletedLabel = {
+    id: "deleted-label",
+    board_id: "board-one",
+    name: "Etiqueta borrada",
+    color: "blue",
+    version: 3,
+  };
+  const activeLabel = {
+    id: "active-label",
+    board_id: "board-one",
+    name: "Etiqueta activa",
+    color: "green",
+    version: 2,
+  };
+  const deletedDraft = {
+    name: "Mi borrador sin guardar",
+    color: "red",
+    baseName: deletedLabel.name,
+    baseColor: deletedLabel.color,
+    baseVersion: deletedLabel.version,
+  };
+  const activeDraft = {
+    name: "Otra propuesta local",
+    color: "orange",
+    baseName: "Versión anterior",
+    baseColor: "yellow",
+    baseVersion: 1,
+  };
+
+  const authorized = reconcileBoardLabelCatalogRead({
+    status: "available",
+    slug: "board-one",
+    labels: [activeLabel],
+    previousLabels: [deletedLabel, activeLabel],
+    drafts: { "deleted-label": deletedDraft, "active-label": activeDraft },
+    orphanedDrafts: {},
+  });
+  assert.deepEqual(authorized.drafts, { "active-label": activeDraft });
+  assert.deepEqual(authorized.orphanedDrafts, {
+    "deleted-label": {
+      slug: "board-one",
+      label: deletedLabel,
+      draft: deletedDraft,
+    },
+  });
+
+  assert.deepEqual(
+    reconcileBoardLabelCatalogRead({ status: "unavailable" }),
+    { drafts: {}, orphanedDrafts: {} },
+    "a catalog read that loses authorization clears every private draft",
+  );
+
+  assert.match(
+    labelsDialogSource,
+    /reconcileBoardLabelCatalogRead\(\{\s*status: "available"[\s\S]*?orphanedDrafts/,
+  );
+  const clearPrivateContent = labelsDialogSource.match(
+    /clearPrivateCatalogContent = useCallback\(\(\) => \{[\s\S]*?\n {2}\}/,
+  );
+  assert.ok(
+    clearPrivateContent,
+    "private catalog state has a shared clear path",
+  );
+  for (const clearedState of [
+    /status: "unavailable"/,
+    /onLabelsChange\(\[\]\)/,
+    /setTrash\(\[\]\)/,
+    /setDrafts\(privateState\.drafts\)/,
+    /setOrphanedDrafts\(privateState\.orphanedDrafts\)/,
+    /setLabelConflicts\(\{\}\)/,
+    /setPreview\(null\)/,
+    /setRestoreTarget\(null\)/,
+    /setRestoreName\(""\)/,
+    /setSelectedTasks\(\[\]\)/,
+    /setSelectedBirthdays\(\[\]\)/,
+    /setNewName\(""\)/,
+  ]) {
+    assert.match(clearPrivateContent[0], clearedState);
+  }
+  assert.match(
+    labelsDialogSource,
+    /catch \{\s*clearPrivateCatalogContent\(\);\s*return null;/,
+    "an authorized catalog refresh failure clears private UI state",
+  );
+  const closeHandler = labelsDialogSource.match(
+    /function handleClose\(\) \{[\s\S]*?\n {2}\}/,
+  );
+  assert.ok(
+    closeHandler,
+    "closing the dialog has a private-state cleanup path",
+  );
+  assert.match(closeHandler[0], /clearPrivateCatalogContent\(\)/);
+  assert.match(closeHandler[0], /onClose\(\)/);
+  assert.match(labelsDialogSource, /<Modal[\s\S]*?onClose=\{handleClose\}/);
+  assert.match(
+    labelsDialogSource,
+    /result\.status === "unavailable"[\s\S]*?refreshCatalog\(\)[\s\S]*?La etiqueta ya no está disponible[\s\S]*?Descartar borrador/,
+    "a still-authorized refresh keeps the removed label draft visible and discardable",
+  );
+  assert.match(
+    labelsDialogSource,
+    /Etiqueta ya no disponible[\s\S]*?No se reenviará automáticamente/,
+    "orphan drafts must never be silently converted into mutations",
+  );
+  const orphanSection = labelsDialogSource.match(
+    /\{visibleOrphanedDrafts\.length > 0 \? \([\s\S]*?\) : null\}/,
+  );
+  assert.ok(orphanSection, "authorized users can see retained orphan drafts");
+  assert.match(orphanSection[0], /Descartar borrador/);
+  assert.doesNotMatch(orphanSection[0], /Guardar|updateBoardLabel\(/);
 });
 
 test("TaskModal guards close, delete, move, and completion for a dirty label draft", () => {

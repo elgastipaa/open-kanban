@@ -630,6 +630,10 @@ GitHub #43 «Importar un respaldo v1 con reemplazo seguro» está OPEN/`ready-fo
 - `pnpm lint` global informa 313 diagnósticos LF/CRLF en 313 archivos del checkout. Los nueve TS/TSX/MJS cambiados pasan Biome con finales CRLF. No se reformatearon archivos ajenos.
 - PR #54 sigue OPEN/draft, base `main`, incluye #3–#43 y la evidencia. Se preservan `docs/VALIDATION.md` ajeno y `.scratch/` sin stage/commit; no se usó Storage remoto, OAuth, datos/credenciales reales, SQL remoto, `main`, producción ni deploy.
 
-## Frontera siguiente LP-0.2 — #44 — 2026-11-02
+## Frontera previa LP-0.2 — #44 — 2026-11-02
 
 GitHub #44 «Importar un respaldo v2 completo» está OPEN/`ready-for-agent`, sin asignación ni comentarios y con `Blocked by #43`. #43 tiene implementación/evidencia sintética integrada, pero sigue OPEN/`ready-for-human` por Storage/G04, recorrido de navegador/aceptación y cron; se conserva la dependencia. La excepción secuencial LP-0.2 permite implementar #44 con archivos/objetos/actores sintéticos en servicios locales aislados, sin retirar la arista ni declarar resueltos los gates de #43. Revalidar issue/comentarios y blockers, registrar kickoff y basar `codex/issue-44` en el HEAD actualizado de `codex/openkanban-1-0`.
+
+## Inicio actual de #44 — 2026-11-02
+
+#44 «Importar un respaldo v2 completo» sigue OPEN/`ready-for-agent`, asignado a `elgastipaa`; kickoff [registrado en GitHub](https://github.com/elgastipaa/open-kanban/issues/44#issuecomment-6590324314). Worktree aislado `C:\Users\gasto\.codex\worktrees\openkanban-issue-44\open-kanban`, rama `codex/issue-44`, creado desde la base integrada `ed65cac472dece4da8d34bdb2b3a38f9de335ca4`. Conserva `Blocked by #43` y la excepción LP-0.2 para fixtures/objetos sintéticos. No usar datos/credenciales reales, Storage/SQL remoto, `main`, producción ni deploy.

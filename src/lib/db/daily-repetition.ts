@@ -2,7 +2,31 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 export type RepetitionPattern =
   | { frequency: "daily"; interval: number }
-  | { frequency: "weekly"; interval: number; weekdays: number[] };
+  | { frequency: "weekly"; interval: number; weekdays: number[] }
+  | {
+      frequency: "monthly";
+      interval: number | string;
+      day_of_month: number;
+    }
+  | {
+      frequency: "monthly";
+      interval: number | string;
+      ordinal: number;
+      weekday: number;
+    }
+  | {
+      frequency: "yearly";
+      interval: number | string;
+      month: number;
+      day_of_month: number;
+    }
+  | {
+      frequency: "yearly";
+      interval: number | string;
+      month: number;
+      ordinal: number;
+      weekday: number;
+    };
 
 export interface RepetitionPreview {
   status: "available" | "unavailable";
@@ -73,7 +97,7 @@ export interface RepetitionStatus {
   start_on?: string;
   end_on?: string | null;
   occurrence_limit?: number | null;
-  rule?: "daily" | "weekly";
+  rule?: "daily" | "weekly" | "monthly" | "yearly";
   pattern?: RepetitionPattern;
   consumed_count?: number;
   latest_occurrence_on?: string;

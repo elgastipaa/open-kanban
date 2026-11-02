@@ -55,3 +55,17 @@ test("a later command does not overwrite another task's uncertain result", () =>
   assert.equal(operations.get("task-1"), null);
   assert.equal(operations.get("task-2"), null);
 });
+
+test("an uncertain yearly command keeps its exact calendar rule for retry", () => {
+  const operations = new RepetitionOperationStore("owner", "daily-board");
+  const pending = command("task-3", "operation-3", "2024-02-29", {
+    frequency: "yearly",
+    interval: "9223372036854775807",
+    month: 2,
+    day_of_month: 29,
+  });
+
+  operations.set(pending);
+
+  assert.deepEqual(operations.get("task-3"), pending);
+});

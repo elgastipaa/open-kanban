@@ -148,6 +148,7 @@ BEGIN
     v_transfer_task_id, '23000000-0000-4000-8000-000000000036');
 END;
 $$;
+
 COMMIT;
 
 -- AC49: the shared calendar preview anchors biweekly weeks to the start week.
@@ -173,6 +174,160 @@ BEGIN
     OR v_preview->'future_dates' ? '2026-11-09'
     OR (v_preview->>'requires_start_confirmation')::boolean IS DISTINCT FROM false THEN
     RAISE EXCEPTION 'AC49 weekly preview did not honor the start-week anchor: %', v_preview;
+  END IF;
+END;
+$$;
+COMMIT;
+
+-- Issue #25: the annual ordinal worker counts only fifth weekdays that exist
+-- and exposes the next valid date between worker runs.
+BEGIN;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);
+DO $$
+DECLARE
+  v_ref issue23_refs%ROWTYPE;
+  v_created jsonb;
+  v_due_edit jsonb;
+  v_result jsonb;
+  v_series public.daily_repetition_series%ROWTYPE;
+  v_job record;
+  v_task_id uuid;
+  v_processed_2027 boolean := false;
+  v_processed_2032 boolean := false;
+BEGIN
+  SELECT * INTO v_ref FROM issue23_refs WHERE purpose = 'weekly_preview';
+  v_created := public.create_task_p(
+    '25000000-0000-4000-8000-000000000041', v_ref.board_id, v_ref.column_id,
+    'Ordinal anual sintético', NULL, 'low'
+  );
+  v_task_id := (v_created->>'task_id')::uuid;
+  v_due_edit := public.edit_task_fields_p(
+    '25000000-0000-4000-8000-000000000042', v_ref.slug, v_task_id,
+    '{"due_on":"2025-01-01"}'::jsonb, '{"due_on":1}'::jsonb
+  );
+  IF v_due_edit->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Synthetic annual-ordinal task date setup failed: %', v_due_edit;
+  END IF;
+  v_result := public.create_repetition_p(
+    '25000000-0000-4000-8000-000000000043', v_ref.slug, v_task_id,
+    '2025-01-01'::date, NULL, 6, 2, false, NULL,
+    '{"frequency":"yearly","interval":"1","month":3,"ordinal":5,"weekday":1}'::jsonb
+  );
+  IF v_result->>'status' IS DISTINCT FROM 'confirmed'
+    OR v_result->>'next_due_on' IS DISTINCT FROM '2025-03-31'
+    OR v_result->'pattern'->>'interval' IS DISTINCT FROM '1' THEN
+    RAISE EXCEPTION 'Annual fifth-Monday rule did not persist its string interval or initial valid date: %', v_result;
+  END IF;
+  INSERT INTO issue24_series_refs(purpose, series_id, task_id, board_id, slug)
+  VALUES ('yearly_fifth_monday_worker', (v_result->>'series_id')::uuid,
+    v_task_id, v_ref.board_id, v_ref.slug);
+
+  PERFORM set_config('request.jwt.claim.role', 'service_role', true);
+  FOR v_job IN
+    SELECT * FROM public.claim_daily_repetition_jobs_internal_p(
+      100, '2027-03-29 15:00:00+00'::timestamptz
+    )
+  LOOP
+    v_result := public.process_daily_repetition_job_internal_p(
+      v_job.id, v_job.lease_token, '2027-03-29 15:00:00+00'::timestamptz
+    );
+    IF v_job.series_id = (
+      SELECT series_id FROM issue24_series_refs
+      WHERE purpose = 'yearly_fifth_monday_worker'
+    ) THEN
+      v_processed_2027 := v_result->>'status' = 'confirmed'
+        AND v_result->>'occurrence_on' = '2027-03-29'
+        AND v_result->>'consumed_count' = '4'
+        AND v_result->>'next_due_on' = '2031-03-31';
+    END IF;
+  END LOOP;
+  SELECT series.* INTO v_series
+  FROM public.daily_repetition_series AS series
+  WHERE series.id = (
+    SELECT series_id FROM issue24_series_refs
+    WHERE purpose = 'yearly_fifth_monday_worker'
+  );
+  IF NOT v_processed_2027
+    OR v_series.state IS DISTINCT FROM 'active'
+    OR v_series.latest_occurrence_on IS DISTINCT FROM '2027-03-29'::date
+    OR v_series.consumed_count IS DISTINCT FROM 4
+    OR v_series.next_due_on IS DISTINCT FROM '2031-03-31'::date
+    OR EXISTS (
+      SELECT 1 FROM public.daily_repetition_occurrences AS occurrence
+      WHERE occurrence.series_id = v_series.id
+        AND occurrence.occurrence_on IN ('2025-03-31'::date, '2026-03-30'::date)
+    ) THEN
+    RAISE EXCEPTION 'Annual ordinal worker consumed missing dates or lost the next valid fifth Monday: %', v_series;
+  END IF;
+
+  FOR v_job IN
+    SELECT * FROM public.claim_daily_repetition_jobs_internal_p(
+      100, '2032-03-29 15:00:00+00'::timestamptz
+    )
+  LOOP
+    v_result := public.process_daily_repetition_job_internal_p(
+      v_job.id, v_job.lease_token, '2032-03-29 15:00:00+00'::timestamptz
+    );
+    IF v_job.series_id = (
+      SELECT series_id FROM issue24_series_refs
+      WHERE purpose = 'yearly_fifth_monday_worker'
+    ) THEN
+      v_processed_2032 := v_result->>'status' = 'confirmed'
+        AND v_result->>'occurrence_on' = '2032-03-29'
+        AND v_result->>'consumed_count' = '6'
+        AND v_result->>'next_due_on' IS NULL;
+    END IF;
+  END LOOP;
+  SELECT series.* INTO v_series
+  FROM public.daily_repetition_series AS series
+  WHERE series.id = (
+    SELECT series_id FROM issue24_series_refs
+    WHERE purpose = 'yearly_fifth_monday_worker'
+  );
+  IF NOT v_processed_2032
+    OR v_series.state IS DISTINCT FROM 'finished'
+    OR v_series.latest_occurrence_on IS DISTINCT FROM '2032-03-29'::date
+    OR v_series.consumed_count IS DISTINCT FROM 6
+    OR v_series.next_due_on IS NOT NULL THEN
+    RAISE EXCEPTION 'Annual ordinal worker did not finish at the inclusive sixth effective occurrence: %', v_series;
+  END IF;
+END;
+$$;
+-- Restore any older fixture jobs claimed while this controlled worker ran.
+ROLLBACK;
+
+-- Issue #25 / C110-AC50: a missing fifth Monday is omitted and does not
+-- consume the requested total occurrence count.
+BEGIN;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);
+DO $$
+DECLARE
+  v_ref issue23_refs%ROWTYPE;
+  v_preview jsonb;
+BEGIN
+  SELECT * INTO v_ref FROM issue23_refs WHERE purpose = 'weekly_preview';
+  v_preview := public.preview_repetition_internal_p(
+    v_ref.slug, v_ref.task_id, '2026-01-05'::date, NULL, 4,
+    '2026-01-01 15:00:00+00'::timestamptz,
+    '{"frequency":"monthly","interval":1,"ordinal":5,"weekday":1}'::jsonb
+  );
+  IF v_preview->>'status' IS DISTINCT FROM 'available'
+    OR v_preview->'future_dates' IS DISTINCT FROM '["2026-03-30","2026-06-29","2026-08-31"]'::jsonb
+    OR v_preview->>'final_on' IS DISTINCT FROM '2026-08-31'
+    OR (v_preview->>'occurrence_limit')::bigint IS DISTINCT FROM 4
+    OR (v_preview->>'remaining_dates_after_current')::bigint IS DISTINCT FROM 3 THEN
+    RAISE EXCEPTION 'Missing fifth Mondays consumed an occurrence or shifted the monthly anchor: %', v_preview;
+  END IF;
+
+  v_preview := public.preview_repetition_internal_p(
+    v_ref.slug, v_ref.task_id, '2026-01-05'::date, NULL, 3,
+    '2026-01-01 15:00:00+00'::timestamptz,
+    '{"frequency":"monthly","interval":1,"ordinal":-1,"weekday":1}'::jsonb
+  );
+  IF v_preview->>'status' IS DISTINCT FROM 'available'
+    OR v_preview->'future_dates' IS DISTINCT FROM '["2026-01-26","2026-02-23"]'::jsonb
+    OR v_preview->>'final_on' IS DISTINCT FROM '2026-02-23' THEN
+    RAISE EXCEPTION 'The explicit last Monday pattern did not select each month’s final Monday: %', v_preview;
   END IF;
 END;
 $$;
@@ -1622,3 +1777,458 @@ $$;
 COMMIT;
 
 \echo 'PASS: daily preview, explicit first-date confirmation, identity preservation, and conversion deduplication.'
+
+-- Issue #25: monthly day-of-month rules keep their original day anchor while
+-- using the last available date in shorter months and an inclusive end date.
+BEGIN;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);
+DO $$
+DECLARE
+  v_ref issue23_refs%ROWTYPE;
+  v_preview jsonb;
+  v_created jsonb;
+  v_due_edit jsonb;
+  v_result jsonb;
+  v_replay jsonb;
+  v_status jsonb;
+  v_interval_text text;
+  v_large_series_id uuid;
+  v_series public.daily_repetition_series%ROWTYPE;
+  v_job record;
+  v_task_id uuid;
+  v_processed_february boolean := false;
+  v_processed_april boolean := false;
+BEGIN
+  SELECT * INTO v_ref FROM issue23_refs WHERE purpose = 'weekly_preview';
+  v_preview := public.preview_repetition_internal_p(
+    v_ref.slug, v_ref.task_id, '2026-01-31'::date, '2026-04-30'::date, NULL,
+    '2026-01-01 15:00:00+00'::timestamptz,
+    '{"frequency":"monthly","interval":1,"day_of_month":31}'::jsonb
+  );
+  IF v_preview->>'status' IS DISTINCT FROM 'available'
+    OR v_preview->'future_dates' IS DISTINCT FROM '["2026-02-28","2026-03-31","2026-04-30"]'::jsonb
+    OR v_preview->>'final_on' IS DISTINCT FROM '2026-04-30'
+    OR (v_preview->>'remaining_dates_after_current')::bigint IS DISTINCT FROM 3 THEN
+    RAISE EXCEPTION 'Monthly day 31 did not clamp to month end without moving its anchor or final boundary: %', v_preview;
+  END IF;
+
+  v_preview := public.preview_repetition_internal_p(
+    v_ref.slug, v_ref.task_id, '2024-01-31'::date, '2024-04-30'::date, NULL,
+    '2024-01-01 15:00:00+00'::timestamptz,
+    '{"frequency":"monthly","interval":"1","day_of_month":-1}'::jsonb
+  );
+  IF v_preview->>'status' IS DISTINCT FROM 'available'
+    OR v_preview->'pattern' IS DISTINCT FROM
+      '{"frequency":"monthly","interval":"1","day_of_month":-1}'::jsonb
+    OR v_preview->'future_dates' IS DISTINCT FROM
+      '["2024-02-29","2024-03-31","2024-04-30"]'::jsonb THEN
+    RAISE EXCEPTION 'The explicit last available day rule was not retained or previewed: %', v_preview;
+  END IF;
+
+  v_preview := public.preview_repetition_internal_p(
+    v_ref.slug, v_ref.task_id, '2026-01-31'::date, NULL, NULL,
+    '2026-01-01 15:00:00+00'::timestamptz,
+    '{"frequency":"monthly","interval":"2147483648","day_of_month":31}'::jsonb
+  );
+  IF v_preview->>'status' IS DISTINCT FROM 'available'
+    OR v_preview->'future_dates' IS DISTINCT FROM '[]'::jsonb THEN
+    RAISE EXCEPTION 'A large monthly interval was arbitrarily rejected or previewed outside the calendar: %', v_preview;
+  END IF;
+
+  v_preview := public.preview_repetition_internal_p(
+    v_ref.slug, v_ref.task_id, '2026-01-31'::date, NULL, NULL,
+    '2026-01-01 15:00:00+00'::timestamptz,
+    '{"frequency":"monthly","interval":"9007199254740993","day_of_month":31}'::jsonb
+  );
+  IF v_preview->>'status' IS DISTINCT FROM 'available'
+    OR v_preview->'pattern'->>'interval' IS DISTINCT FROM '9007199254740993'
+    OR v_preview->'future_dates' IS DISTINCT FROM '[]'::jsonb THEN
+    RAISE EXCEPTION 'A monthly bigint interval lost precision in the normalized preview: %', v_preview;
+  END IF;
+
+  v_created := public.create_task_p(
+    '25000000-0000-4000-8000-000000000001', v_ref.board_id, v_ref.column_id,
+    'Ancla mensual sintética', NULL, 'low'
+  );
+  v_task_id := (v_created->>'task_id')::uuid;
+  v_due_edit := public.edit_task_fields_p(
+    '25000000-0000-4000-8000-000000000002', v_ref.slug, v_task_id,
+    '{"due_on":"2026-01-31"}'::jsonb, '{"due_on":1}'::jsonb
+  );
+  IF v_due_edit->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Synthetic monthly task date setup failed: %', v_due_edit;
+  END IF;
+  v_result := public.create_repetition_p(
+    '25000000-0000-4000-8000-000000000003', v_ref.slug, v_task_id,
+    '2026-01-31'::date, NULL, 4, 2, false, NULL,
+    '{"frequency":"monthly","interval":"1","day_of_month":31}'::jsonb
+  );
+  IF v_result->>'status' IS DISTINCT FROM 'confirmed'
+    OR v_result->>'next_due_on' IS DISTINCT FROM '2026-02-28' THEN
+    RAISE EXCEPTION 'Monthly series did not schedule the clamped February date from its original day anchor: %', v_result;
+  END IF;
+  v_status := public.get_repetition_p(v_ref.slug, v_task_id);
+  IF v_status->>'status' IS DISTINCT FROM 'available'
+    OR v_status->>'rule' IS DISTINCT FROM 'monthly'
+    OR v_status->'pattern' IS DISTINCT FROM
+      '{"frequency":"monthly","interval":"1","day_of_month":31}'::jsonb
+    OR v_status->>'next_due_on' IS DISTINCT FROM '2026-02-28' THEN
+    RAISE EXCEPTION 'Monthly rule and next date were not persisted together: %', v_status;
+  END IF;
+  v_replay := public.create_repetition_p(
+    '25000000-0000-4000-8000-000000000003', v_ref.slug, v_task_id,
+    '2026-01-31'::date, NULL, 4, 2, false, NULL,
+    '{"frequency":"monthly","interval":"1","day_of_month":31}'::jsonb
+  );
+  IF v_replay->>'status' IS DISTINCT FROM 'confirmed'
+    OR v_replay->>'series_id' IS DISTINCT FROM v_result->>'series_id'
+    OR v_replay->'pattern' IS DISTINCT FROM
+      '{"frequency":"monthly","interval":"1","day_of_month":31}'::jsonb THEN
+    RAISE EXCEPTION 'Replaying a monthly create command changed or duplicated its series: %', v_replay;
+  END IF;
+  INSERT INTO issue24_series_refs(purpose, series_id, task_id, board_id, slug)
+  VALUES ('monthly_day_31', (v_result->>'series_id')::uuid,
+    v_task_id, v_ref.board_id, v_ref.slug);
+
+  v_created := public.create_task_p(
+    '25000000-0000-4000-8000-000000000031', v_ref.board_id, v_ref.column_id,
+    'Intervalo mensual de precisión sintética', NULL, 'low'
+  );
+  v_task_id := (v_created->>'task_id')::uuid;
+  v_due_edit := public.edit_task_fields_p(
+    '25000000-0000-4000-8000-000000000032', v_ref.slug, v_task_id,
+    '{"due_on":"2026-01-31"}'::jsonb, '{"due_on":1}'::jsonb
+  );
+  IF v_due_edit->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Synthetic large-interval task date setup failed: %', v_due_edit;
+  END IF;
+  v_result := public.create_repetition_p(
+    '25000000-0000-4000-8000-000000000033', v_ref.slug, v_task_id,
+    '2026-01-31'::date, NULL, NULL, 2, false, NULL,
+    '{"frequency":"monthly","interval":"9007199254740993","day_of_month":31}'::jsonb
+  );
+  v_large_series_id := (v_result->>'series_id')::uuid;
+  IF v_result->>'status' IS DISTINCT FROM 'confirmed'
+    OR v_result->'pattern'->>'interval' IS DISTINCT FROM '9007199254740993'
+    OR v_result->>'next_due_on' IS NOT NULL THEN
+    RAISE EXCEPTION 'Create converted or changed a large monthly interval: %', v_result;
+  END IF;
+  SELECT receipt.calendar_pattern->>'interval' INTO v_interval_text
+  FROM public.daily_repetition_receipts AS receipt
+  WHERE receipt.actor_id = '40000000-0000-4000-8000-000000000002'
+    AND receipt.operation_id = '25000000-0000-4000-8000-000000000033';
+  IF v_interval_text IS DISTINCT FROM '9007199254740993' THEN
+    RAISE EXCEPTION 'The monthly operation receipt lost interval precision: %', v_interval_text;
+  END IF;
+  v_status := public.get_repetition_p(v_ref.slug, v_task_id);
+  IF v_status->'pattern'->>'interval' IS DISTINCT FROM '9007199254740993'
+    OR v_status->>'state' IS DISTINCT FROM 'finished' THEN
+    RAISE EXCEPTION 'Get converted or changed the stored monthly interval: %', v_status;
+  END IF;
+  v_replay := public.create_repetition_p(
+    '25000000-0000-4000-8000-000000000033', v_ref.slug, v_task_id,
+    '2026-01-31'::date, NULL, NULL, 2, false, NULL,
+    '{"frequency":"monthly","interval":"9007199254740993","day_of_month":31}'::jsonb
+  );
+  IF v_replay->>'series_id' IS DISTINCT FROM v_large_series_id::text
+    OR v_replay->'pattern'->>'interval' IS DISTINCT FROM '9007199254740993' THEN
+    RAISE EXCEPTION 'Receipt replay converted or changed a large monthly interval: %', v_replay;
+  END IF;
+
+  PERFORM set_config('request.jwt.claim.role', 'service_role', true);
+  FOR v_job IN
+    SELECT * FROM public.claim_daily_repetition_jobs_internal_p(
+      100, '2026-02-28 15:00:00+00'::timestamptz
+    )
+  LOOP
+    v_result := public.process_daily_repetition_job_internal_p(
+      v_job.id, v_job.lease_token, '2026-02-28 15:00:00+00'::timestamptz
+    );
+    IF v_job.series_id = (SELECT series_id FROM issue24_series_refs WHERE purpose = 'monthly_day_31') THEN
+      v_processed_february := v_result->>'status' = 'confirmed'
+        AND v_result->>'occurrence_on' = '2026-02-28';
+    END IF;
+  END LOOP;
+  SELECT series.* INTO v_series
+  FROM public.daily_repetition_series AS series
+  WHERE series.id = (SELECT series_id FROM issue24_series_refs WHERE purpose = 'monthly_day_31');
+  IF NOT v_processed_february
+    OR v_series.latest_occurrence_on IS DISTINCT FROM '2026-02-28'::date
+    OR v_series.consumed_count IS DISTINCT FROM 2
+    OR v_series.next_due_on IS DISTINCT FROM '2026-03-31'::date THEN
+    RAISE EXCEPTION 'Monthly worker diverged from the previewed day-31 calendar: %', v_series;
+  END IF;
+
+  FOR v_job IN
+    SELECT * FROM public.claim_daily_repetition_jobs_internal_p(
+      100, '2026-04-30 15:00:00+00'::timestamptz
+    )
+  LOOP
+    v_result := public.process_daily_repetition_job_internal_p(
+      v_job.id, v_job.lease_token, '2026-04-30 15:00:00+00'::timestamptz
+    );
+    IF v_job.series_id = (SELECT series_id FROM issue24_series_refs WHERE purpose = 'monthly_day_31') THEN
+      v_processed_april := v_result->>'status' = 'confirmed'
+        AND v_result->>'occurrence_on' = '2026-04-30';
+    END IF;
+  END LOOP;
+  SELECT series.* INTO v_series
+  FROM public.daily_repetition_series AS series
+  WHERE series.id = (SELECT series_id FROM issue24_series_refs WHERE purpose = 'monthly_day_31');
+  IF NOT v_processed_april
+    OR v_series.state IS DISTINCT FROM 'finished'
+    OR v_series.latest_occurrence_on IS DISTINCT FROM '2026-04-30'::date
+    OR v_series.consumed_count IS DISTINCT FROM 4
+    OR v_series.next_due_on IS NOT NULL
+    OR EXISTS (
+      SELECT 1 FROM public.daily_repetition_occurrences AS occurrence
+      WHERE occurrence.series_id = v_series.id
+        AND occurrence.occurrence_on = '2026-03-31'::date
+    ) THEN
+    RAISE EXCEPTION 'Late monthly worker did not catch up to the last inclusive occurrence: %', v_series;
+  END IF;
+END;
+$$;
+COMMIT;
+
+-- Issue #25: the worker skips missing fifth Mondays without consuming N.
+BEGIN;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);
+DO $$
+DECLARE
+  v_ref issue23_refs%ROWTYPE;
+  v_created jsonb;
+  v_due_edit jsonb;
+  v_result jsonb;
+  v_series public.daily_repetition_series%ROWTYPE;
+  v_job record;
+  v_task_id uuid;
+  v_processed_june boolean := false;
+  v_processed_august boolean := false;
+BEGIN
+  SELECT * INTO v_ref FROM issue23_refs WHERE purpose = 'weekly_preview';
+  v_created := public.create_task_p(
+    '25000000-0000-4000-8000-000000000021', v_ref.board_id, v_ref.column_id,
+    'Ordinal mensual sintético', NULL, 'low'
+  );
+  v_task_id := (v_created->>'task_id')::uuid;
+  v_due_edit := public.edit_task_fields_p(
+    '25000000-0000-4000-8000-000000000022', v_ref.slug, v_task_id,
+    '{"due_on":"2026-01-05"}'::jsonb, '{"due_on":1}'::jsonb
+  );
+  IF v_due_edit->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Synthetic fifth-Monday task date setup failed: %', v_due_edit;
+  END IF;
+  v_result := public.create_repetition_p(
+    '25000000-0000-4000-8000-000000000023', v_ref.slug, v_task_id,
+    '2026-01-05'::date, NULL, 4, 2, false, NULL,
+    '{"frequency":"monthly","interval":"1","ordinal":5,"weekday":1}'::jsonb
+  );
+  IF v_result->>'status' IS DISTINCT FROM 'confirmed'
+    OR v_result->>'next_due_on' IS DISTINCT FROM '2026-03-30' THEN
+    RAISE EXCEPTION 'Fifth-Monday series did not schedule the first valid month: %', v_result;
+  END IF;
+  INSERT INTO issue24_series_refs(purpose, series_id, task_id, board_id, slug)
+  VALUES ('monthly_fifth_monday_worker', (v_result->>'series_id')::uuid,
+    v_task_id, v_ref.board_id, v_ref.slug);
+
+  PERFORM set_config('request.jwt.claim.role', 'service_role', true);
+  FOR v_job IN
+    SELECT * FROM public.claim_daily_repetition_jobs_internal_p(
+      100, '2026-06-29 15:00:00+00'::timestamptz
+    )
+  LOOP
+    v_result := public.process_daily_repetition_job_internal_p(
+      v_job.id, v_job.lease_token, '2026-06-29 15:00:00+00'::timestamptz
+    );
+    IF v_job.series_id = (
+      SELECT series_id FROM issue24_series_refs
+      WHERE purpose = 'monthly_fifth_monday_worker'
+    ) THEN
+      v_processed_june := v_result->>'status' = 'confirmed'
+        AND v_result->>'occurrence_on' = '2026-06-29'
+        AND v_result->>'consumed_count' = '3'
+        AND v_result->>'next_due_on' = '2026-08-31';
+    END IF;
+  END LOOP;
+  SELECT series.* INTO v_series
+  FROM public.daily_repetition_series AS series
+  WHERE series.id = (
+    SELECT series_id FROM issue24_series_refs
+    WHERE purpose = 'monthly_fifth_monday_worker'
+  );
+  IF NOT v_processed_june
+    OR v_series.state IS DISTINCT FROM 'active'
+    OR v_series.latest_occurrence_on IS DISTINCT FROM '2026-06-29'::date
+    OR v_series.consumed_count IS DISTINCT FROM 3
+    OR v_series.next_due_on IS DISTINCT FROM '2026-08-31'::date THEN
+    RAISE EXCEPTION 'Worker did not preserve N and the next valid fifth Monday: %', v_series;
+  END IF;
+
+  FOR v_job IN
+    SELECT * FROM public.claim_daily_repetition_jobs_internal_p(
+      100, '2026-08-31 15:00:00+00'::timestamptz
+    )
+  LOOP
+    v_result := public.process_daily_repetition_job_internal_p(
+      v_job.id, v_job.lease_token, '2026-08-31 15:00:00+00'::timestamptz
+    );
+    IF v_job.series_id = (
+      SELECT series_id FROM issue24_series_refs
+      WHERE purpose = 'monthly_fifth_monday_worker'
+    ) THEN
+      v_processed_august := v_result->>'status' = 'confirmed'
+        AND v_result->>'occurrence_on' = '2026-08-31'
+        AND v_result->>'consumed_count' = '4'
+        AND v_result->>'next_due_on' IS NULL;
+    END IF;
+  END LOOP;
+  SELECT series.* INTO v_series
+  FROM public.daily_repetition_series AS series
+  WHERE series.id = (
+    SELECT series_id FROM issue24_series_refs
+    WHERE purpose = 'monthly_fifth_monday_worker'
+  );
+  IF NOT v_processed_august
+    OR v_series.state IS DISTINCT FROM 'finished'
+    OR v_series.latest_occurrence_on IS DISTINCT FROM '2026-08-31'::date
+    OR v_series.consumed_count IS DISTINCT FROM 4
+    OR v_series.next_due_on IS NOT NULL
+    OR EXISTS (
+      SELECT 1 FROM public.daily_repetition_occurrences AS occurrence
+      WHERE occurrence.series_id = v_series.id
+        AND occurrence.occurrence_on = '2026-03-30'::date
+    ) THEN
+    RAISE EXCEPTION 'Worker consumed missing fifth Mondays or diverged from the finite preview: %', v_series;
+  END IF;
+END;
+$$;
+COMMIT;
+
+-- Issue #25 / C-73: an annual February 29 rule appears on February 28 in
+-- common years and returns to February 29 in leap years without changing its anchor.
+BEGIN;
+SELECT set_config('request.jwt.claim.sub', '40000000-0000-4000-8000-000000000002', true);
+DO $$
+DECLARE
+  v_ref issue23_refs%ROWTYPE;
+  v_preview jsonb;
+  v_created jsonb;
+  v_due_edit jsonb;
+  v_result jsonb;
+  v_status jsonb;
+  v_series public.daily_repetition_series%ROWTYPE;
+  v_job record;
+  v_task_id uuid;
+  v_processed boolean := false;
+BEGIN
+  SELECT * INTO v_ref FROM issue23_refs WHERE purpose = 'weekly_preview';
+  v_preview := public.preview_repetition_internal_p(
+    v_ref.slug, v_ref.task_id, '2024-02-29'::date, NULL, 6,
+    '2024-01-01 15:00:00+00'::timestamptz,
+    '{"frequency":"yearly","interval":1,"month":2,"day_of_month":29}'::jsonb
+  );
+  IF v_preview->>'status' IS DISTINCT FROM 'available'
+    OR v_preview->'future_dates' IS DISTINCT FROM
+      '["2025-02-28","2026-02-28","2027-02-28","2028-02-29","2029-02-28"]'::jsonb
+    OR v_preview->>'final_on' IS DISTINCT FROM '2029-02-28'
+    OR (v_preview->>'occurrence_limit')::bigint IS DISTINCT FROM 6
+    OR (v_preview->>'remaining_dates_after_current')::bigint IS DISTINCT FROM 5 THEN
+    RAISE EXCEPTION 'Annual February 29 rule changed its anchor or missed a leap-year adjustment: %', v_preview;
+  END IF;
+
+  v_preview := public.preview_repetition_internal_p(
+    v_ref.slug, v_ref.task_id, '2025-01-01'::date, NULL, 6,
+    '2025-01-01 15:00:00+00'::timestamptz,
+    '{"frequency":"yearly","interval":1,"month":3,"ordinal":5,"weekday":1}'::jsonb
+  );
+  IF v_preview->>'status' IS DISTINCT FROM 'available'
+    OR v_preview->'future_dates' IS DISTINCT FROM
+      '["2025-03-31","2026-03-30","2027-03-29","2031-03-31","2032-03-29"]'::jsonb
+    OR v_preview->>'final_on' IS DISTINCT FROM '2032-03-29'
+    OR (v_preview->>'remaining_dates_after_current')::bigint IS DISTINCT FROM 5 THEN
+    RAISE EXCEPTION 'Annual fifth Mondays missing from March did not preserve the anchor or skip without consuming N: %', v_preview;
+  END IF;
+
+  v_preview := public.preview_repetition_internal_p(
+    v_ref.slug, v_ref.task_id, '2024-02-29'::date, NULL, NULL,
+    '2024-01-01 15:00:00+00'::timestamptz,
+    '{"frequency":"yearly","interval":"2147483648","month":2,"day_of_month":29}'::jsonb
+  );
+  IF v_preview->>'status' IS DISTINCT FROM 'available'
+    OR v_preview->'future_dates' IS DISTINCT FROM '[]'::jsonb THEN
+    RAISE EXCEPTION 'A large annual interval was arbitrarily rejected or previewed outside the calendar: %', v_preview;
+  END IF;
+
+  v_preview := public.preview_repetition_internal_p(
+    v_ref.slug, v_ref.task_id, '2024-02-29'::date, NULL, NULL,
+    '2024-01-01 15:00:00+00'::timestamptz,
+    '{"frequency":"yearly","interval":"9007199254740993","month":2,"day_of_month":29}'::jsonb
+  );
+  IF v_preview->>'status' IS DISTINCT FROM 'available'
+    OR v_preview->'pattern'->>'interval' IS DISTINCT FROM '9007199254740993'
+    OR v_preview->'future_dates' IS DISTINCT FROM '[]'::jsonb THEN
+    RAISE EXCEPTION 'An annual bigint interval lost precision in the normalized preview: %', v_preview;
+  END IF;
+
+  v_created := public.create_task_p(
+    '25000000-0000-4000-8000-000000000011', v_ref.board_id, v_ref.column_id,
+    'Ancla anual sintética', NULL, 'low'
+  );
+  v_task_id := (v_created->>'task_id')::uuid;
+  v_due_edit := public.edit_task_fields_p(
+    '25000000-0000-4000-8000-000000000012', v_ref.slug, v_task_id,
+    '{"due_on":"2024-02-29"}'::jsonb, '{"due_on":1}'::jsonb
+  );
+  IF v_due_edit->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Synthetic annual task date setup failed: %', v_due_edit;
+  END IF;
+  v_result := public.create_repetition_p(
+    '25000000-0000-4000-8000-000000000013', v_ref.slug, v_task_id,
+    '2024-02-29'::date, NULL, 6, 2, false, NULL,
+    '{"frequency":"yearly","interval":"1","month":2,"day_of_month":29}'::jsonb
+  );
+  IF v_result->>'status' IS DISTINCT FROM 'confirmed'
+    OR v_result->>'next_due_on' IS DISTINCT FROM '2025-02-28'
+    OR v_result->'pattern' IS DISTINCT FROM
+      '{"frequency":"yearly","interval":"1","month":2,"day_of_month":29}'::jsonb THEN
+    RAISE EXCEPTION 'Annual series and preview did not share the February 29 adjustment: %', v_result;
+  END IF;
+  v_status := public.get_repetition_p(v_ref.slug, v_task_id);
+  IF v_status->>'status' IS DISTINCT FROM 'available'
+    OR v_status->>'rule' IS DISTINCT FROM 'yearly'
+    OR v_status->'pattern' IS DISTINCT FROM
+      '{"frequency":"yearly","interval":"1","month":2,"day_of_month":29}'::jsonb
+    OR v_status->>'next_due_on' IS DISTINCT FROM '2025-02-28' THEN
+    RAISE EXCEPTION 'Get changed the original annual leap-day rule: %', v_status;
+  END IF;
+  INSERT INTO issue24_series_refs(purpose, series_id, task_id, board_id, slug)
+  VALUES ('annual_february_29', (v_result->>'series_id')::uuid,
+    v_task_id, v_ref.board_id, v_ref.slug);
+
+  PERFORM set_config('request.jwt.claim.role', 'service_role', true);
+  FOR v_job IN
+    SELECT * FROM public.claim_daily_repetition_jobs_internal_p(
+      100, '2025-02-28 15:00:00+00'::timestamptz
+    )
+  LOOP
+    v_result := public.process_daily_repetition_job_internal_p(
+      v_job.id, v_job.lease_token, '2025-02-28 15:00:00+00'::timestamptz
+    );
+    IF v_job.series_id = (SELECT series_id FROM issue24_series_refs WHERE purpose = 'annual_february_29') THEN
+      v_processed := v_result->>'status' = 'confirmed'
+        AND v_result->>'occurrence_on' = '2025-02-28';
+    END IF;
+  END LOOP;
+  SELECT series.* INTO v_series
+  FROM public.daily_repetition_series AS series
+  WHERE series.id = (SELECT series_id FROM issue24_series_refs WHERE purpose = 'annual_february_29');
+  IF NOT v_processed
+    OR v_series.latest_occurrence_on IS DISTINCT FROM '2025-02-28'::date
+    OR v_series.consumed_count IS DISTINCT FROM 2
+    OR v_series.next_due_on IS DISTINCT FROM '2026-02-28'::date THEN
+    RAISE EXCEPTION 'Annual worker diverged from the previewed February 29 calendar: %', v_series;
+  END IF;
+END;
+$$;
+COMMIT;

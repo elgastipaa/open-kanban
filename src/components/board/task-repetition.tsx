@@ -13,6 +13,10 @@ import type {
   RepetitionStatus,
 } from "@/lib/db/daily-repetition";
 import { RepetitionError } from "@/lib/db/daily-repetition";
+import {
+  createRepetitionPattern,
+  ordinalWeekdayAdjective,
+} from "@/lib/repetition-pattern";
 import { formatTaskDueDate } from "@/lib/task-date";
 import type { Task } from "@/lib/types";
 import { generateUUID } from "@/lib/utils";
@@ -52,6 +56,30 @@ const WEEKDAYS = [
   { value: 7, label: "domingo" },
 ] as const;
 
+const MONTHS = [
+  "enero",
+  "febrero",
+  "marzo",
+  "abril",
+  "mayo",
+  "junio",
+  "julio",
+  "agosto",
+  "septiembre",
+  "octubre",
+  "noviembre",
+  "diciembre",
+] as const;
+
+const ORDINALS = [
+  { value: 1, label: "primero" },
+  { value: 2, label: "segundo" },
+  { value: 3, label: "tercero" },
+  { value: 4, label: "cuarto" },
+  { value: 5, label: "quinto" },
+  { value: -1, label: "último" },
+] as const;
+
 function isoWeekday(date: string): number {
   const [year, month, day] = date.split("-").map(Number);
   const utcDate = new Date(0);
@@ -65,6 +93,32 @@ function patternLabel(pattern: RepetitionPattern | undefined): string | null {
     return pattern.interval === 1
       ? "Cada día"
       : `Cada ${pattern.interval} días`;
+  }
+  if (pattern.frequency === "monthly" || pattern.frequency === "yearly") {
+    const unit = pattern.frequency === "monthly" ? "mes" : "año";
+    const pluralUnit = pattern.frequency === "monthly" ? "meses" : "años";
+    const interval = String(pattern.interval);
+    const cadence =
+      interval === "1" ? `cada ${unit}` : `cada ${interval} ${pluralUnit}`;
+    if ("day_of_month" in pattern) {
+      if (pattern.frequency === "monthly") {
+        if (pattern.day_of_month === -1) return `El último día de ${cadence}`;
+        return `${cadence} · día ${pattern.day_of_month}`;
+      }
+      if (pattern.day_of_month === -1) {
+        return `El último día de ${MONTHS[pattern.month - 1]}, ${cadence}`;
+      }
+      return `${cadence} · ${pattern.day_of_month} de ${MONTHS[pattern.month - 1]}`;
+    }
+    const ordinal = ordinalWeekdayAdjective(pattern.ordinal);
+    const weekday = WEEKDAYS.find(
+      (item) => item.value === pattern.weekday,
+    )?.label;
+    if (!ordinal || !weekday) return cadence;
+    if (pattern.frequency === "monthly") {
+      return `El ${ordinal} ${weekday} de ${cadence}`;
+    }
+    return `El ${ordinal} ${weekday} de ${MONTHS[pattern.month - 1]}, ${cadence}`;
   }
   const days = pattern.weekdays
     .map((value) => WEEKDAYS.find((day) => day.value === value))
@@ -139,6 +193,11 @@ export function TaskRepetition({
   const [startOn, setStartOn] = useState(task.due_on ?? boardToday);
   const [frequency, setFrequency] = useState<RepetitionFrequency>("daily");
   const [interval, setInterval] = useState("1");
+  const [calendarMode, setCalendarMode] = useState<"day" | "ordinal">("day");
+  const [dayOfMonth, setDayOfMonth] = useState("1");
+  const [month, setMonth] = useState("1");
+  const [ordinal, setOrdinal] = useState("1");
+  const [ordinalWeekday, setOrdinalWeekday] = useState("1");
   const [weekdays, setWeekdays] = useState<number[]>(() => [
     isoWeekday(task.due_on ?? boardToday),
   ]);
@@ -165,6 +224,29 @@ export function TaskRepetition({
     setStartOn(initialStartOn);
     setFrequency(pending?.pattern.frequency ?? "daily");
     setInterval(String(pending?.pattern.interval ?? 1));
+    setCalendarMode(
+      pending?.pattern && "ordinal" in pending.pattern ? "ordinal" : "day",
+    );
+    setDayOfMonth(
+      pending?.pattern && "day_of_month" in pending.pattern
+        ? String(pending.pattern.day_of_month)
+        : String(Number(initialStartOn.slice(8, 10))),
+    );
+    setMonth(
+      pending?.pattern && "month" in pending.pattern
+        ? String(pending.pattern.month)
+        : String(Number(initialStartOn.slice(5, 7))),
+    );
+    setOrdinal(
+      pending?.pattern && "ordinal" in pending.pattern
+        ? String(pending.pattern.ordinal)
+        : "1",
+    );
+    setOrdinalWeekday(
+      pending?.pattern && "weekday" in pending.pattern
+        ? String(pending.pattern.weekday)
+        : String(isoWeekday(initialStartOn)),
+    );
     setWeekdays(
       pending?.pattern.frequency === "weekly"
         ? [...pending.pattern.weekdays]
@@ -226,21 +308,16 @@ export function TaskRepetition({
   };
 
   function selectedPattern(): RepetitionPattern | null {
-    if (frequency === "daily") return { frequency, interval: 1 };
-    const parsedInterval = Number(interval);
-    if (
-      !Number.isSafeInteger(parsedInterval) ||
-      parsedInterval < 1 ||
-      parsedInterval > 2147483647
-    ) {
-      return null;
-    }
-    if (weekdays.length === 0) return null;
-    return {
+    return createRepetitionPattern({
       frequency,
-      interval: parsedInterval,
-      weekdays: [...weekdays].sort((left, right) => left - right),
-    };
+      interval,
+      weekdays,
+      calendarMode,
+      dayOfMonth,
+      month,
+      ordinal,
+      weekday: ordinalWeekday,
+    });
   }
 
   async function loadPreview() {
@@ -588,19 +665,26 @@ export function TaskRepetition({
                   >
                     <option value="daily">Diaria</option>
                     <option value="weekly">Semanal</option>
+                    <option value="monthly">Mensual</option>
+                    <option value="yearly">Anual</option>
                   </select>
                 </label>
-                {frequency === "weekly" ? (
+                {frequency !== "daily" ? (
                   <label
                     className="flex flex-col gap-1.5 font-semibold text-text-muted text-xs"
                     htmlFor="repetition-interval"
                   >
-                    Repetir cada · semanas
+                    Repetir cada ·{" "}
+                    {frequency === "weekly"
+                      ? "semanas"
+                      : frequency === "monthly"
+                        ? "meses"
+                        : "años"}
                     <input
                       id="repetition-interval"
                       type="number"
                       min={1}
-                      max={2147483647}
+                      max={frequency === "weekly" ? 2147483647 : undefined}
                       step={1}
                       value={interval}
                       disabled={isWorking || Boolean(retryCommand)}
@@ -614,6 +698,135 @@ export function TaskRepetition({
                   </label>
                 ) : null}
               </div>
+              {frequency === "monthly" || frequency === "yearly" ? (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {frequency === "yearly" ? (
+                    <label
+                      className="flex flex-col gap-1.5 font-semibold text-text-muted text-xs"
+                      htmlFor="repetition-month"
+                    >
+                      Mes
+                      <select
+                        id="repetition-month"
+                        value={month}
+                        disabled={isWorking || Boolean(retryCommand)}
+                        onChange={(event) => {
+                          setMonth(event.target.value);
+                          setPreview(null);
+                          setNotice("");
+                        }}
+                        className="h-10 rounded-md border border-border bg-surface-base px-3 text-sm text-text-primary outline-none focus:border-accent disabled:opacity-60"
+                      >
+                        {MONTHS.map((monthName, index) => (
+                          <option key={monthName} value={index + 1}>
+                            {monthName}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : null}
+                  <label
+                    className="flex flex-col gap-1.5 font-semibold text-text-muted text-xs"
+                    htmlFor="repetition-calendar-mode"
+                  >
+                    Regla del calendario
+                    <select
+                      id="repetition-calendar-mode"
+                      value={calendarMode}
+                      disabled={isWorking || Boolean(retryCommand)}
+                      onChange={(event) => {
+                        setCalendarMode(
+                          event.target.value as "day" | "ordinal",
+                        );
+                        setPreview(null);
+                        setNotice("");
+                      }}
+                      className="h-10 rounded-md border border-border bg-surface-base px-3 text-sm text-text-primary outline-none focus:border-accent disabled:opacity-60"
+                    >
+                      <option value="day">Día del mes</option>
+                      <option value="ordinal">Ordinal de la semana</option>
+                    </select>
+                  </label>
+                  {calendarMode === "day" ? (
+                    <label
+                      className="flex flex-col gap-1.5 font-semibold text-text-muted text-xs"
+                      htmlFor="repetition-day-of-month"
+                    >
+                      Día del mes · del 1 al 31
+                      <select
+                        id="repetition-day-of-month"
+                        value={dayOfMonth}
+                        disabled={isWorking || Boolean(retryCommand)}
+                        onChange={(event) => {
+                          setDayOfMonth(event.target.value);
+                          setPreview(null);
+                          setNotice("");
+                        }}
+                        className="h-10 rounded-md border border-border bg-surface-base px-3 text-sm text-text-primary outline-none focus:border-accent disabled:opacity-60"
+                      >
+                        {Array.from(
+                          { length: 31 },
+                          (_, index) => index + 1,
+                        ).map((day) => (
+                          <option key={day} value={day}>
+                            {day}
+                          </option>
+                        ))}
+                        <option value={-1}>Último día</option>
+                      </select>
+                    </label>
+                  ) : (
+                    <>
+                      <label
+                        className="flex flex-col gap-1.5 font-semibold text-text-muted text-xs"
+                        htmlFor="repetition-ordinal"
+                      >
+                        Ordinal
+                        <select
+                          id="repetition-ordinal"
+                          value={ordinal}
+                          disabled={isWorking || Boolean(retryCommand)}
+                          onChange={(event) => {
+                            setOrdinal(event.target.value);
+                            setPreview(null);
+                            setNotice("");
+                          }}
+                          className="h-10 rounded-md border border-border bg-surface-base px-3 text-sm text-text-primary outline-none focus:border-accent disabled:opacity-60"
+                        >
+                          {ORDINALS.map((item) => (
+                            <option key={item.value} value={item.value}>
+                              {item.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label
+                        className="flex flex-col gap-1.5 font-semibold text-text-muted text-xs"
+                        htmlFor="repetition-ordinal-weekday"
+                      >
+                        Día de la semana
+                        <select
+                          id="repetition-ordinal-weekday"
+                          value={ordinalWeekday}
+                          disabled={isWorking || Boolean(retryCommand)}
+                          onChange={(event) => {
+                            setOrdinalWeekday(event.target.value);
+                            setPreview(null);
+                            setNotice("");
+                          }}
+                          className="h-10 rounded-md border border-border bg-surface-base px-3 text-sm text-text-primary outline-none focus:border-accent disabled:opacity-60"
+                        >
+                          {WEEKDAYS.map((day) => (
+                            <option key={day.value} value={day.value}>
+                              {day.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </>
+                  )}
+                </div>
+              ) : null}
               {frequency === "weekly" ? (
                 <fieldset
                   className="space-y-2 rounded-md border border-border p-3"

@@ -53,6 +53,13 @@ export class BoardLabelsUnavailableError extends Error {
   }
 }
 
+export class BoardLabelTrashUnavailableError extends Error {
+  constructor() {
+    super("La papelera de etiquetas no está disponible con el acceso actual.");
+    this.name = "BoardLabelTrashUnavailableError";
+  }
+}
+
 const palette: readonly BoardLabelColor[] = [
   "red",
   "orange",
@@ -132,6 +139,9 @@ export async function listDeletedBoardLabels(
     status: string;
     labels?: unknown;
   }>(supabase, "list_deleted_board_labels_p", { p_slug: slug });
+  if (result.status === "unavailable") {
+    throw new BoardLabelTrashUnavailableError();
+  }
   if (
     result.status !== "available" ||
     !Array.isArray(result.labels) ||

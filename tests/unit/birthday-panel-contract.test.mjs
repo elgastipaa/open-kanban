@@ -11,7 +11,9 @@ import {
 import { reconcileRestoreSelection } from "../../src/lib/board-label-restore-state.ts";
 import {
   BoardLabelsUnavailableError,
+  BoardLabelTrashUnavailableError,
   listBoardLabels,
+  listDeletedBoardLabels,
 } from "../../src/lib/db/board-labels.ts";
 
 const panelSource = await readFile(
@@ -219,7 +221,7 @@ test("catalog refresh keeps drafts and offers explicit current-version or keep-d
 
   assert.match(
     labelsDialogSource,
-    /reconcileBoardLabelDrafts\(labels, current\)/,
+    /reconcileBoardLabelCatalogRead\(\{[\s\S]*?previousLabels: editorSnapshotRef\.current\.labels,[\s\S]*?drafts: editorSnapshotRef\.current\.drafts/,
   );
   assert.match(labelsDialogSource, /expectedVersion:\s*draft\.baseVersion/);
   assert.match(
@@ -341,6 +343,11 @@ test("a reappeared label ID requires explicit conflict resolution", () => {
     labelsDialogSource,
     /Tu edición:[\s\S]*?Versión actual:[\s\S]*?Usar versión actual[\s\S]*?Revisar mis cambios/,
   );
+  assert.match(
+    labelsDialogSource,
+    /Promise\.allSettled\([\s\S]*?applyActiveCatalog\(activeResult\.value\)/,
+    "opening the dialog must reconcile the retained orphan draft with the current catalog",
+  );
 });
 
 test("closing label administration retains drafts and board filters", () => {
@@ -375,9 +382,21 @@ test("closing label administration retains drafts and board filters", () => {
 test("unavailable RPC clears access state while transport errors retain edits", () => {
   assert.match(
     labelsDialogSource,
-    /result\.status === "unavailable"[\s\S]*?clearPrivateCatalogContent\(\)/,
-    "an explicit unavailable RPC result clears private catalog state",
+    /async function reconcileUnavailableResult\([\s\S]*?refreshCatalog\(\)[\s\S]*?BoardLabelsUnavailableError/,
+    "the result is resolved through a current authorized catalog read before cleanup",
   );
+  for (const flow of [
+    "saveLabel",
+    "confirmDelete",
+    "loadPreview",
+    "confirmRestore",
+  ]) {
+    const flowBody = labelsDialogSource.match(
+      new RegExp(`(?:async )?function ${flow}\\([\\s\\S]*?\\n  \\}`),
+    );
+    assert.ok(flowBody, `${flow} should exist`);
+    assert.match(flowBody[0], /reconcileUnavailableResult\(/);
+  }
   const saveLabelBody = labelsDialogSource.match(
     /async function saveLabel\(label: BoardLabel\) \{[\s\S]*?\n {2}\}/,
   );
@@ -390,7 +409,10 @@ test("unavailable RPC clears access state while transport errors retain edits", 
   assert.match(transportFailure[0], /reintent/);
   assert.doesNotMatch(transportFailure[0], /clearPrivateCatalogContent/);
   assert.match(transportFailure[0], /setError/);
-  assert.match(labelsDialogSource, /Reintentar lectura del catálogo/);
+  assert.match(
+    labelsDialogSource,
+    /catalogReadFailed \|\| trashReadFailed[\s\S]*?Reintentar lectura/,
+  );
   assert.match(
     labelsDialogSource,
     /catch \(failure\)[\s\S]*?failure instanceof BoardLabelsUnavailableError[\s\S]*?clearPrivateCatalogContent/,
@@ -433,6 +455,66 @@ test("catalog RPC unavailability is distinct from transport and parse errors", a
     ),
     (error) =>
       error instanceof Error && !(error instanceof BoardLabelsUnavailableError),
+  );
+});
+
+test("trash unavailable is distinct from transport and parse errors", async () => {
+  await assert.rejects(
+    listDeletedBoardLabels(
+      {
+        rpc: async () => ({ data: { status: "unavailable" }, error: null }),
+      },
+      "board-one",
+    ),
+    BoardLabelTrashUnavailableError,
+  );
+  await assert.rejects(
+    listDeletedBoardLabels(
+      {
+        rpc: async () => ({
+          data: null,
+          error: new Error("temporary network"),
+        }),
+      },
+      "board-one",
+    ),
+    (error) =>
+      error instanceof Error &&
+      !(error instanceof BoardLabelTrashUnavailableError),
+  );
+  await assert.rejects(
+    listDeletedBoardLabels(
+      {
+        rpc: async () => ({
+          data: { status: "available", labels: "malformed" },
+          error: null,
+        }),
+      },
+      "board-one",
+    ),
+    (error) =>
+      error instanceof Error &&
+      !(error instanceof BoardLabelTrashUnavailableError),
+  );
+  assert.match(labelsDialogSource, /trashReadFailed/);
+  assert.match(
+    labelsDialogSource,
+    /trashResult\.reason instanceof BoardLabelTrashUnavailableError[\s\S]*?setTrash\(\[\]\)[\s\S]*?else \{[\s\S]*?setTrashReadFailed\(true\)/,
+    "an authoritative unavailable result may clear trash, while transient failures keep it",
+  );
+  assert.match(
+    labelsDialogSource,
+    /catch \(failure\) \{[\s\S]*?failure instanceof BoardLabelTrashUnavailableError[\s\S]*?setTrash\(\[\]\)[\s\S]*?else \{[\s\S]*?setTrashReadFailed\(true\)[\s\S]*?Conservamos su último estado/,
+    "refresh errors preserve the last trash snapshot and expose retry",
+  );
+  assert.match(
+    labelsDialogSource,
+    /catalogReadFailed \|\| trashReadFailed[\s\S]*?retryCatalogRead/,
+    "a failed trash read can be retried from the dialog",
+  );
+  assert.doesNotMatch(
+    labelsDialogSource,
+    /listDeletedBoardLabels\(supabase, slug\)\.catch\(\(\) => \[\]\)/,
   );
 });
 

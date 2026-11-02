@@ -25,7 +25,7 @@
     "test:db:issue-35": "bash scripts/test-db-issue-35.sh",
     "test:unit:issue-33": "node --experimental-strip-types --test tests/unit/unified-search-navigation.test.mjs tests/unit/unified-search-state.test.mjs tests/unit/unified-search-request.test.mjs tests/unit/unified-search-refresh.test.mjs",
     "test:unit:issue-34": "node --experimental-strip-types --test tests/unit/view-preference-state.test.mjs tests/unit/view-preference-access.test.mjs tests/unit/my-task-view.test.mjs",
-    "test:unit:issue-35": "node --experimental-strip-types --test tests/unit/saved-view-state.test.mjs",
+    "test:unit:issue-35": "node --experimental-strip-types --test tests/unit/saved-view-state.test.mjs tests/unit/saved-views-panel-contract.test.mjs",
     "test:db:issue-26": "bash scripts/test-db-issue-26.sh",
     "test:db": "bash scripts/test-db.sh",
     "test:db:issue-23": "bash scripts/test-db-issue-23.sh",

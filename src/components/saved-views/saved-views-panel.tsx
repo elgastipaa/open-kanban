@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   confirmSavedViewRestore,
   createSavedView,
@@ -126,6 +126,11 @@ export function SavedViewsPanel({
   const [accessUnavailable, setAccessUnavailable] = useState(
     initialSnapshot.status === "unavailable",
   );
+  const selectedIdRef = useRef(selectedId);
+  const deletedIdRef = useRef(deletedId);
+  const hasSyncedSnapshotRef = useRef(false);
+  selectedIdRef.current = selectedId;
+  deletedIdRef.current = deletedId;
   const clearPrivateViewState = useCallback(() => {
     setActiveViews([]);
     setDeletedViews([]);
@@ -155,39 +160,43 @@ export function SavedViewsPanel({
 
   useEffect(() => {
     if (initialSnapshot.status === "available") {
-      setActiveViews(initialSnapshot.active_views ?? []);
-      setDeletedViews(initialSnapshot.deleted_views ?? []);
-      setSelectedId((current) =>
-        initialSnapshot.active_views?.some((view) => view.id === current)
-          ? current
-          : (initialSnapshot.active_views?.[0]?.id ?? ""),
-      );
-      const selectedActive =
-        initialSnapshot.active_views?.find((view) => view.id === selectedId) ??
-        initialSnapshot.active_views?.[0];
-      if (selectedActive && selectedActive.id !== selectedId) {
-        setName(selectedActive.name);
+      const active = initialSnapshot.active_views ?? [];
+      const deleted = initialSnapshot.deleted_views ?? [];
+      const currentSelectedId = selectedIdRef.current;
+      const nextSelectedId = active.some(
+        (view) => view.id === currentSelectedId,
+      )
+        ? currentSelectedId
+        : (active[0]?.id ?? "");
+      const currentDeletedId = deletedIdRef.current;
+      const nextDeletedId = deleted.some((view) => view.id === currentDeletedId)
+        ? currentDeletedId
+        : (deleted[0]?.id ?? "");
+
+      setActiveViews(active);
+      setDeletedViews(deleted);
+      setSelectedId(nextSelectedId);
+      setDeletedId(nextDeletedId);
+      if (nextSelectedId !== currentSelectedId) {
+        setName(active.find((view) => view.id === nextSelectedId)?.name ?? "");
       }
-      setDeletedId((current) =>
-        initialSnapshot.deleted_views?.some((view) => view.id === current)
-          ? current
-          : (initialSnapshot.deleted_views?.[0]?.id ?? ""),
-      );
-      const deletedView =
-        initialSnapshot.deleted_views?.find((view) => view.id === deletedId) ??
-        initialSnapshot.deleted_views?.[0];
-      if (deletedView) {
-        setRestoreName(deletedView.name);
-        setRestoreDefinition(deletedView.definition);
+      if (nextDeletedId !== currentDeletedId || !hasSyncedSnapshotRef.current) {
+        const deletedView = deleted.find((view) => view.id === nextDeletedId);
+        setRestoreName(deletedView?.name ?? "");
+        setRestoreDefinition(deletedView?.definition ?? null);
+        setPreview(null);
+        setRestoreConflict(null);
       }
+      hasSyncedSnapshotRef.current = true;
       setAccessUnavailable(false);
       return;
     }
     if (initialSnapshot.status === "unavailable") {
       clearPrivateViewState();
       setAccessUnavailable(true);
+      hasSyncedSnapshotRef.current = true;
     }
-  }, [clearPrivateViewState, deletedId, initialSnapshot, selectedId]);
+  }, [clearPrivateViewState, initialSnapshot]);
 
   const refresh = useCallback(async () => {
     setBusy(true);

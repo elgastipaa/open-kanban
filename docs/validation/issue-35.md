@@ -22,6 +22,10 @@ Se conserva `Blocked by #14/#34`; esta implementación bajo LP-0.2 no declara ce
 | Conflictos de recuperación y atomicidad | Preview y confirmación revisan nombre, cupo total, referencias y versión; los casos de límite/conflicto no mutan el tombstone. Liberar cupo permite una segunda preview y confirmación explícita. |
 | Integración de página y contexto | `/search` y `/my-tasks` cargan catálogo con cliente servidor autenticado y montan el panel por cuenta. El atajo/contexto de búsqueda no se reemplaza por un nuevo flujo; Mis tareas limita el tipo de definición a su contexto. |
 
+### Regresión de sincronización de UI (TDD)
+
+Una prueba de contrato falló primero porque el efecto que importa el snapshot inicial también dependía de `selectedId`/`deletedId`: después de crear una vista y refrescar, seleccionar su ID podía volver a cargar la lista inicial antigua. El efecto ahora solo reconcilia cuando cambia el snapshot autorizado; las acciones explícitas del cliente controlan la selección y preservan la edición local. La prueba verifica las dependencias, que el selector cargue el nombre de la vista elegida y que Restablecer vista siga siendo una acción explícita. El estado final es verde en `pnpm test:unit:issue-35` (6/6).
+
 ## Comandos y resultados
 
 Entorno: PostgreSQL local descartable creado por `scripts/test-db.sh`; ejecución con identidades sintéticas. `next` local: 16.4.2.
@@ -30,12 +34,12 @@ Entorno: PostgreSQL local descartable creado por `scripts/test-db.sh`; ejecució
 | --- | --- |
 | `pnpm test:db:issue-35` | Exit 0; suite focal y carrera de dos clientes sobre cupo 50. |
 | `pnpm test:db` | Exit 0; migraciones y regresiones 001–060, incluidas las suites de #35; mensaje final `Database regression tests passed (disposable PostgreSQL).` |
-| `pnpm test:unit` | Exit 0; tests existentes y suites unitarias focales de #33, #34 y #35; `saved-view-state.test.mjs` pasa 4/4. |
+| `pnpm test:unit` | Exit 0; tests existentes y suites unitarias focales de #33, #34 y #35; la suite #35 pasa 6/6 (`saved-view-state` y contrato de panel). |
 | `pnpm exec next typegen` | Exit 0; rutas generadas por Next 16.4.2. |
 | `pnpm typecheck` | Exit 0 (`tsc --noEmit`). |
 | `pnpm build` | Exit 0; build optimizado de Next 16.4.2. |
-| `pnpm exec biome check --line-ending=crlf` sobre los 9 archivos TS/TSX/MJS del cambio | Exit 0; sin diagnósticos. |
-| `pnpm exec biome check --formatter-enabled=false` | Exit 0; 250 archivos revisados sin diagnósticos de lint. |
+| `pnpm exec biome check --line-ending=crlf` sobre los 10 archivos TS/TSX/MJS del cambio | Exit 0; sin diagnósticos. |
+| `pnpm exec biome check --formatter-enabled=false` | Exit 0; 251 archivos revisados sin diagnósticos de lint. |
 | `bash -n scripts/test-db.sh scripts/test-db-issue-35.sh scripts/test-db-issue-35-race.sh` | Exit 0. |
 | `git diff --check` | Exit 0. |
 | `pnpm lint` | Exit 1 porque el chequeo de formato global usa LF y el repositorio conserva CRLF: reporta diferencias de finales de línea en archivos no relacionados. Los archivos TS/TSX del ticket pasan el chequeo focal con `--line-ending=crlf`; la revisión global sin formatter pasa. No se reformateó el repositorio completo. |

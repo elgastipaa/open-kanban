@@ -35,7 +35,7 @@ Verificaciones finales del árbol con los cambios actuales:
 | `pnpm test:unit` | Exit 0; agregado unitario completo, incluidos focos #33–#37. |
 | `pnpm exec next typegen && pnpm typecheck` | Exit 0. |
 | `pnpm build` | Exit 0; Next.js 16.4.2 genera la ruta dinámica `/notifications`. |
-| `pnpm exec biome check --line-ending=crlf <archivos del ticket>` | Exit 0; formato y lint focales limpios tras formatear la regresión unitaria. |
+| `pnpm exec biome check --line-ending=crlf package.json src/app/page.tsx src/app/notifications/page.tsx src/components/notifications/task-notifications-inbox.tsx src/lib/db/task-notifications.ts src/lib/task-notification-state.ts src/lib/unified-search-navigation.ts tests/unit/task-notification-state.test.mjs` | Exit 0; formato y lint focales limpios tras formatear la regresión unitaria. |
 | `pnpm exec biome check --formatter-enabled=false` | Exit 0; 262 archivos revisados. |
 | `bash -n scripts/test-db.sh scripts/test-db-issue-37.sh` | Exit 0. |
 | `git diff --check` | Exit 0. |

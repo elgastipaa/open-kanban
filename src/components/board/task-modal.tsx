@@ -25,6 +25,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { LinkifiedText } from "@/components/ui/linkified-text";
 import { Modal } from "@/components/ui/modal";
 import type { RepetitionEditOperationStore } from "@/lib/daily-repetition-edit-state";
 import type { RepetitionOperationStore } from "@/lib/daily-repetition-state";
@@ -75,6 +76,7 @@ import {
   taskEditSaveFollowUp,
   taskMoveFollowUp,
 } from "@/lib/task-edit-workflow";
+import { firstSafeTextLink } from "@/lib/text-links";
 import type {
   AssignableBoardMember,
   BoardLabel,
@@ -1420,6 +1422,7 @@ export function TaskModal({
     month: "short",
     year: "numeric",
   });
+  const externalTitleHref = firstSafeTextLink(baseTask.title);
   const otherColumns = columns.filter((column) => column.id !== task.column_id);
   const checklistProgress = getTaskChecklistProgress(baseTask.steps);
 
@@ -1446,12 +1449,25 @@ export function TaskModal({
                 Cuenta
               </Button>
             </div>
-            <label
-              htmlFor="task-title"
-              className="mb-2 flex items-center gap-1.5 font-semibold text-text-muted text-xs"
-            >
-              <IconTypography size={14} aria-hidden="true" /> Título
-            </label>
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <label
+                htmlFor="task-title"
+                className="flex items-center gap-1.5 font-semibold text-text-muted text-xs"
+              >
+                <IconTypography size={14} aria-hidden="true" /> Título
+              </label>
+              {externalTitleHref ? (
+                <a
+                  href={externalTitleHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  referrerPolicy="no-referrer"
+                  className="rounded-sm text-accent text-xs underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1"
+                >
+                  Abrir enlace del título
+                </a>
+              ) : null}
+            </div>
             <input
               id="task-title"
               ref={titleInputRef}
@@ -1565,12 +1581,14 @@ export function TaskModal({
                         className="min-w-32 flex-1 rounded-md border border-border bg-transparent px-2 py-1 text-sm outline-none focus:border-accent"
                       />
                     ) : (
-                      <label
-                        htmlFor={`task-checklist-step-${step.id}`}
+                      <div
                         className={`min-w-32 flex-1 break-words text-sm ${step.is_completed ? "text-text-muted line-through" : "text-text-primary"}`}
                       >
-                        {step.text}
-                      </label>
+                        <LinkifiedText
+                          text={step.text}
+                          plainTextLabelFor={`task-checklist-step-${step.id}`}
+                        />
+                      </div>
                     )}
                     {editingChecklistStepId === step.id ? (
                       <>

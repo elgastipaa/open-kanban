@@ -10,6 +10,7 @@ import {
 } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { LinkifiedText } from "@/components/ui/linkified-text";
 import {
   createTaskComment,
   deleteTaskComment,
@@ -62,18 +63,24 @@ function commentDate(value: string): string {
 }
 
 function renderCommentText(comment: TaskComment) {
-  return taskCommentTextSegments(comment).map((segment, index) => (
-    <span
-      key={`${segment.isCurrentMember ? "mention" : "text"}-${index}`}
-      className={
-        segment.isCurrentMember
-          ? "rounded bg-accent/15 px-0.5 text-text-primary"
-          : undefined
-      }
-    >
-      {segment.text}
-    </span>
-  ));
+  const segments = taskCommentTextSegments(comment);
+  const text = segments.map((segment) => segment.text).join("");
+  let offset = 0;
+  const highlightedRanges = segments.flatMap((segment) => {
+    const start = offset;
+    offset += segment.text.length;
+    return segment.isCurrentMember
+      ? [
+          {
+            start,
+            end: offset,
+            className: "rounded bg-accent/15 px-0.5 text-text-primary",
+          },
+        ]
+      : [];
+  });
+
+  return <LinkifiedText text={text} highlightedRanges={highlightedRanges} />;
 }
 
 function mentionsStillMatch(

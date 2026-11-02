@@ -6,6 +6,7 @@ import { TaskCopyAction } from "@/components/board/task-copy-action";
 import { CopyOccurrenceLinkAction } from "@/components/series/copy-occurrence-link-action";
 import { DeleteSeriesButton } from "@/components/series/delete-series-button";
 import { StopSeriesButton } from "@/components/series/stop-series-button";
+import { LinkifiedText } from "@/components/ui/linkified-text";
 import { Logo } from "@/components/ui/logo";
 import { resolveApplicationAccess } from "@/lib/auth";
 import { getFullBoard } from "@/lib/db/boards";
@@ -24,6 +25,7 @@ import {
   buildSeriesTaskEditorHref,
 } from "@/lib/repetition-series-navigation";
 import { createClient } from "@/lib/supabase/server";
+import { firstSafeTextLink } from "@/lib/text-links";
 import type { Board, Column, TaskComment } from "@/lib/types";
 
 export const metadata: Metadata = {
@@ -297,6 +299,9 @@ export default async function SeriesPage({ searchParams }: SeriesPageProps) {
 
   const selectedHistorySeries = history?.series;
   const selectedOccurrence = occurrenceDetail?.occurrence;
+  const externalTitleHref = selectedOccurrence?.task
+    ? firstSafeTextLink(selectedOccurrence.task.title)
+    : null;
   const selectedCommentForLink =
     selectedCommentId &&
     historyComments.some((comment) => comment.id === selectedCommentId)
@@ -653,12 +658,27 @@ export default async function SeriesPage({ searchParams }: SeriesPageProps) {
                       {selectedOccurrence.content_available &&
                       selectedOccurrence.task ? (
                         <>
-                          <h3 className="mt-1 break-words font-semibold text-xl">
-                            {selectedOccurrence.task.title}
-                          </h3>
+                          <div className="mt-1 flex flex-wrap items-center gap-2">
+                            <h3 className="break-words font-semibold text-xl">
+                              {selectedOccurrence.task.title}
+                            </h3>
+                            {externalTitleHref ? (
+                              <a
+                                href={externalTitleHref}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                referrerPolicy="no-referrer"
+                                className="rounded-sm text-accent text-xs underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1"
+                              >
+                                Abrir enlace del título
+                              </a>
+                            ) : null}
+                          </div>
                           {selectedOccurrence.task.description ? (
                             <p className="mt-3 whitespace-pre-wrap break-words text-sm text-text-secondary leading-6">
-                              {selectedOccurrence.task.description}
+                              <LinkifiedText
+                                text={selectedOccurrence.task.description}
+                              />
                             </p>
                           ) : null}
                           <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
@@ -738,10 +758,14 @@ export default async function SeriesPage({ searchParams }: SeriesPageProps) {
                                         {formatDate(comment.created_at)}
                                       </p>
                                       <p className="mt-2 whitespace-pre-wrap break-words text-sm text-text-primary">
-                                        {comment.deleted
-                                          ? "Este comentario fue eliminado."
-                                          : (comment.content ??
-                                            "Este comentario ya no tiene contenido disponible.")}
+                                        <LinkifiedText
+                                          text={
+                                            comment.deleted
+                                              ? "Este comentario fue eliminado."
+                                              : (comment.content ??
+                                                "Este comentario ya no tiene contenido disponible.")
+                                          }
+                                        />
                                       </p>
                                       <Link
                                         href={`${occurrenceHref(selectedHistorySeries.board_id, selectedHistorySeries.id, selectedOccurrence.id, selectedState, historyCursor)}&comment=${comment.id}#comment-${comment.id}`}

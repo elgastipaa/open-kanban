@@ -12,6 +12,7 @@ import type { MouseEvent } from "react";
 import { createPortal } from "react-dom";
 import { TaskDueDate } from "@/components/board/task-due-date";
 import { BoardLabelBadge } from "@/components/labels/board-label-badge";
+import { LinkifiedText } from "@/components/ui/linkified-text";
 import { getTaskChecklistProgress } from "@/lib/task-checklist-state";
 import type { Priority, Task } from "@/lib/types";
 
@@ -99,80 +100,84 @@ export function TaskCard({
             )}
 
             {/* Main detail trigger */}
-            <button
-              type="button"
-              data-task-trigger={task.id}
-              data-task-column={task.column_id}
-              data-task-index={index}
-              aria-label={`${isCompleted ? "Tarea completada" : "Tarea pendiente"}. Abrir tarea: ${task.title}`}
-              className="flex min-w-0 flex-1 flex-col p-3 pl-3.5 text-left outline-none focus-visible:ring-1 focus-visible:ring-accent"
-              onClick={(event: MouseEvent<HTMLButtonElement>) =>
-                onEdit(task, event.currentTarget)
-              }
-            >
-              {/* Header / Text */}
-              <div className="flex items-start gap-2 pr-6">
-                <span
-                  className={`mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-[3px] border ${isCompleted ? "border-accent bg-accent text-accent-foreground" : "border-text-muted text-transparent"}`}
-                  aria-hidden="true"
-                  title={isCompleted ? "Completada" : "Pendiente"}
-                >
-                  {isCompleted && <IconCheck size={12} />}
-                </span>
-                <div className="min-w-0">
-                  <p className="wrap-break-word font-medium text-sm text-text-primary leading-snug">
-                    {task.title}
-                  </p>
-                  {task.description && (
-                    <p className="mt-1 line-clamp-2 text-text-muted text-xs leading-relaxed">
-                      {task.description}
+            <div className="relative flex min-w-0 flex-1 flex-col">
+              <button
+                type="button"
+                data-task-trigger={task.id}
+                data-task-column={task.column_id}
+                data-task-index={index}
+                aria-label={`${isCompleted ? "Tarea completada" : "Tarea pendiente"}. Abrir tarea: ${task.title}`}
+                className="absolute inset-0 z-0 cursor-pointer outline-none"
+                onClick={(event: MouseEvent<HTMLButtonElement>) =>
+                  onEdit(task, event.currentTarget)
+                }
+              />
+              <div className="pointer-events-none relative z-10 flex min-w-0 flex-1 flex-col p-3 pl-3.5 text-left">
+                {/* Header / Text */}
+                <div className="flex items-start gap-2 pr-6">
+                  <span
+                    className={`mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-[3px] border ${isCompleted ? "border-accent bg-accent text-accent-foreground" : "border-text-muted text-transparent"}`}
+                    aria-hidden="true"
+                    title={isCompleted ? "Completada" : "Pendiente"}
+                  >
+                    {isCompleted && <IconCheck size={12} />}
+                  </span>
+                  <div className="min-w-0">
+                    <p className="wrap-break-word font-medium text-sm text-text-primary leading-snug">
+                      {task.title}
                     </p>
-                  )}
-                  {task.labels && task.labels.length > 0 ? (
-                    <span className="mt-1.5 flex flex-wrap gap-1">
-                      {task.labels.map((label) => (
-                        <BoardLabelBadge key={label.id} label={label} />
-                      ))}
+                    {task.description && (
+                      <p className="mt-1 line-clamp-2 text-text-muted text-xs leading-relaxed">
+                        <LinkifiedText text={task.description} />
+                      </p>
+                    )}
+                    {task.labels && task.labels.length > 0 ? (
+                      <span className="mt-1.5 flex flex-wrap gap-1">
+                        {task.labels.map((label) => (
+                          <BoardLabelBadge key={label.id} label={label} />
+                        ))}
+                      </span>
+                    ) : null}
+                    {task.assignee_id ? (
+                      <p className="mt-1 truncate text-text-muted text-xs">
+                        Responsable:{" "}
+                        {assigneeName ?? "Responsable no disponible"}
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
+
+                {/* Footer: priority + date */}
+                <div className="mt-2.5 flex items-center justify-between gap-2">
+                  <span
+                    className={`inline-flex rounded-full px-2 py-0.5 font-semibold text-[10px] uppercase tracking-wider ${priority.className}`}
+                  >
+                    {priority.label}
+                  </span>
+                  {checklistProgress.totalCount > 0 ? (
+                    <span className="mr-2 ml-auto text-[10px] text-text-muted">
+                      Pasos {checklistProgress.completedCount}/
+                      {checklistProgress.totalCount}
                     </span>
                   ) : null}
-                  {task.assignee_id ? (
-                    <p className="mt-1 truncate text-text-muted text-xs">
-                      Responsable: {assigneeName ?? "Responsable no disponible"}
-                    </p>
-                  ) : null}
+                  {task.due_on ? (
+                    <TaskDueDate
+                      dueOn={task.due_on}
+                      boardToday={boardToday}
+                      isCompleted={isCompleted}
+                      compact
+                    />
+                  ) : (
+                    <span className="text-[10px] text-text-muted">
+                      {new Date(task.created_at).toLocaleDateString("en-US", {
+                        month: "short",
+                        day: "numeric",
+                      })}
+                    </span>
+                  )}
                 </div>
               </div>
-
-              {/* Footer: priority + date */}
-              <div className="mt-2.5 flex items-center justify-between gap-2">
-                <span
-                  className={`inline-flex rounded-full px-2 py-0.5 font-semibold text-[10px] uppercase tracking-wider ${priority.className}`}
-                >
-                  {priority.label}
-                </span>
-                {checklistProgress.totalCount > 0 ? (
-                  <span className="mr-2 ml-auto text-[10px] text-text-muted">
-                    Pasos {checklistProgress.completedCount}/
-                    {checklistProgress.totalCount}
-                  </span>
-                ) : null}
-                {task.due_on ? (
-                  <TaskDueDate
-                    dueOn={task.due_on}
-                    boardToday={boardToday}
-                    isCompleted={isCompleted}
-                    compact
-                  />
-                ) : (
-                  <span className="text-[10px] text-text-muted">
-                    {new Date(task.created_at).toLocaleDateString("en-US", {
-                      month: "short",
-                      day: "numeric",
-                    })}
-                  </span>
-                )}
-              </div>
-            </button>
+            </div>
 
             <div className="flex items-center justify-end gap-1 border-border border-t px-2 py-1">
               {!isCompleted && (

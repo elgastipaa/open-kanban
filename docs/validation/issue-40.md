@@ -4,7 +4,7 @@
 
 **Base fija:** `95a57afc2bc70b76012cc81086ac2bf55a083095` (`codex/openkanban-1-0`).
 **Commits de código incluidos hasta el HEAD revisado:** `b64481ed5da52a68abb08b6f417ee754797658ec` (`feat: add private task attachments (#40)`), `eee9aecfcbb64eb52f27741b3cdfb45516d981f7` (recuperación admin/paginación/ciclo de tarea), `349da6cc976f55f24a789ab44f80934ce2c057d9` (`fix: reconcile missing task attachment objects (#40)`), `1d287070ad5cd149157d7d5d6d98fca0f084a3e8` (inventario exacto/completo para confirmar ausencia), `efcd7862c2db2ab38b664853834d05d03359999f` (`fix: verify bucket before marking attachments missing (#40)`), `709a1bbe74f6581d70526f2f13bc206bcf799e40` (clasificación estricta de 404 de objeto) y `3d938dab4547d4d898731a08a33d228b2f8f8322` (minimización del listado admin).
-**Estado:** commits locales en `codex/issue-40`; no se publicaron ni integraron. El issue y sus bloqueos `Blocked by #14/#17/#23` no se modificaron.
+**Estado integrado:** la rama `codex/issue-40` quedó integrada por fast-forward en `codex/openkanban-1-0`. HEAD revisado de código `3d938dab4547d4d898731a08a33d228b2f8f8322`; HEAD documental/integrado `be089e2b83242d88ecbf85bd338e4cdbe8bbb20b`. El issue #40 permanece abierto, conserva `Blocked by #14/#17/#23` y requiere aceptación humana por los gates externos descritos abajo.
 
 ## Alcance implementado
 
@@ -39,7 +39,7 @@ Desarrollo local en Windows/PowerShell; Node `v24.14.1`, pnpm `11.25.0`, Next.js
 | Comando | Resultado |
 | --- | --- |
 | `pnpm test:db:issue-40` | PASS en el HEAD actual; contrato DB verifica ausencia de `uploaded_by_reference` en lista admin individual y paginada, además de cuota, autorización, restore y ciclo de vida. |
-| `pnpm test:db` | PASS en la validación previa a la minimización final; no se volvió a ejecutar tras este cambio. La suite focal DB sí pasó en el HEAD actual. |
+| `pnpm test:db` | PASS en el HEAD integrado `be089e2`; suite completa de migraciones y regresiones del checkout de integración. |
 | `pnpm test:unit:issue-40` | PASS, 21/21; parser allowlist/rechazo de uploader, validación, parser HTTP, respuesta 410 segura, shape SDK/404 estricto, bucket lookup/timeout, inventario exacto/completo, cursor y avisos admin. |
 | `pnpm test:unit` | PASS en el HEAD actual; suite unitaria completa e issues #33–#40, con 21/21 en #40. |
 | `pnpm typecheck` | PASS. |
@@ -55,3 +55,7 @@ Desarrollo local en Windows/PowerShell; Node `v24.14.1`, pnpm `11.25.0`, Next.js
 - **Worker/cron:** no se verificó su programación ni una ejecución contra Storage real. La prueba DB verifica las transiciones y reclamación del trabajo, no la infraestructura externa.
 - **Navegador y QA humana:** quedan pendientes recorridos visuales, teclado/lector de pantalla y móvil/responsive con una sesión autorizada.
 - No se infieren de estas pruebas credenciales, Auth real, funcionamiento de servicios externos ni aceptación humana. El issue permanece abierto con `Blocked by #14/#17/#23`.
+
+## Integración
+
+Integrado localmente por fast-forward en `codex/openkanban-1-0` desde la base fija. En el checkout de integración se repitieron `pnpm test:db:issue-40` y `pnpm test:db`; ambos pasaron en `be089e2`. Las revisiones Spec y Standards/Privacy finales corresponden al HEAD funcional `3d938da`; el commit posterior `be089e2` solo registra documentación/evidencia. No se verificaron Storage real, programación/ejecución externa del worker/cron, Auth/browser ni QA visual/manual. El issue continúa OPEN/`ready-for-human`; no se afirma aceptación del usuario.

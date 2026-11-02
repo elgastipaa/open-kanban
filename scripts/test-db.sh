@@ -371,6 +371,11 @@ if [[ "${TEST_DB_FOCUS:-}" == 'issue43' ]]; then
   printf 'Issue #43 database regression tests passed (disposable PostgreSQL).\n'
   exit 0
 fi
+if [[ "${TEST_DB_FOCUS:-}" == 'issue44' ]]; then
+  "${psql[@]}" -f "$repo_dir/tests/db/board_import_v2.sql"
+  printf 'Issue #44 database regression tests passed (disposable PostgreSQL; Storage is simulated by DB-level object acknowledgements only).\n'
+  exit 0
+fi
 "${psql[@]}" -f "$repo_dir/tests/db/closed_access.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/authentication.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/realtime_epoch.sql"

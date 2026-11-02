@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { test } from "node:test";
+import {
+  MAX_PORTABLE_BOARD_IMPORT_BYTES,
+  MAX_PORTABLE_BOARD_PACKAGE_ENTRIES,
+  MAX_PORTABLE_BOARD_RECORDS,
+} from "../../src/lib/portable-board-import-limits.ts";
 import { createPortableZipStream } from "../../src/lib/portable-export-zip.ts";
 
 async function collect(stream) {
@@ -166,4 +171,59 @@ test("export v2 rejects unsafe package paths and does not finish a truncated arc
   }, /integridad|tamaño|hash/i);
   const bytes = Buffer.concat(partial);
   assert.equal(bytes.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06])), -1);
+});
+
+test("export v2 shares bounded package, entry, and record budgets with import", async () => {
+  await assert.rejects(
+    collect(
+      createPortableZipStream(
+        (async function* () {
+          yield {
+            name: "data/tasks.ndjson",
+            contentType: "application/x-ndjson",
+            recordCount: MAX_PORTABLE_BOARD_RECORDS + 1,
+            chunks: (async function* () {})(),
+          };
+        })(),
+        metadata,
+      ),
+    ),
+    /registros/i,
+  );
+  await assert.rejects(
+    collect(
+      createPortableZipStream(
+        (async function* () {
+          yield {
+            name: "objects/too-large.txt",
+            contentType: "text/plain",
+            expectedSize: MAX_PORTABLE_BOARD_IMPORT_BYTES + 1,
+            chunks: (async function* () {})(),
+          };
+        })(),
+        metadata,
+      ),
+    ),
+    /presupuesto/i,
+  );
+  await assert.rejects(async () => {
+    for await (const _chunk of createPortableZipStream(
+      (async function* () {
+        for (
+          let index = 0;
+          index < MAX_PORTABLE_BOARD_PACKAGE_ENTRIES;
+          index += 1
+        ) {
+          yield {
+            name: `objects/${index}`,
+            contentType: "text/plain",
+            chunks: (async function* () {})(),
+          };
+        }
+      })(),
+      metadata,
+    )) {
+      // Discard prior bounded chunks; the export must reject before writing entry 25,000.
+    }
+  }, /rutas/i);
 });

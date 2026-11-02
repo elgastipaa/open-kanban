@@ -1,9 +1,24 @@
 import { NextResponse } from "next/server";
+import { ZodError } from "zod/v4";
 import {
   MAX_LEGACY_IMPORT_REQUEST_BYTES,
   readBoundedRequestBody,
   readLegacyBoardImportFile,
 } from "@/lib/import";
+import { preparePortableBoardImport } from "@/lib/portable-board-import";
+import {
+  createPortableBoardImportAdapter,
+  PortableBoardImportAdapterError,
+} from "@/lib/portable-board-import-adapter";
+import {
+  PortableBoardImportUploadError,
+  spoolPortableBoardImportRequest,
+} from "@/lib/portable-board-import-upload";
+import {
+  MAX_PORTABLE_BOARD_IMPORT_BYTES,
+  openPortableBoardImportZip,
+} from "@/lib/portable-board-import-zip";
+import { createTaskAttachmentServiceClient } from "@/lib/supabase/task-attachment-storage";
 import { getTaskAttachmentSession } from "@/lib/task-attachment-session";
 
 export const dynamic = "force-dynamic";
@@ -12,6 +27,36 @@ export const runtime = "nodejs";
 type RouteContext = { params: Promise<{ slug: string }> };
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function portableImportError(error: unknown): NextResponse {
+  if (error instanceof PortableBoardImportUploadError) {
+    return json(
+      { status: error.kind, message: error.message },
+      error.kind === "too_large" ? 413 : error.kind === "invalid" ? 400 : 503,
+    );
+  }
+  if (error instanceof PortableBoardImportAdapterError) {
+    const status =
+      error.kind === "capacity" || error.kind === "conflict"
+        ? 409
+        : error.kind === "unavailable" || error.kind === "storage"
+          ? 503
+          : 400;
+    return json({ status: error.kind, message: error.message }, status);
+  }
+  return json(
+    {
+      status: "invalid",
+      message:
+        error instanceof ZodError
+          ? "El manifiesto o el contenido del respaldo v2 no cumple el formato permitido."
+          : error instanceof Error
+            ? error.message
+            : "No se pudo leer el respaldo v2.",
+    },
+    400,
+  );
+}
 
 function json(body: Record<string, unknown>, status = 200): NextResponse {
   return NextResponse.json(body, {
@@ -27,6 +72,66 @@ export async function POST(
   const session = await getTaskAttachmentSession();
   if (!session) return json({ status: "unavailable" }, 404);
   const { slug } = await params;
+  const contentType = request.headers
+    .get("content-type")
+    ?.split(";", 1)[0]
+    .trim()
+    .toLowerCase();
+  if (
+    contentType === "application/zip" ||
+    contentType === "application/octet-stream"
+  ) {
+    const operationId = request.headers.get("x-operation-id");
+    if (typeof operationId !== "string" || !UUID_PATTERN.test(operationId)) {
+      return json(
+        {
+          status: "invalid",
+          message: "El identificador de operación no es válido.",
+        },
+        400,
+      );
+    }
+    const contentLength = Number(request.headers.get("content-length"));
+    if (
+      Number.isFinite(contentLength) &&
+      contentLength > MAX_PORTABLE_BOARD_IMPORT_BYTES
+    ) {
+      return json(
+        {
+          status: "too_large",
+          message: "El respaldo supera el límite técnico permitido.",
+        },
+        413,
+      );
+    }
+    let spool: Awaited<
+      ReturnType<typeof spoolPortableBoardImportRequest>
+    > | null = null;
+    let zip: Awaited<ReturnType<typeof openPortableBoardImportZip>> | null =
+      null;
+    try {
+      spool = await spoolPortableBoardImportRequest(request);
+      zip = await openPortableBoardImportZip(spool.path);
+      const adapter = createPortableBoardImportAdapter({
+        client: session.client,
+        storage: createTaskAttachmentServiceClient,
+        actorId: session.actorId,
+        slug,
+      });
+      const preview = await preparePortableBoardImport(
+        zip,
+        spool.sha256,
+        operationId,
+        adapter,
+      );
+      return json(preview as unknown as Record<string, unknown>);
+    } catch (error) {
+      return portableImportError(error);
+    } finally {
+      if (zip) await zip.close();
+      if (spool) await spool.cleanup();
+    }
+  }
   const contentLength = Number(request.headers.get("content-length"));
   if (
     Number.isFinite(contentLength) &&

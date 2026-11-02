@@ -1,4 +1,11 @@
 import { createHash } from "node:crypto";
+import {
+  MAX_PORTABLE_BOARD_CENTRAL_DIRECTORY_BYTES,
+  MAX_PORTABLE_BOARD_MANIFEST_BYTES,
+  MAX_PORTABLE_BOARD_PACKAGE_BYTES,
+  MAX_PORTABLE_BOARD_PACKAGE_ENTRIES,
+  MAX_PORTABLE_BOARD_RECORDS,
+} from "./portable-board-import-limits.ts";
 
 const UTF8_FLAG = 0x0800;
 const DATA_DESCRIPTOR_FLAG = 0x0008;
@@ -49,8 +56,31 @@ export async function* createPortableZipStream(
   const files: ExportedFile[] = [];
   const centralDirectory: CentralDirectoryEntry[] = [];
   const timestamp = dosTimestamp(metadata.exportedAt);
+  let totalRecordCount = 0;
+  const packageByteLimit = BigInt(MAX_PORTABLE_BOARD_PACKAGE_BYTES);
+
+  function assertPackageSize(): void {
+    if (offset > packageByteLimit) {
+      throw new Error("El respaldo supera el presupuesto técnico del paquete.");
+    }
+  }
 
   for await (const source of sources) {
+    if (centralDirectory.length >= MAX_PORTABLE_BOARD_PACKAGE_ENTRIES - 1) {
+      throw new Error("El respaldo contiene demasiadas rutas.");
+    }
+    if (source.recordCount !== undefined) {
+      totalRecordCount += source.recordCount;
+      if (totalRecordCount > MAX_PORTABLE_BOARD_RECORDS) {
+        throw new Error("El respaldo contiene demasiados registros.");
+      }
+    }
+    if (
+      source.expectedSize !== undefined &&
+      source.expectedSize > MAX_PORTABLE_BOARD_PACKAGE_BYTES
+    ) {
+      throw new Error("Un archivo supera el presupuesto técnico del paquete.");
+    }
     const canonicalName = validateEntry(source, names);
     const encodedName = new TextEncoder().encode(source.name);
     const localOffset = offset;
@@ -60,6 +90,7 @@ export async function* createPortableZipStream(
       timestamp.dosDate,
     );
     offset += BigInt(localHeader.byteLength);
+    assertPackageSize();
     yield localHeader;
 
     const digest = createHash("sha256");
@@ -76,6 +107,7 @@ export async function* createPortableZipStream(
       crc = updateCrc32(crc, chunk);
       size += BigInt(chunk.byteLength);
       offset += BigInt(chunk.byteLength);
+      assertPackageSize();
       yield chunk;
     }
 
@@ -100,6 +132,7 @@ export async function* createPortableZipStream(
 
     const dataDescriptor = makeDataDescriptor(crc, size);
     offset += BigInt(dataDescriptor.byteLength);
+    assertPackageSize();
     yield dataDescriptor;
 
     const sizeNumber = Number(size);
@@ -129,6 +162,9 @@ export async function* createPortableZipStream(
   const manifestBytes = new TextEncoder().encode(
     `${JSON.stringify(manifest)}\n`,
   );
+  if (manifestBytes.byteLength > MAX_PORTABLE_BOARD_MANIFEST_BYTES) {
+    throw new Error("El manifiesto supera el presupuesto técnico permitido.");
+  }
   const manifestEntry: PortableZipSource = {
     name: "manifest.json",
     contentType: "application/json",
@@ -146,8 +182,10 @@ export async function* createPortableZipStream(
     timestamp.dosDate,
   );
   offset += BigInt(manifestHeader.byteLength);
+  assertPackageSize();
   yield manifestHeader;
   offset += BigInt(manifestBytes.byteLength);
+  assertPackageSize();
   yield manifestBytes;
   const manifestCrc = crc32(manifestBytes);
   const manifestDescriptor = makeDataDescriptor(
@@ -155,6 +193,7 @@ export async function* createPortableZipStream(
     BigInt(manifestBytes.byteLength),
   );
   offset += BigInt(manifestDescriptor.byteLength);
+  assertPackageSize();
   yield manifestDescriptor;
   centralDirectory.push({
     name: manifestName,
@@ -166,12 +205,21 @@ export async function* createPortableZipStream(
   });
 
   const centralDirectoryStart = offset;
+  let centralDirectorySize = BigInt(0);
   for (const entry of centralDirectory) {
     const header = makeCentralDirectoryHeader(entry);
+    centralDirectorySize += BigInt(header.byteLength);
+    if (
+      centralDirectorySize > BigInt(MAX_PORTABLE_BOARD_CENTRAL_DIRECTORY_BYTES)
+    ) {
+      throw new Error(
+        "El directorio del paquete supera el presupuesto técnico.",
+      );
+    }
     offset += BigInt(header.byteLength);
+    assertPackageSize();
     yield header;
   }
-  const centralDirectorySize = offset - centralDirectoryStart;
   const zip64EndOffset = offset;
   const zip64End = makeZip64EndRecord(
     BigInt(centralDirectory.length),
@@ -179,12 +227,15 @@ export async function* createPortableZipStream(
     centralDirectoryStart,
   );
   offset += BigInt(zip64End.byteLength);
+  assertPackageSize();
   yield zip64End;
   const locator = makeZip64Locator(zip64EndOffset);
   offset += BigInt(locator.byteLength);
+  assertPackageSize();
   yield locator;
   const end = makeEndRecord();
   offset += BigInt(end.byteLength);
+  assertPackageSize();
   yield end;
 }
 
@@ -208,7 +259,7 @@ function validateEntry(source: PortableZipSource, names: Set<string>): string {
     source.name.startsWith("/") ||
     source.name.includes("\\") ||
     source.name.includes("\0") ||
-    new TextEncoder().encode(source.name).byteLength > 0xffff ||
+    new TextEncoder().encode(source.name).byteLength > 1024 ||
     source.name
       .split("/")
       .some((part) => part === "" || part === "." || part === "..")

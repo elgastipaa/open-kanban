@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { MAX_LEGACY_BOARD_IMPORT_BYTES } from "@/lib/legacy-board-import";
+import { MAX_PORTABLE_BOARD_IMPORT_BYTES } from "@/lib/portable-board-import-limits";
 
 interface GenerationSummary {
   columns: number;
@@ -29,6 +30,7 @@ interface ImportPreview {
   content_revision: number;
   source_sha256?: string;
   expires_at: string;
+  source_version: 1 | 2;
   current: GenerationSummary;
   imported?: GenerationSummary;
   capacity: CapacitySnapshot;
@@ -125,10 +127,13 @@ function parsePreview(value: unknown): ImportPreview | null {
   const imported =
     row.imported === undefined ? undefined : parseSummary(row.imported);
   const capacity = parseCapacity(row.capacity);
+  const sourceVersion =
+    row.source_version === undefined ? 1 : row.source_version;
   if (
     revision === null ||
     !current ||
     !capacity ||
+    (sourceVersion !== 1 && sourceVersion !== 2) ||
     (row.imported !== undefined && !imported)
   ) {
     return null;
@@ -140,6 +145,7 @@ function parsePreview(value: unknown): ImportPreview | null {
     source_sha256:
       typeof row.source_sha256 === "string" ? row.source_sha256 : undefined,
     expires_at: row.expires_at,
+    source_version: sourceVersion,
     current,
     imported: imported ?? undefined,
     capacity,
@@ -157,6 +163,7 @@ function describeError(body: unknown, fallback: string): string {
   if (row?.status === "expired") {
     return "La vista previa venció. Prepara la operación otra vez.";
   }
+  if (typeof row?.message === "string") return row.message;
   return fallback;
 }
 
@@ -234,8 +241,16 @@ export function BoardImportDialog({
 
   async function prepareImport() {
     if (!file || isPreparing) return;
-    if (file.size > MAX_LEGACY_BOARD_IMPORT_BYTES) {
-      setError("El respaldo supera el límite de 2 MiB.");
+    const isPortableV2 = file.name.toLowerCase().endsWith(".zip");
+    const maximumBytes = isPortableV2
+      ? MAX_PORTABLE_BOARD_IMPORT_BYTES
+      : MAX_LEGACY_BOARD_IMPORT_BYTES;
+    if (file.size > maximumBytes) {
+      setError(
+        isPortableV2
+          ? "El respaldo ZIP supera el límite técnico permitido."
+          : "El respaldo JSON supera el límite de 2 MiB.",
+      );
       return;
     }
     setIsPreparing(true);
@@ -250,20 +265,65 @@ export function BoardImportDialog({
         fileSize: file.size,
         fileLastModified: file.lastModified,
       });
-      const form = new FormData();
-      form.set("operation_id", operationId);
-      form.set("file", file);
-      const response = await fetch(
-        `/api/boards/${encodeURIComponent(slug)}/import`,
-        { method: "POST", body: form, cache: "no-store" },
-      );
+      const endpoint = `/api/boards/${encodeURIComponent(slug)}/import`;
+      const response = isPortableV2
+        ? await fetch(endpoint, {
+            method: "POST",
+            body: file,
+            cache: "no-store",
+            headers: {
+              "Content-Type": "application/zip",
+              "X-Operation-Id": operationId,
+            },
+          })
+        : await (() => {
+            const form = new FormData();
+            form.set("operation_id", operationId);
+            form.set("file", file);
+            return fetch(endpoint, {
+              method: "POST",
+              body: form,
+              cache: "no-store",
+            });
+          })();
       const body: unknown = await response.json();
+      if (response.ok && asRecord(body)?.status === "confirmed") {
+        setPendingPreparation(null);
+        setImportPreview(null);
+        try {
+          await onConfirmed();
+          onClose();
+        } catch {
+          setNotice(
+            "El reemplazo ya estaba confirmado, pero no se pudo actualizar la vista. Recarga la página para ver el contenido nuevo.",
+          );
+        }
+        return;
+      }
       const parsed = parsePreview(body);
       if (!response.ok || !parsed || parsed.source_sha256 === undefined) {
-        if (asRecord(body)?.status === "conflict") {
+        if (
+          [
+            "cancelled",
+            "capacity",
+            "conflict",
+            "expired",
+            "invalid",
+            "storage",
+            "too_large",
+            "unavailable",
+          ].includes(String(asRecord(body)?.status))
+        ) {
           setPendingPreparation(null);
         }
-        setError(describeError(body, "No se pudo preparar el respaldo v1."));
+        setError(
+          describeError(
+            body,
+            isPortableV2
+              ? "No se pudo preparar el respaldo v2. El tablero actual no cambió."
+              : "No se pudo preparar el respaldo v1.",
+          ),
+        );
         return;
       }
       setPendingPreparation(null);
@@ -325,7 +385,7 @@ export function BoardImportDialog({
     <Modal
       open={open}
       onClose={handleClose}
-      title="Importar un respaldo v1"
+      title="Importar respaldos v1 o v2"
       fullScreenMobile
     >
       <div className="space-y-5 text-sm text-text-secondary leading-relaxed">
@@ -334,25 +394,27 @@ export function BoardImportDialog({
             id="board-import-heading"
             className="font-medium text-text-primary"
           >
-            Reemplazar con un respaldo v1
+            Reemplazar el contenido del tablero
           </h3>
           <p>
             Se reemplazará el contenido actual; no se combinarán las tareas. Se
             conservarán el propietario y los integrantes de este tablero.
           </p>
           <p>
-            El respaldo aporta columnas y tareas. No se importan identidades,
-            responsables, etiquetas, fechas ni series desde el archivo.
+            El respaldo v1 aporta columnas y tareas. El respaldo v2 puede
+            incluir etiquetas, cumpleaños, comentarios, actividad, calendario de
+            series y adjuntos. Los responsables antiguos quedan sin asignar y
+            las menciones permanecen como texto; nunca se crean avisos antiguos.
           </p>
           <p>
             La versión anterior se conserva durante siete días. Sus adjuntos
             siguen contando para la capacidad mientras esté retenida.
           </p>
           <label className="block space-y-1.5 text-text-primary">
-            <span>Archivo JSON del respaldo</span>
+            <span>Archivo JSON v1 o ZIP v2</span>
             <input
               type="file"
-              accept=".json,application/json"
+              accept=".json,application/json,.zip,application/zip"
               onChange={handleFileChange}
               disabled={busy}
               className="block w-full rounded-md border border-border bg-surface-base px-3 py-2 text-text-secondary"
@@ -382,7 +444,9 @@ export function BoardImportDialog({
                 {describeGeneration(importPreview.current)}
               </p>
               <p>
-                <strong className="text-text-primary">Respaldo v1:</strong>{" "}
+                <strong className="text-text-primary">
+                  Respaldo v{importPreview.source_version}:
+                </strong>{" "}
                 {describeGeneration(importPreview.imported)}
               </p>
               <p>Revisión del contenido: {importPreview.content_revision}</p>

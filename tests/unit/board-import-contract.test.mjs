@@ -21,7 +21,13 @@ test("import and confirm routes authenticate the actor and call atomic owner RPC
   assert.match(prepareRoute, /readLegacyBoardImportFile\(file\)/u);
   assert.match(prepareRoute, /prepare_board_import_p/u);
   assert.match(prepareRoute, /session\.client\.rpc/u);
-  assert.doesNotMatch(prepareRoute, /createTaskAttachmentServiceClient/u);
+  assert.match(prepareRoute, /createTaskAttachmentServiceClient/u);
+  assert.match(prepareRoute, /createPortableBoardImportAdapter/u);
+  assert.match(prepareRoute, /session\.actorId/u);
+  assert.match(prepareRoute, /instanceof ZodError/u);
+  assert.match(prepareRoute, /no cumple el formato permitido/u);
+  assert.match(prepareRoute, /MAX_PORTABLE_BOARD_IMPORT_BYTES/u);
+  assert.match(prepareRoute, /preparePortableBoardImport\(/u);
   assert.match(confirmRoute, /getTaskAttachmentSession\(\)/u);
   assert.match(confirmRoute, /confirm_board_import_p/u);
   assert.match(confirmRoute, /p_expected_content_revision/u);
@@ -47,10 +53,10 @@ test("the owner-facing UI shows the version and requires explicit replacement co
   );
   assert.match(dialog, /No se pudo confirmar el resultado de la preparación/u);
   assert.match(dialog, /No se pudo confirmar el resultado del reemplazo/u);
-  assert.doesNotMatch(
-    dialog,
-    /prepareError\.message|confirmError\.message|row\?\.message/u,
-  );
+  assert.doesNotMatch(dialog, /prepareError\.message|confirmError\.message/u);
+  assert.match(dialog, /typeof row\?\.message === "string"/u);
+  assert.match(dialog, /application\/zip/u);
+  assert.match(dialog, /"storage"/u);
   assert.match(dialog, /role="alert"/u);
   assert.match(dialog, /<output aria-live="polite"/u);
   assert.match(board, /<BoardImportDialog/u);

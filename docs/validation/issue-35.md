@@ -34,6 +34,8 @@ Al verificar el recorrido visual del control, otra prueba roja encontró que el 
 
 Una cuarta regresión reportó tres rojos independientes: al revisar una vista, `filterBoardId`, `assigneeId` y `labels` se borraban silenciosamente. Ahora la apertura de la revisión conserva esos valores sin mostrarlos, bloquea resultados y controles de edición, y requiere una elección explícita para cada categoría no disponible. Los helpers probados solo quitan el filtro de tablero, el responsable más el estado «sin responsable», o todos los filtros de etiquetas, respectivamente. Al quitar todos los campos pendientes se carga una variación local para que la persona revise/reemplace condiciones y luego pulse «Confirmar revisión y actualizar»; no se persiste hasta esa acción y el RPC vuelve a validar. Los tests unitarios verifican cada familia por separado, que el resto de condiciones permanezca, y que scope/consulta no puedan ampliarse o cambiar durante la revisión. La suite final `pnpm test:unit:issue-35` pasa 16/16.
 
+La revisión Spec final añadió un caso de elusión: restablecer otra vista mientras se revisa una referencia podía limpiar el bloqueo. El panel ahora deshabilita «Restablecer vista» y «Revisar definición» durante cualquier revisión pendiente; la persona debe resolver la condición o cancelar explícitamente antes de volver a aplicar una vista. El nuevo test pasó primero en rojo y luego en verde. `pnpm test:unit:issue-35` pasa 17/17.
+
 ## Comandos y resultados
 
 Entorno: PostgreSQL local descartable creado por `scripts/test-db.sh`; ejecución con identidades sintéticas. `next` local: 16.4.2.
@@ -44,8 +46,8 @@ La corrida DB completa se hizo después de cerrar SQL y el harness. Los commits 
 | --- | --- |
 | `pnpm test:db:issue-35` | Exit 0; suite focal y carrera de dos clientes sobre cupo 50. |
 | `pnpm test:db` | Exit 0; migraciones y regresiones 001–060, incluidas las suites de #35; mensaje final `Database regression tests passed (disposable PostgreSQL).` |
-| `pnpm test:unit` | Exit 0; tests existentes y suites unitarias focales de #33, #34 y #35; la suite #35 pasa 16/16 (`saved-view-state` y contratos de panel/revisión). |
-| `pnpm test:unit:issue-35` | Exit 0; 16/16, incluye selección de vista, Restablecer explícito, CAS/refresh, board scope inválido sin ampliación y filtros/referencias que requieren resolución explícita antes de aplicar/guardar. |
+| `pnpm test:unit` | Exit 0; tests existentes y suites unitarias focales de #33, #34 y #35; la suite #35 pasa 17/17 (`saved-view-state` y contratos de panel/revisión). |
+| `pnpm test:unit:issue-35` | Exit 0; 17/17, incluye selección de vista, Restablecer explícito, CAS/refresh, referencias inválidas con resolución explícita, y acciones de aplicación bloqueadas mientras hay revisión pendiente. |
 | `pnpm exec next typegen` | Exit 0; rutas generadas por Next 16.4.2. |
 | `pnpm typecheck` | Exit 0 (`tsc --noEmit`). |
 | `pnpm build` | Exit 0; build optimizado de Next 16.4.2. |

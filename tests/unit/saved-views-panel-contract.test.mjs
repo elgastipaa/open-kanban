@@ -71,7 +71,7 @@ test("a catalog refresh surfaces newer versions and blocks updates until review"
   );
   assert.match(
     panelSource,
-    /disabled=\{\s*selectedView\.needs_review\s*\|\|\s*busy\s*\|\|\s*Boolean\(updateConflict\)\s*\}/,
+    /disabled=\{\s*selectedView\.needs_review\s*\|\|\s*busy\s*\|\|\s*Boolean\(updateConflict\)\s*\|\|\s*!canApplySelectedView\s*\}/,
     "applying the selected view must wait for an explicit conflict choice",
   );
 });
@@ -129,6 +129,29 @@ test("a pending board-scope review exposes the replacement control but pauses se
     searchSource,
     /disabled=\{Boolean\(pendingSavedViewReview\)\}[\s\S]*?onClick=\{\(\) => changeScope\("all", null\)\}/,
     "the direct widen-to-all action must not bypass pending review",
+  );
+});
+
+test("saved-view application stays disabled until a pending reference review is resolved or canceled", () => {
+  assert.match(
+    panelSource,
+    /canApplySelectedView\?: boolean/,
+    "the panel must receive the parent search review gate",
+  );
+  assert.match(
+    panelSource,
+    /disabled=\{[\s\S]*?!canApplySelectedView[\s\S]*?\}\s*className=[\s\S]*?>\s*Restablecer vista/,
+    "Restablecer vista cannot clear an unresolved reference review",
+  );
+  assert.match(
+    panelSource,
+    /canApplySelectedView[\s\S]*?onApply\([\s\S]*?selectedView\.invalid_references[\s\S]*?disabled=\{[\s\S]*?!canApplySelectedView/,
+    "Revisar definición from another saved view cannot bypass the pending decision",
+  );
+  assert.match(
+    searchSource,
+    /canApplySelectedView=\{!pendingSavedViewReview\}/,
+    "the pending review state must gate all saved-view apply actions",
   );
 });
 

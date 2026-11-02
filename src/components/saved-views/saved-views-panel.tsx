@@ -26,6 +26,7 @@ interface SavedViewsPanelProps {
   context: SavedViewContext;
   currentDefinition: SavedViewDefinition;
   canEditCurrentDefinition?: boolean;
+  canApplySelectedView?: boolean;
   initialSnapshot: SavedViewsSnapshot;
   onApply: (
     definition: SavedViewDefinition,
@@ -90,6 +91,7 @@ export function SavedViewsPanel({
   context,
   currentDefinition,
   canEditCurrentDefinition = true,
+  canApplySelectedView = true,
   initialSnapshot,
   onApply,
 }: SavedViewsPanelProps) {
@@ -617,7 +619,8 @@ export function SavedViewsPanel({
                     disabled={
                       selectedView.needs_review ||
                       busy ||
-                      Boolean(updateConflict)
+                      Boolean(updateConflict) ||
+                      !canApplySelectedView
                     }
                     className="rounded-lg bg-accent px-3 py-2 font-medium text-accent-foreground text-sm disabled:opacity-50"
                   >
@@ -632,7 +635,7 @@ export function SavedViewsPanel({
                           selectedView.invalid_references,
                         )
                       }
-                      disabled={busy}
+                      disabled={busy || !canApplySelectedView}
                       className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-surface-hover disabled:opacity-50"
                     >
                       Revisar definición

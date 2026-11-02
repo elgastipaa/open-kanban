@@ -860,6 +860,7 @@ export function UnifiedSearchClient({
         context="search"
         currentDefinition={currentSavedViewDefinition}
         canEditCurrentDefinition={!pendingSavedViewReview}
+        canApplySelectedView={!pendingSavedViewReview}
         initialSnapshot={initialSavedViews}
         onApply={applySavedView}
       />

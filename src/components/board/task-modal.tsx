@@ -11,8 +11,8 @@ import {
 } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { TaskConversation } from "@/components/board/task-conversation";
-import { TaskRepetition } from "@/components/board/task-daily-repetition";
 import { TaskDueDate } from "@/components/board/task-due-date";
+import { TaskRepetition } from "@/components/board/task-repetition";
 import { ThemePreferenceControl } from "@/components/theme/theme-preference-provider";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -128,7 +128,7 @@ interface TaskModalProps {
   onCreateRepetition: (
     command: RepetitionCreateCommand,
   ) => Promise<RepetitionCreateResult>;
-  dailyRepetitionOperations: RepetitionOperationStore;
+  repetitionOperations: RepetitionOperationStore;
   onSetTaskCompletion: (
     command: TaskCompletionCommand,
   ) => Promise<TaskCompletionResult>;
@@ -279,7 +279,7 @@ export function TaskModal({
   onGetRepetition,
   onPreviewRepetition,
   onCreateRepetition,
-  dailyRepetitionOperations,
+  repetitionOperations,
   onSetTaskCompletion,
   checklistAddOperations,
   onMutateChecklist,
@@ -1658,7 +1658,7 @@ export function TaskModal({
                     isOnline={isOnline}
                     isDisabled={isWorking || isSessionStale}
                     hasUnsavedChanges={dirty}
-                    operations={dailyRepetitionOperations}
+                    operations={repetitionOperations}
                     onLoad={onGetRepetition}
                     onPreview={onPreviewRepetition}
                     onCreate={onCreateRepetition}

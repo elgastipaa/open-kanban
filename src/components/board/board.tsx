@@ -487,7 +487,7 @@ function BoardWorkspace({
     getTaskRepetition,
     previewTaskRepetition,
     createTaskRepetition,
-    dailyRepetitionOperations,
+    repetitionOperations,
     moveColumn,
     removeBoard,
     replaceState,
@@ -1319,7 +1319,7 @@ function BoardWorkspace({
         onGetRepetition={getTaskRepetition}
         onPreviewRepetition={previewTaskRepetition}
         onCreateRepetition={createTaskRepetition}
-        dailyRepetitionOperations={dailyRepetitionOperations}
+        repetitionOperations={repetitionOperations}
         onMoveTask={moveTaskFromEditor}
         onDelete={handleRequestEditorTaskDelete}
       />

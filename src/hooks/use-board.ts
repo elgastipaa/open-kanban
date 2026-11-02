@@ -100,7 +100,7 @@ export function useBoard({
     getTaskRepetition,
     previewTaskRepetition,
     createTaskRepetition,
-    dailyRepetitionOperations,
+    repetitionOperations,
   } = useTaskOperations({
     actorId,
     slug,
@@ -134,7 +134,7 @@ export function useBoard({
     getTaskRepetition,
     previewTaskRepetition,
     createTaskRepetition,
-    dailyRepetitionOperations,
+    repetitionOperations,
     moveColumn,
     removeBoard,
     replaceState,

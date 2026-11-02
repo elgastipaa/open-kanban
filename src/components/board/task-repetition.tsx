@@ -529,11 +529,11 @@ export function TaskRepetition({
               >
                 <label
                   className="flex flex-col gap-1.5 font-semibold text-text-muted text-xs"
-                  htmlFor="daily-repetition-start"
+                  htmlFor="repetition-start"
                 >
                   Primera fecha · zona {boardTimeZone}
                   <input
-                    id="daily-repetition-start"
+                    id="repetition-start"
                     type="date"
                     value={startOn}
                     disabled={isWorking || Boolean(retryCommand)}
@@ -546,11 +546,11 @@ export function TaskRepetition({
                 </label>
                 <label
                   className="flex flex-col gap-1.5 font-semibold text-text-muted text-xs"
-                  htmlFor="daily-repetition-final-mode"
+                  htmlFor="repetition-final-mode"
                 >
                   Final de la serie
                   <select
-                    id="daily-repetition-final-mode"
+                    id="repetition-final-mode"
                     value={finalMode}
                     disabled={isWorking || Boolean(retryCommand)}
                     onChange={(event) => {
@@ -572,11 +572,11 @@ export function TaskRepetition({
               <div className="grid gap-3 sm:grid-cols-2">
                 <label
                   className="flex flex-col gap-1.5 font-semibold text-text-muted text-xs"
-                  htmlFor="daily-repetition-frequency"
+                  htmlFor="repetition-frequency"
                 >
                   Frecuencia
                   <select
-                    id="daily-repetition-frequency"
+                    id="repetition-frequency"
                     value={frequency}
                     disabled={isWorking || Boolean(retryCommand)}
                     onChange={(event) => {
@@ -593,11 +593,11 @@ export function TaskRepetition({
                 {frequency === "weekly" ? (
                   <label
                     className="flex flex-col gap-1.5 font-semibold text-text-muted text-xs"
-                    htmlFor="daily-repetition-interval"
+                    htmlFor="repetition-interval"
                   >
                     Repetir cada · semanas
                     <input
-                      id="daily-repetition-interval"
+                      id="repetition-interval"
                       type="number"
                       min={1}
                       max={2147483647}
@@ -671,11 +671,11 @@ export function TaskRepetition({
               {finalMode === "count" ? (
                 <label
                   className="flex max-w-xs flex-col gap-1.5 font-semibold text-text-muted text-xs"
-                  htmlFor="daily-repetition-count"
+                  htmlFor="repetition-count"
                 >
                   Ocurrencias totales · esta tarea cuenta como la primera
                   <input
-                    id="daily-repetition-count"
+                    id="repetition-count"
                     type="number"
                     min={1}
                     max={2147483648}
@@ -692,11 +692,11 @@ export function TaskRepetition({
               {finalMode === "date" ? (
                 <label
                   className="flex max-w-xs flex-col gap-1.5 font-semibold text-text-muted text-xs"
-                  htmlFor="daily-repetition-end"
+                  htmlFor="repetition-end"
                 >
                   Última fecha, inclusive
                   <input
-                    id="daily-repetition-end"
+                    id="repetition-end"
                     type="date"
                     min={startOn}
                     value={endOn}

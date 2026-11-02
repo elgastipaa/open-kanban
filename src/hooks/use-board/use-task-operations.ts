@@ -131,26 +131,26 @@ export function useTaskOperations({
     () => () => checklistAddOperations.clearAll(),
     [checklistAddOperations],
   );
-  const dailyRepetitionOperationsRef = useRef<{
+  const repetitionOperationsRef = useRef<{
     actorId: string;
     slug: string;
     store: RepetitionOperationStore;
   } | null>(null);
   if (
-    !dailyRepetitionOperationsRef.current ||
-    dailyRepetitionOperationsRef.current.actorId !== actorId ||
-    dailyRepetitionOperationsRef.current.slug !== slug
+    !repetitionOperationsRef.current ||
+    repetitionOperationsRef.current.actorId !== actorId ||
+    repetitionOperationsRef.current.slug !== slug
   ) {
-    dailyRepetitionOperationsRef.current = {
+    repetitionOperationsRef.current = {
       actorId,
       slug,
       store: new RepetitionOperationStore(actorId, slug),
     };
   }
-  const dailyRepetitionOperations = dailyRepetitionOperationsRef.current.store;
+  const repetitionOperations = repetitionOperationsRef.current.store;
   useEffect(
-    () => () => dailyRepetitionOperations.clearAll(),
-    [dailyRepetitionOperations],
+    () => () => repetitionOperations.clearAll(),
+    [repetitionOperations],
   );
 
   const reconcileCurrentTaskOrder = useCallback(
@@ -684,9 +684,7 @@ export function useTaskOperations({
       try {
         const result = await getRepetition(supabase, slug, taskId);
         if (sessionEpoch !== getSessionEpoch()) {
-          throw new Error(
-            "The session changed while loading daily repetition.",
-          );
+          throw new Error("The session changed while loading repetition.");
         }
         return result;
       } catch (error) {
@@ -725,9 +723,7 @@ export function useTaskOperations({
           pattern,
         );
         if (sessionEpoch !== getSessionEpoch()) {
-          throw new Error(
-            "The session changed while previewing daily repetition.",
-          );
+          throw new Error("The session changed while previewing repetition.");
         }
         return result;
       } catch (error) {
@@ -754,12 +750,10 @@ export function useTaskOperations({
       try {
         const result = await createRepetition(supabase, command);
         if (sessionEpoch !== getSessionEpoch()) {
-          throw new Error(
-            "The session changed while creating daily repetition.",
-          );
+          throw new Error("The session changed while creating repetition.");
         }
         if (result.status === "confirmed") {
-          dailyRepetitionOperations.clear(command.task_id);
+          repetitionOperations.clear(command.task_id);
           if (result.task && result.task.id === command.task_id) {
             const savedTask = result.task as unknown as Task;
             const nextColumns = (columnsRef.current ?? []).map((column) => ({
@@ -791,7 +785,7 @@ export function useTaskOperations({
       ledger,
       onMutationRef,
       onAccessLost,
-      dailyRepetitionOperations,
+      repetitionOperations,
     ],
   );
 
@@ -1341,6 +1335,6 @@ export function useTaskOperations({
     getTaskRepetition,
     previewTaskRepetition,
     createTaskRepetition,
-    dailyRepetitionOperations,
+    repetitionOperations,
   };
 }

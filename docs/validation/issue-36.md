@@ -29,8 +29,13 @@
 - `pnpm exec next typegen`: exit 0; `pnpm typecheck`: exit 0; `pnpm build`: exit 0 con Next.js 16.4.2.
 - `pnpm exec biome check --line-ending=crlf` focal sobre los TS/TSX/MJS del cambio: exit 0, 9 archivos. `pnpm exec biome check --formatter-enabled=false`: exit 0, 257 archivos sin diagnósticos de lint. `bash -n scripts/test-db.sh scripts/test-db-issue-36.sh`: exit 0.
 - `pnpm lint`: exit 1 por formato CRLF/LF previo en 257 archivos (incluido `biome.json` y config global); no se reformateó fuera del ticket. El formato focal con CRLF pasa.
-- `git diff --check`: exit 0 para los archivos rastreados; se volverá a ejecutar en el índice final.
-- `pnpm test:db`: suite global 001–061 corriendo en el runner descartable, con `tests/db/task_activity.sql` ya conectado al camino global. La sección final aún no ha terminado.
+- `git diff --check`: exit 0 en la candidata revisada. Tras el ajuste del review se volvió a verificar con `git diff --check` y `git diff --cached --check` antes del commit.
+- `pnpm test:db`: exit 0; suite global 001–061 en el runner descartable, incluida la ejecución de `tests/db/task_activity.sql` al final.
+
+## Revisión de código
+
+- Eje Standards contra `640cfd48e70f3f895276829affc17950129e5638`: sin incumplimientos duros; se extrajo el formato compartido de transiciones para campos E05. La evidencia se corrigió para reflejar el resultado global real.
+- Eje Spec contra la misma base: sin scope creep ni comportamiento incorrecto confirmado. AC33 queda explícitamente parcial para #36; el roundtrip v2 permanece en #42/#44 y no se acredita como completado.
 
 ## Gates humanos pendientes
 

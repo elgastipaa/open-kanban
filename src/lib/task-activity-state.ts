@@ -43,6 +43,27 @@ function displayValue(
   return typeof value === "string" ? value : "Sin valor";
 }
 
+const changedFieldLabels: Record<
+  Exclude<TaskActivityCategory, "recovery">,
+  string
+> = {
+  assignee: "Responsable",
+  due_date: "Fecha límite",
+  column: "Columna",
+  completion: "Estado",
+};
+
+function describeFieldChange(
+  category: Exclude<TaskActivityCategory, "recovery">,
+  beforeValue: string | boolean | null,
+  afterValue: string | boolean | null,
+): { label: string; value: string } {
+  return {
+    label: changedFieldLabels[category],
+    value: `${displayValue(category, beforeValue)} → ${displayValue(category, afterValue)}`,
+  };
+}
+
 export function describeTaskActivityEvent(event: {
   category: TaskActivityCategory;
   before_value: string | boolean | null;
@@ -50,25 +71,14 @@ export function describeTaskActivityEvent(event: {
 }): { label: string; value: string } {
   switch (event.category) {
     case "assignee":
-      return {
-        label: "Responsable",
-        value: `${displayValue(event.category, event.before_value)} → ${displayValue(event.category, event.after_value)}`,
-      };
     case "due_date":
-      return {
-        label: "Fecha límite",
-        value: `${displayValue(event.category, event.before_value)} → ${displayValue(event.category, event.after_value)}`,
-      };
     case "column":
-      return {
-        label: "Columna",
-        value: `${displayValue(event.category, event.before_value)} → ${displayValue(event.category, event.after_value)}`,
-      };
     case "completion":
-      return {
-        label: "Estado",
-        value: `${displayValue(event.category, event.before_value)} → ${displayValue(event.category, event.after_value)}`,
-      };
+      return describeFieldChange(
+        event.category,
+        event.before_value,
+        event.after_value,
+      );
     case "recovery":
       return { label: "Recuperación", value: "Tarea recuperada" };
   }

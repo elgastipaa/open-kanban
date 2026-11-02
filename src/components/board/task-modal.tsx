@@ -103,6 +103,7 @@ interface TaskModalProps {
   slug: string;
   actorId: string;
   role: "owner" | "collaborator";
+  openRepetitionEditor: boolean;
   initialCommentId: string | null;
   commentOperations: TaskCommentCreateOperationStore;
   isSessionStale: boolean;
@@ -272,6 +273,7 @@ export function TaskModal({
   slug,
   actorId,
   role,
+  openRepetitionEditor,
   initialCommentId,
   commentOperations,
   isSessionStale,
@@ -321,7 +323,7 @@ export function TaskModal({
     useState<TaskFieldVersions | null>(() =>
       task ? preservationBaseVersionsFor(task, restoredDraft) : null,
     );
-  const [showDetails, setShowDetails] = useState(false);
+  const [showDetails, setShowDetails] = useState(openRepetitionEditor);
   const [showAccountPreferences, setShowAccountPreferences] = useState(false);
   const [showDescription, setShowDescription] = useState(
     Boolean(task?.description),
@@ -398,7 +400,7 @@ export function TaskModal({
       preservationVersions,
     );
     if (restoredDraft) onEditDraftRestored();
-    setShowDetails(false);
+    setShowDetails(openRepetitionEditor);
     setShowDescription(Boolean(task.description));
     setShowCloseChoices(false);
     setCloseAction("close");
@@ -1682,6 +1684,7 @@ export function TaskModal({
                     onCreate={onCreateRepetition}
                     onPreviewEdit={onPreviewRepetitionEdit}
                     onEdit={onEditRepetition}
+                    openEditorOnLoad={openRepetitionEditor}
                   />
                 ) : null}
                 <div className="flex flex-col gap-2">

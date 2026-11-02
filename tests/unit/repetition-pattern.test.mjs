@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   createRepetitionPattern,
   ordinalWeekdayAdjective,
+  repetitionPatternSummary,
 } from "../../src/lib/repetition-pattern.ts";
 
 const selection = (overrides = {}) => ({
@@ -105,4 +106,28 @@ test("ordinal weekday labels use Spanish ordinal forms", () => {
   assert.equal(ordinalWeekdayAdjective(5), "quinto");
   assert.equal(ordinalWeekdayAdjective(-1), "último");
   assert.equal(ordinalWeekdayAdjective(6), null);
+});
+
+test("calendar summaries name the selected cadence and days in Spanish", () => {
+  assert.equal(
+    repetitionPatternSummary({
+      frequency: "weekly",
+      interval: 2,
+      weekdays: [1, 5],
+    }),
+    "Cada 2 semanas · lunes, viernes",
+  );
+  assert.equal(
+    repetitionPatternSummary({
+      frequency: "monthly",
+      interval: "1",
+      ordinal: -1,
+      weekday: 3,
+    }),
+    "El último miércoles de cada mes",
+  );
+  assert.equal(
+    repetitionPatternSummary({ frequency: "daily", interval: 1 }),
+    "Cada día",
+  );
 });

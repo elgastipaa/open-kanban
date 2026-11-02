@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import type { RepetitionPattern } from "@/lib/db/daily-repetition";
 import type { Priority, Task } from "@/lib/types";
 
 export interface RepetitionSeriesListItem {
@@ -9,17 +10,19 @@ export interface RepetitionSeriesListItem {
   board_time_zone: string;
   state: "active" | "stopped" | "finished";
   rule: "daily" | "weekly" | "monthly" | "yearly";
-  pattern: Record<string, unknown>;
+  pattern: RepetitionPattern;
   start_on: string;
   end_on: string | null;
   occurrence_limit: number | null;
   consumed_count: number;
   latest_occurrence_on: string;
   next_due_on: string | null;
+  next_appearance_on?: string | null;
   revision: number;
   advance_days: number;
   appearance_column_id: string;
   current_task_id: string | null;
+  current_task_title?: string | null;
   created_at: string;
 }
 

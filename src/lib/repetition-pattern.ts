@@ -11,6 +11,31 @@ export interface RepetitionPatternSelection {
   weekday: string;
 }
 
+export const REPETITION_WEEKDAYS = [
+  { value: 1, label: "lunes" },
+  { value: 2, label: "martes" },
+  { value: 3, label: "miércoles" },
+  { value: 4, label: "jueves" },
+  { value: 5, label: "viernes" },
+  { value: 6, label: "sábado" },
+  { value: 7, label: "domingo" },
+] as const;
+
+export const REPETITION_MONTHS = [
+  "enero",
+  "febrero",
+  "marzo",
+  "abril",
+  "mayo",
+  "junio",
+  "julio",
+  "agosto",
+  "septiembre",
+  "octubre",
+  "noviembre",
+  "diciembre",
+] as const;
+
 const MAX_POSTGRES_BIGINT = BigInt("9223372036854775807");
 
 function calendarInterval(value: string): string | null {
@@ -45,6 +70,49 @@ export function ordinalWeekdayAdjective(ordinal: number): string | null {
     default:
       return null;
   }
+}
+
+export function repetitionPatternSummary(
+  pattern: RepetitionPattern | undefined,
+): string | null {
+  if (!pattern) return null;
+  if (pattern.frequency === "daily") {
+    return pattern.interval === 1
+      ? "Cada día"
+      : `Cada ${pattern.interval} días`;
+  }
+  if (pattern.frequency === "monthly" || pattern.frequency === "yearly") {
+    const unit = pattern.frequency === "monthly" ? "mes" : "año";
+    const pluralUnit = pattern.frequency === "monthly" ? "meses" : "años";
+    const interval = String(pattern.interval);
+    const cadence =
+      interval === "1" ? `cada ${unit}` : `cada ${interval} ${pluralUnit}`;
+    if ("day_of_month" in pattern) {
+      if (pattern.frequency === "monthly") {
+        if (pattern.day_of_month === -1) return `El último día de ${cadence}`;
+        return `${cadence} · día ${pattern.day_of_month}`;
+      }
+      if (pattern.day_of_month === -1) {
+        return `El último día de ${REPETITION_MONTHS[pattern.month - 1]}, ${cadence}`;
+      }
+      return `${cadence} · ${pattern.day_of_month} de ${REPETITION_MONTHS[pattern.month - 1]}`;
+    }
+    const ordinal = ordinalWeekdayAdjective(pattern.ordinal);
+    const weekday = REPETITION_WEEKDAYS.find(
+      (item) => item.value === pattern.weekday,
+    )?.label;
+    if (!ordinal || !weekday) return cadence;
+    if (pattern.frequency === "monthly") {
+      return `El ${ordinal} ${weekday} de ${cadence}`;
+    }
+    return `El ${ordinal} ${weekday} de ${REPETITION_MONTHS[pattern.month - 1]}, ${cadence}`;
+  }
+  const days = pattern.weekdays
+    .map((value) => REPETITION_WEEKDAYS.find((day) => day.value === value))
+    .filter((day) => day !== undefined)
+    .map((day) => day.label)
+    .join(", ");
+  return `Cada ${pattern.interval === 1 ? "semana" : `${pattern.interval} semanas`} · ${days}`;
 }
 
 export function createRepetitionPattern(

@@ -21,7 +21,9 @@ import type {
 import { RepetitionError } from "@/lib/db/daily-repetition";
 import {
   createRepetitionPattern,
-  ordinalWeekdayAdjective,
+  REPETITION_MONTHS as MONTHS,
+  repetitionPatternSummary as patternLabel,
+  REPETITION_WEEKDAYS as WEEKDAYS,
 } from "@/lib/repetition-pattern";
 import { formatTaskDueDate } from "@/lib/task-date";
 import type {
@@ -39,6 +41,7 @@ interface TaskRepetitionProps {
   boardTimeZone: string;
   isOnline: boolean;
   isDisabled: boolean;
+  openEditorOnLoad: boolean;
   hasUnsavedChanges: boolean;
   operations: RepetitionOperationStore;
   editOperations: RepetitionEditOperationStore;
@@ -78,31 +81,6 @@ function templateStepDrafts(
   }));
 }
 
-const WEEKDAYS = [
-  { value: 1, label: "lunes" },
-  { value: 2, label: "martes" },
-  { value: 3, label: "miércoles" },
-  { value: 4, label: "jueves" },
-  { value: 5, label: "viernes" },
-  { value: 6, label: "sábado" },
-  { value: 7, label: "domingo" },
-] as const;
-
-const MONTHS = [
-  "enero",
-  "febrero",
-  "marzo",
-  "abril",
-  "mayo",
-  "junio",
-  "julio",
-  "agosto",
-  "septiembre",
-  "octubre",
-  "noviembre",
-  "diciembre",
-] as const;
-
 const ORDINALS = [
   { value: 1, label: "primero" },
   { value: 2, label: "segundo" },
@@ -117,47 +95,6 @@ function isoWeekday(date: string): number {
   const utcDate = new Date(0);
   utcDate.setUTCFullYear(year, month - 1, day);
   return utcDate.getUTCDay() || 7;
-}
-
-function patternLabel(pattern: RepetitionPattern | undefined): string | null {
-  if (!pattern) return null;
-  if (pattern.frequency === "daily") {
-    return pattern.interval === 1
-      ? "Cada día"
-      : `Cada ${pattern.interval} días`;
-  }
-  if (pattern.frequency === "monthly" || pattern.frequency === "yearly") {
-    const unit = pattern.frequency === "monthly" ? "mes" : "año";
-    const pluralUnit = pattern.frequency === "monthly" ? "meses" : "años";
-    const interval = String(pattern.interval);
-    const cadence =
-      interval === "1" ? `cada ${unit}` : `cada ${interval} ${pluralUnit}`;
-    if ("day_of_month" in pattern) {
-      if (pattern.frequency === "monthly") {
-        if (pattern.day_of_month === -1) return `El último día de ${cadence}`;
-        return `${cadence} · día ${pattern.day_of_month}`;
-      }
-      if (pattern.day_of_month === -1) {
-        return `El último día de ${MONTHS[pattern.month - 1]}, ${cadence}`;
-      }
-      return `${cadence} · ${pattern.day_of_month} de ${MONTHS[pattern.month - 1]}`;
-    }
-    const ordinal = ordinalWeekdayAdjective(pattern.ordinal);
-    const weekday = WEEKDAYS.find(
-      (item) => item.value === pattern.weekday,
-    )?.label;
-    if (!ordinal || !weekday) return cadence;
-    if (pattern.frequency === "monthly") {
-      return `El ${ordinal} ${weekday} de ${cadence}`;
-    }
-    return `El ${ordinal} ${weekday} de ${MONTHS[pattern.month - 1]}, ${cadence}`;
-  }
-  const days = pattern.weekdays
-    .map((value) => WEEKDAYS.find((day) => day.value === value))
-    .filter((day) => day !== undefined)
-    .map((day) => day.label)
-    .join(", ");
-  return `Cada ${pattern.interval === 1 ? "semana" : `${pattern.interval} semanas`} · ${days}`;
 }
 
 function stateLabel(state: string) {
@@ -212,6 +149,7 @@ export function TaskRepetition({
   boardTimeZone,
   isOnline,
   isDisabled,
+  openEditorOnLoad,
   hasUnsavedChanges,
   operations,
   editOperations,
@@ -409,6 +347,16 @@ export function TaskRepetition({
           }
         }
         if (
+          openEditorOnLoad &&
+          result.status === "available" &&
+          result.state === "active" &&
+          typeof result.revision === "number" &&
+          result.template_snapshot
+        ) {
+          setEditingSeries(true);
+          setShowSetup(true);
+        }
+        if (
           pending &&
           result.status === "available" &&
           result.state === "active"
@@ -444,6 +392,7 @@ export function TaskRepetition({
     task.priority,
     task.title,
     boardToday,
+    openEditorOnLoad,
   ]);
 
   const finalSelection = () => {
@@ -917,28 +866,35 @@ export function TaskRepetition({
     clearPreview();
   }
 
-  function beginEdit() {
-    if (status?.status !== "available" || status.state !== "active") return;
-    const nextStart = status.next_due_on ?? task.due_on ?? boardToday;
+  function beginEdit(candidate: RepetitionStatus | null = status) {
+    if (
+      candidate?.status !== "available" ||
+      candidate.state !== "active" ||
+      typeof candidate.revision !== "number" ||
+      !candidate.template_snapshot
+    ) {
+      return;
+    }
+    const nextStart = candidate.next_due_on ?? task.due_on ?? boardToday;
     setEditingSeries(true);
     setShowSetup(true);
     setStartOn(nextStart);
-    if (status.pattern) applyPattern(status.pattern, nextStart);
-    setAdvanceDays(String(status.advance_days ?? 0));
-    setAppearanceColumnId(status.appearance_column_id ?? task.column_id);
-    setTemplateTitle(status.template_snapshot?.title ?? task.title);
+    if (candidate.pattern) applyPattern(candidate.pattern, nextStart);
+    setAdvanceDays(String(candidate.advance_days ?? 0));
+    setAppearanceColumnId(candidate.appearance_column_id ?? task.column_id);
+    setTemplateTitle(candidate.template_snapshot.title ?? task.title);
     setTemplateDescription(
-      status.template_snapshot?.description ?? task.description ?? "",
+      candidate.template_snapshot.description ?? task.description ?? "",
     );
-    setTemplatePriority(status.template_snapshot?.priority ?? task.priority);
+    setTemplatePriority(candidate.template_snapshot.priority ?? task.priority);
     setTemplateAssigneeId(
-      status.template_snapshot?.assignee_id ?? task.assignee_id ?? "",
+      candidate.template_snapshot.assignee_id ?? task.assignee_id ?? "",
     );
-    setTemplateSteps(templateStepDrafts(status.template_snapshot?.steps));
-    if (status.end_on) {
+    setTemplateSteps(templateStepDrafts(candidate.template_snapshot.steps));
+    if (candidate.end_on) {
       setFinalMode("date");
-      setEndOn(status.end_on);
-    } else if (status.occurrence_limit === null) {
+      setEndOn(candidate.end_on);
+    } else if (candidate.occurrence_limit === null) {
       setFinalMode("none");
       setEndOn("");
     } else {
@@ -947,7 +903,7 @@ export function TaskRepetition({
         String(
           Math.max(
             1,
-            (status.occurrence_limit ?? 1) - (status.consumed_count ?? 1),
+            (candidate.occurrence_limit ?? 1) - (candidate.consumed_count ?? 1),
           ),
         ),
       );
@@ -1021,7 +977,7 @@ export function TaskRepetition({
           <Button
             type="button"
             variant="ghost"
-            onClick={beginEdit}
+            onClick={() => beginEdit()}
             disabled={
               !canEdit ||
               isDisabled ||

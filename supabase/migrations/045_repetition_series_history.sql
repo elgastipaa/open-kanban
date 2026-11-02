@@ -2,6 +2,46 @@
 -- board's visible task rows. Every request rechecks current membership.
 BEGIN;
 
+-- Once a series cannot generate more occurrences, its template is no longer
+-- operational. Keep only a non-content marker so terminal history cannot
+-- become a second copy of the task text.
+CREATE FUNCTION public.redact_terminal_repetition_template_tg()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, public, pg_temp
+AS $$
+BEGIN
+  IF NEW.state IN ('stopped', 'finished') THEN
+    NEW.template_snapshot := pg_catalog.jsonb_build_object(
+      'title', 'Plantilla retirada',
+      'description', NULL,
+      'priority', 'medium',
+      'assignee_id', NULL,
+      'steps', '[]'::jsonb,
+      'redacted', true
+    );
+  END IF;
+  RETURN NEW;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.redact_terminal_repetition_template_tg()
+  FROM PUBLIC, anon, authenticated, service_role;
+CREATE TRIGGER daily_repetition_series_redact_terminal_template
+  BEFORE INSERT OR UPDATE OF state, template_snapshot ON public.daily_repetition_series
+  FOR EACH ROW EXECUTE FUNCTION public.redact_terminal_repetition_template_tg();
+
+UPDATE public.daily_repetition_series AS series
+SET template_snapshot = pg_catalog.jsonb_build_object(
+  'title', 'Plantilla retirada',
+  'description', NULL,
+  'priority', 'medium',
+  'assignee_id', NULL,
+  'steps', '[]'::jsonb,
+  'redacted', true
+)
+WHERE series.state IN ('stopped', 'finished')
+  AND series.template_snapshot->>'redacted' IS DISTINCT FROM 'true';
+
 CREATE FUNCTION public.list_repetition_series_p(
   p_board_id uuid DEFAULT NULL,
   p_before_created_at timestamptz DEFAULT NULL,
@@ -40,7 +80,8 @@ BEGIN
       series.advance_days, series.appearance_column_id, series.created_at,
       board.slug AS board_slug, board.name AS board_name,
       board.time_zone AS board_time_zone,
-      visible_current_task.id AS current_task_id
+      visible_current_task.id AS current_task_id,
+      visible_current_task.title AS current_task_title
     FROM public.daily_repetition_series AS series
     JOIN public.boards AS board
       ON board.id = series.board_id
@@ -50,7 +91,7 @@ BEGIN
       AND current_occurrence.series_id = series.id
       AND current_occurrence.state = 'current'
     LEFT JOIN LATERAL (
-      SELECT task.id
+      SELECT task.id, task.title
       FROM public.tasks AS task
       JOIN public.columns AS column_row
         ON column_row.id = task.column_id
@@ -95,10 +136,15 @@ BEGIN
         'consumed_count', visible_rows.consumed_count,
         'latest_occurrence_on', visible_rows.latest_occurrence_on,
         'next_due_on', visible_rows.next_due_on,
+        'next_appearance_on', CASE
+          WHEN visible_rows.next_due_on IS NULL THEN NULL
+          ELSE visible_rows.next_due_on - visible_rows.advance_days
+        END,
         'revision', visible_rows.revision,
         'advance_days', visible_rows.advance_days,
         'appearance_column_id', visible_rows.appearance_column_id,
         'current_task_id', visible_rows.current_task_id,
+        'current_task_title', visible_rows.current_task_title,
         'created_at', visible_rows.created_at
       ) ORDER BY visible_rows.created_at DESC, visible_rows.id DESC
     ), '[]'::jsonb),
@@ -893,7 +939,7 @@ BEGIN
     RETURN pg_catalog.jsonb_build_object('status', 'unavailable');
   END IF;
 
-  IF EXISTS (
+  IF v_series.state IN ('stopped', 'finished') OR EXISTS (
     SELECT 1 FROM public.task_deletions AS deletion
     WHERE deletion.task_id = p_task_id
       AND deletion.state IN ('deleted', 'purged')

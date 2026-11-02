@@ -104,7 +104,9 @@ interface BoardProps {
   hasOtherCurrentMembers: boolean | null;
   initialTaskId: string | null;
   initialCommentId: string | null;
+  initialRepetitionEditTaskId: string | null;
   myTasksReturnHref: string | null;
+  seriesReturnHref: string | null;
 }
 
 type BoardWorkspaceProps = Omit<BoardProps, "ownerAuthUserId"> & {
@@ -127,7 +129,9 @@ export function Board({
   hasOtherCurrentMembers,
   initialTaskId,
   initialCommentId,
+  initialRepetitionEditTaskId,
   myTasksReturnHref,
+  seriesReturnHref,
 }: BoardProps) {
   const router = useRouter();
   const { resetTheme } = useThemePreference();
@@ -312,7 +316,9 @@ export function Board({
       hasOtherCurrentMembers={hasOtherCurrentMembers}
       initialTaskId={initialTaskId}
       initialCommentId={initialCommentId}
+      initialRepetitionEditTaskId={initialRepetitionEditTaskId}
       myTasksReturnHref={myTasksReturnHref}
+      seriesReturnHref={seriesReturnHref}
       isSessionStale={sessionStatus === "stale"}
       onAccessLost={onAccessLost}
       onRealtimeReconnect={onRealtimeReconnect}
@@ -331,7 +337,9 @@ function BoardWorkspace({
   hasOtherCurrentMembers,
   initialTaskId,
   initialCommentId,
+  initialRepetitionEditTaskId,
   myTasksReturnHref,
+  seriesReturnHref,
   isSessionStale,
   onAccessLost,
   onRealtimeReconnect,
@@ -1289,6 +1297,10 @@ function BoardWorkspace({
         slug={slug}
         actorId={actorId}
         role={board?.role ?? initialBoard.role}
+        openRepetitionEditor={Boolean(
+          initialRepetitionEditTaskId &&
+            editingTaskId === initialRepetitionEditTaskId,
+        )}
         initialCommentId={
           editingTaskId === initialTaskId ? initialCommentId : null
         }
@@ -1309,6 +1321,7 @@ function BoardWorkspace({
           if (editingTaskId) clearTaskDraft(editingTaskId);
           setEditingTaskId(null);
           if (myTasksReturnHref) router.push(myTasksReturnHref);
+          else if (seriesReturnHref) router.push(seriesReturnHref);
           else if (initialCommentId) router.replace(`/${slug}`);
         }}
         onAfterClose={handleTaskEditorAfterClose}

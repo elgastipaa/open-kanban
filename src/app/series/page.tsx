@@ -15,6 +15,8 @@ import {
   type RepetitionOccurrenceDetail,
   type RepetitionSeriesListItem,
 } from "@/lib/db/repetition-series";
+import { repetitionPatternSummary } from "@/lib/repetition-pattern";
+import { buildSeriesTaskEditorHref } from "@/lib/repetition-series-navigation";
 import { createClient } from "@/lib/supabase/server";
 import type { Board, Column, TaskComment } from "@/lib/types";
 
@@ -407,29 +409,66 @@ export default async function SeriesPage({ searchParams }: SeriesPageProps) {
                 if (selectedState) entryQuery.set("state", selectedState);
                 const href = `/series?${entryQuery}`;
                 const isSelected = entry.id === selectedSeriesId;
+                const appearanceOn = entry.next_appearance_on ?? null;
+                const dueOn =
+                  entry.next_due_on && entry.next_due_on !== appearanceOn
+                    ? entry.next_due_on
+                    : null;
+                const editorHref =
+                  entry.state === "active" && entry.current_task_id
+                    ? buildSeriesTaskEditorHref({
+                        boardSlug: entry.board_slug,
+                        taskId: entry.current_task_id,
+                        boardId: selectedBoardId,
+                        state: selectedState,
+                        listCursor,
+                        selectedSeriesId,
+                        selectedOccurrenceId,
+                        selectedCommentId,
+                        historyCursor,
+                      })
+                    : null;
                 return (
-                  <li key={entry.id}>
+                  <li
+                    key={entry.id}
+                    className={`rounded-xl border p-3 transition ${isSelected ? "border-accent bg-surface-overlay" : "border-border hover:bg-surface-hover"}`}
+                  >
                     <Link
                       href={href}
                       aria-current={isSelected ? "page" : undefined}
-                      className={`block rounded-xl border p-3 transition ${isSelected ? "border-accent bg-surface-overlay" : "border-border hover:bg-surface-hover"}`}
+                      className="block rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
                     >
-                      <span className="block font-medium text-sm text-text-primary">
-                        {entry.board_name}
+                      <span className="block break-words font-medium text-sm text-text-primary">
+                        {entry.current_task_title ||
+                          `Serie iniciada el ${formatDate(entry.start_on)}`}
                       </span>
                       <span className="mt-1 block text-text-secondary text-xs">
-                        {frequencyLabel(entry.rule)} ·{" "}
+                        {entry.board_name} ·{" "}
                         {entry.state === "active"
                           ? "Activa"
                           : entry.state === "stopped"
                             ? "Detenida"
                             : "Finalizada"}
                       </span>
+                      <span className="mt-1 block text-text-secondary text-xs">
+                        {repetitionPatternSummary(entry.pattern) ??
+                          frequencyLabel(entry.rule)}
+                      </span>
                       <span className="mt-1 block text-text-muted text-xs">
-                        {entry.consumed_count} ocurrencias · próxima{" "}
-                        {formatDate(entry.next_due_on)}
+                        {appearanceOn
+                          ? `Aparece el ${formatDate(appearanceOn)}`
+                          : "Sin próxima aparición"}
+                        {dueOn ? ` · Vence el ${formatDate(dueOn)}` : ""}
                       </span>
                     </Link>
+                    {editorHref ? (
+                      <Link
+                        href={editorHref}
+                        className="mt-2 inline-flex rounded-md px-1 py-1 text-accent text-xs hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                      >
+                        Editar próximas repeticiones
+                      </Link>
+                    ) : null}
                   </li>
                 );
               })}

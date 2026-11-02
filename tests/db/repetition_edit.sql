@@ -1,7 +1,7 @@
 \set ON_ERROR_STOP on
 
--- Issue #26 uses a real PostgreSQL cluster with synthetic identity and a fixed
--- worker clock. No application environment or remote database is consulted.
+-- Issue #26 uses a real PostgreSQL cluster and synthetic identity. No
+-- application environment or remote database is consulted.
 INSERT INTO public.application_access (email, state, is_admin)
 VALUES ('issue26@example.test', 'pending', false);
 INSERT INTO auth.users (id, email, email_confirmed_at, raw_app_meta_data)
@@ -20,6 +20,21 @@ SET auth_user_id = '42600000-0000-4000-8000-000000000002',
     google_subject = 'issue26-google-subject', state = 'active'
 WHERE email = 'issue26@example.test';
 
+CREATE TABLE public.issue26_repetition_race_ref (
+  singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+  board_id uuid NOT NULL,
+  board_slug text NOT NULL,
+  task_id uuid NOT NULL,
+  series_id uuid NOT NULL,
+  revision bigint NOT NULL,
+  job_id uuid NOT NULL,
+  current_occurrence_id uuid NOT NULL,
+  current_column_id uuid NOT NULL,
+  current_due_on date NOT NULL,
+  edit_start_on date NOT NULL,
+  next_due_on date NOT NULL
+);
+
 BEGIN;
 SELECT set_config('request.jwt.claim.sub', '42600000-0000-4000-8000-000000000002', true);
 DO $$
@@ -30,6 +45,8 @@ DECLARE
   v_appearance_column uuid;
   v_created jsonb;
   v_due_edit jsonb;
+  v_exception_message text;
+  v_exception_detail text;
   v_result jsonb;
   v_series public.daily_repetition_series%ROWTYPE;
   v_job public.daily_repetition_jobs%ROWTYPE;
@@ -48,6 +65,8 @@ DECLARE
   v_second_series_id uuid;
   v_new_task_id uuid;
   v_current_slots bigint;
+  v_race_start_on date;
+  v_edit_start_on date;
   v_pattern jsonb := '{"frequency":"weekly","interval":1,"weekdays":[1,3]}'::jsonb;
 BEGIN
   IF public.repetition_minimum_separation_internal_p(
@@ -77,6 +96,9 @@ BEGIN
     v_origin_column, 'Tarea actual', 'Descripción original', 'medium'
   );
   v_task_id := (v_created->>'task_id')::uuid;
+  UPDATE public.tasks AS task
+  SET steps = '[{"id":"26000000-0000-4000-8000-000000000023","text":"Paso original","is_completed":true,"position":0,"version":2}]'::jsonb
+  WHERE task.id = v_task_id;
   v_due_edit := public.edit_task_fields_p(
     '26000000-0000-4000-8000-000000000003', v_board.slug, v_task_id,
     '{"due_on":"2026-11-02"}'::jsonb, '{"due_on":1}'::jsonb
@@ -155,6 +177,33 @@ BEGIN
       v_series, v_job;
   END IF;
 
+  v_due_edit := public.edit_task_fields_p(
+    '26000000-0000-4000-8000-000000000024', v_board.slug, v_task_id,
+    '{"due_on":"2026-11-03"}'::jsonb, '{"due_on":2}'::jsonb
+  );
+  IF v_due_edit->>'status' IS DISTINCT FROM 'confirmed'
+    OR (SELECT occurrence.due_on_override
+        FROM public.daily_repetition_occurrences AS occurrence
+        WHERE occurrence.id = v_series.current_occurrence_id)
+      IS DISTINCT FROM '2026-11-03'::date THEN
+    RAISE EXCEPTION 'An exception strictly before the next occurrence was not accepted: %', v_due_edit;
+  END IF;
+  BEGIN
+    PERFORM public.edit_task_fields_p(
+      '26000000-0000-4000-8000-000000000025', v_board.slug, v_task_id,
+      '{"due_on":"2026-11-04"}'::jsonb, '{"due_on":3}'::jsonb
+    );
+    RAISE EXCEPTION 'An exception on the next occurrence date was accepted';
+  EXCEPTION WHEN SQLSTATE 'P2301' THEN
+    GET STACKED DIAGNOSTICS
+      v_exception_message = MESSAGE_TEXT,
+      v_exception_detail = PG_EXCEPTION_DETAIL;
+    IF v_exception_message NOT LIKE 'La fecha excepcional debe ser anterior%'
+      OR v_exception_detail IS DISTINCT FROM '2026-11-04' THEN
+      RAISE EXCEPTION 'The strict exception boundary returned the wrong diagnostic: %, %',
+        v_exception_message, v_exception_detail;
+    END IF;
+  END;
   v_worker_result := public.advance_daily_repetition_internal_p(
     v_job, '2026-11-03 02:59:00+00'::timestamptz
   );
@@ -177,6 +226,8 @@ BEGIN
   IF v_current_slots <> 1
     OR (SELECT task.column_id FROM public.tasks AS task WHERE task.id = v_task_id)
       IS DISTINCT FROM v_origin_column
+    OR (SELECT task.due_on FROM public.tasks AS task WHERE task.id = v_task_id)
+      IS DISTINCT FROM '2026-11-03'::date
     OR (SELECT task.column_id FROM public.tasks AS task WHERE task.id = v_new_task_id)
       IS DISTINCT FROM v_appearance_column
     OR (SELECT task.due_on FROM public.tasks AS task WHERE task.id = v_new_task_id)
@@ -185,6 +236,15 @@ BEGIN
       (SELECT task.column_id FROM public.tasks AS task WHERE task.id = v_task_id),
       (SELECT task.column_id FROM public.tasks AS task WHERE task.id = v_new_task_id),
       v_current_slots;
+  END IF;
+  IF (SELECT task.steps->0->>'text' FROM public.tasks AS task
+      WHERE task.id = v_new_task_id) IS DISTINCT FROM 'Paso original'
+    OR (SELECT (task.steps->0->>'is_completed')::boolean FROM public.tasks AS task
+      WHERE task.id = v_new_task_id) IS DISTINCT FROM false
+    OR (SELECT task.steps->0->>'id' FROM public.tasks AS task
+      WHERE task.id = v_new_task_id) IS NOT DISTINCT FROM
+      '26000000-0000-4000-8000-000000000023' THEN
+    RAISE EXCEPTION 'A generated occurrence did not receive its own unchecked checklist template';
   END IF;
 
   SELECT series.* INTO v_series FROM public.daily_repetition_series AS series
@@ -209,6 +269,10 @@ BEGIN
     (v_series.id, '2026-11-09', '26000000-0000-4000-8000-000000000020', 'excluded'),
     (v_series.id, '2026-11-10', '26000000-0000-4000-8000-000000000021', 'excluded');
 
+  v_template := v_template || jsonb_build_object(
+    'steps', '[{"text":"Paso de plantilla actualizado","position":0}]'::jsonb
+  );
+
   v_edit_preview := public.preview_repetition_edit_p(
     v_board.slug, v_new_task_id, '2026-11-09', 'count', 2, NULL,
     v_pattern, 1, v_appearance_column, v_template, false
@@ -220,6 +284,8 @@ BEGIN
     OR v_edit_preview->>'final_on' IS DISTINCT FROM '2026-11-11'
     OR v_edit_preview->'preserved_exclusion_dates' IS DISTINCT FROM '["2026-11-09"]'::jsonb
     OR v_edit_preview->'removed_exclusion_dates' IS DISTINCT FROM '["2026-11-10"]'::jsonb
+    OR v_edit_preview->'template_snapshot'->'steps' IS DISTINCT FROM
+      '[{"text":"Paso de plantilla actualizado","position":0}]'::jsonb
     OR v_edit_preview->>'time_zone' IS DISTINCT FROM 'America/Argentina/Buenos_Aires' THEN
     RAISE EXCEPTION 'The edit preview did not show the future template, final, zone and exclusions: %',
       v_edit_preview;
@@ -255,7 +321,13 @@ BEGIN
     OR v_series.occurrence_limit IS DISTINCT FROM 2
     OR v_series.appearance_column_id IS DISTINCT FROM v_appearance_column
     OR v_series.advance_days IS DISTINCT FROM 1
-    OR v_series.template_snapshot->>'title' IS DISTINCT FROM 'Plantilla futura' THEN
+    OR v_series.template_snapshot->>'title' IS DISTINCT FROM 'Plantilla futura'
+    OR v_series.template_snapshot->'steps' IS DISTINCT FROM
+      '[{"text":"Paso de plantilla actualizado","position":0}]'::jsonb
+    OR (SELECT task.steps->0->>'text' FROM public.tasks AS task
+        WHERE task.id = v_new_task_id) IS DISTINCT FROM 'Paso original'
+    OR (SELECT (task.steps->0->>'is_completed')::boolean FROM public.tasks AS task
+        WHERE task.id = v_new_task_id) IS DISTINCT FROM false THEN
     RAISE EXCEPTION 'Series editing changed current/history or failed to update future settings: %, task %, history %',
       v_series, v_created, v_history_after;
   END IF;
@@ -353,6 +425,84 @@ BEGIN
     RAISE EXCEPTION 'Editing only the current occurrence rewrote the template or reset the future count: % / %',
       v_due_edit, v_series;
   END IF;
+  SELECT job.* INTO v_job FROM public.daily_repetition_jobs AS job
+  WHERE job.series_id = v_series.id AND job.job_kind = 'advance'
+    AND job.series_revision = v_series.revision AND job.state = 'queued';
+  v_worker_result := public.advance_daily_repetition_internal_p(
+    v_job, '2026-11-09 03:00:00+00'::timestamptz
+  );
+  IF v_worker_result->>'status' IS DISTINCT FROM 'confirmed'
+    OR v_worker_result->>'occurrence_on' IS DISTINCT FROM '2026-11-10' THEN
+    RAISE EXCEPTION 'The edited template did not generate its next occurrence: %', v_worker_result;
+  END IF;
+  SELECT series.* INTO v_series FROM public.daily_repetition_series AS series
+  WHERE series.id = v_series.id;
+  IF (SELECT task.steps->0->>'text' FROM public.tasks AS task
+      WHERE task.id = (v_worker_result->>'task_id')::uuid)
+        IS DISTINCT FROM 'Paso de plantilla actualizado'
+    OR (SELECT (task.steps->0->>'is_completed')::boolean FROM public.tasks AS task
+      WHERE task.id = (v_worker_result->>'task_id')::uuid) IS DISTINCT FROM false
+    OR (SELECT task.steps->0->>'position' FROM public.tasks AS task
+      WHERE task.id = (v_worker_result->>'task_id')::uuid) IS DISTINCT FROM '0'
+    OR (SELECT task.steps->0->>'version' FROM public.tasks AS task
+      WHERE task.id = (v_worker_result->>'task_id')::uuid) IS DISTINCT FROM '1'
+    OR (SELECT task.steps->0->>'id' FROM public.tasks AS task
+      WHERE task.id = (v_worker_result->>'task_id')::uuid)
+      IS NOT DISTINCT FROM (SELECT task.steps->0->>'id' FROM public.tasks AS task
+        WHERE task.id = v_new_task_id)
+    OR (SELECT task.steps->0->>'text' FROM public.tasks AS task
+      WHERE task.id = v_new_task_id) IS DISTINCT FROM 'Paso original'
+    OR (SELECT task.column_id FROM public.tasks AS task
+      WHERE task.id = v_new_task_id) IS DISTINCT FROM v_appearance_column
+    OR (SELECT count(*) FROM public.daily_repetition_occurrences AS occurrence
+      WHERE occurrence.series_id = v_series.id AND occurrence.state = 'current') <> 1 THEN
+    RAISE EXCEPTION 'The edited template did not create its own unchecked checklist steps or changed the current task';
+  END IF;
+
+  SELECT * INTO v_board FROM public.create_board_p(
+    'Issue 26 concurrent edit worker', 'UTC',
+    '26000000-0000-4000-8000-000000000099'
+  );
+  SELECT * INTO v_new_column FROM public.create_column_p(v_board.slug, v_board.id, 'Actual', 0);
+  v_created := public.create_task_p(
+    '26000000-0000-4000-8000-000000000098', v_board.id, v_new_column.id,
+    'Current concurrent task', NULL, 'medium'
+  );
+  v_task_id := (v_created->>'task_id')::uuid;
+  v_edit_start_on := public.board_calendar_day('UTC', pg_catalog.clock_timestamp()) + 1;
+  v_race_start_on := v_edit_start_on - 3;
+  v_due_edit := public.edit_task_fields_p(
+    '26000000-0000-4000-8000-000000000097', v_board.slug, v_task_id,
+    pg_catalog.jsonb_build_object('due_on', v_race_start_on), '{"due_on":1}'::jsonb
+  );
+  IF v_due_edit->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Concurrent fixture current date setup failed: %', v_due_edit;
+  END IF;
+  v_result := public.create_repetition_with_advance_p(
+    '26000000-0000-4000-8000-000000000096', v_board.slug, v_task_id,
+    v_race_start_on, NULL, 4, 2, false, NULL,
+    '{"frequency":"daily","interval":1}'::jsonb, 0, v_new_column.id
+  );
+  IF v_result->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Concurrent fixture series setup failed: %', v_result;
+  END IF;
+  SELECT series.* INTO v_series FROM public.daily_repetition_series AS series
+  WHERE series.id = (v_result->>'series_id')::uuid;
+  SELECT job.* INTO v_job FROM public.daily_repetition_jobs AS job
+  WHERE job.series_id = v_series.id AND job.job_kind = 'advance'
+    AND job.series_revision = v_series.revision AND job.state = 'queued';
+  IF NOT FOUND OR v_series.next_due_on IS DISTINCT FROM v_race_start_on + 1 THEN
+    RAISE EXCEPTION 'Concurrent fixture has no current-revision job: %, %', v_series, v_job;
+  END IF;
+  INSERT INTO public.issue26_repetition_race_ref(
+    board_id, board_slug, task_id, series_id, revision, job_id,
+    current_occurrence_id, current_column_id, current_due_on,
+    edit_start_on, next_due_on
+  ) VALUES (
+    v_board.id, v_board.slug, v_task_id, v_series.id, v_series.revision,
+    v_job.id, v_series.current_occurrence_id, v_new_column.id,
+    v_race_start_on, v_edit_start_on, v_series.next_due_on
+  );
 END;
 $$;
 COMMIT;

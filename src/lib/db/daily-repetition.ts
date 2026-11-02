@@ -139,7 +139,15 @@ export interface RepetitionSeriesTemplate {
   description: string | null;
   priority: "low" | "medium" | "high" | "urgent";
   assignee_id: string | null;
-  steps?: Array<Record<string, unknown>>;
+  steps?: RepetitionTemplateStep[];
+}
+
+export interface RepetitionTemplateStep {
+  id?: string;
+  text: string;
+  is_completed?: boolean;
+  position: number;
+  version?: number;
 }
 
 export type RepetitionFinalMode = "count" | "date" | "none";

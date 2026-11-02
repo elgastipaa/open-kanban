@@ -19,6 +19,15 @@ const command = (taskId, operationId) => ({
     description: "Weekly review",
     priority: "high",
     assignee_id: null,
+    steps: [
+      {
+        id: "template-step-1",
+        text: "Review the checklist item",
+        is_completed: false,
+        position: 0,
+        version: 1,
+      },
+    ],
   },
   confirm_date_choice: false,
 });

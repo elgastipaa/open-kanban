@@ -64,6 +64,19 @@ interface TaskRepetitionProps {
 
 type FinalMode = RepetitionFinalMode;
 type RepetitionFrequency = RepetitionPattern["frequency"];
+interface RepetitionTemplateStepDraft {
+  id: string;
+  text: string;
+}
+
+function templateStepDrafts(
+  steps: RepetitionSeriesTemplate["steps"] | undefined,
+): RepetitionTemplateStepDraft[] {
+  return (steps ?? []).map((step) => ({
+    id: generateUUID(),
+    text: step.text,
+  }));
+}
 
 const WEEKDAYS = [
   { value: 1, label: "lunes" },
@@ -241,6 +254,9 @@ export function TaskRepetition({
   const [templateAssigneeId, setTemplateAssigneeId] = useState(
     task.assignee_id ?? "",
   );
+  const [templateSteps, setTemplateSteps] = useState<
+    RepetitionTemplateStepDraft[]
+  >([]);
   const [preview, setPreview] = useState<RepetitionPreview | null>(null);
   const [editPreview, setEditPreview] = useState<RepetitionEditPreview | null>(
     null,
@@ -325,6 +341,7 @@ export function TaskRepetition({
     setTemplateAssigneeId(
       pendingTemplate?.assignee_id ?? task.assignee_id ?? "",
     );
+    setTemplateSteps(templateStepDrafts(pendingTemplate?.steps));
     const initialFinalMode =
       pendingEdit?.final_mode ??
       (pending?.end_on
@@ -372,6 +389,7 @@ export function TaskRepetition({
           setTemplateAssigneeId(
             result.template_snapshot?.assignee_id ?? task.assignee_id ?? "",
           );
+          setTemplateSteps(templateStepDrafts(result.template_snapshot?.steps));
           if (result.end_on) {
             setFinalMode("date");
             setEndOn(result.end_on);
@@ -469,13 +487,15 @@ export function TaskRepetition({
     if (!final || !pattern || advance === null || !appearanceColumnId) {
       return null;
     }
-    const priorTemplate = status?.template_snapshot;
     const template: RepetitionSeriesTemplate = {
       title: templateTitle.trim(),
       description: templateDescription.trim() || null,
       priority: templatePriority,
       assignee_id: templateAssigneeId || null,
-      ...(priorTemplate?.steps ? { steps: priorTemplate.steps } : {}),
+      steps: templateSteps.flatMap((step, index) => {
+        const text = step.text.trim();
+        return text ? [{ text, position: index }] : [];
+      }),
     };
     return {
       slug,
@@ -851,6 +871,18 @@ export function TaskRepetition({
     clearPreview();
   }
 
+  function moveTemplateStep(index: number, offset: number) {
+    const target = index + offset;
+    setTemplateSteps((current) => {
+      if (target < 0 || target >= current.length) return current;
+      const next = [...current];
+      const [step] = next.splice(index, 1);
+      next.splice(target, 0, step);
+      return next;
+    });
+    clearPreview();
+  }
+
   function beginEdit() {
     if (status?.status !== "available" || status.state !== "active") return;
     const nextStart = status.next_due_on ?? task.due_on ?? boardToday;
@@ -868,6 +900,7 @@ export function TaskRepetition({
     setTemplateAssigneeId(
       status.template_snapshot?.assignee_id ?? task.assignee_id ?? "",
     );
+    setTemplateSteps(templateStepDrafts(status.template_snapshot?.steps));
     if (status.end_on) {
       setFinalMode("date");
       setEndOn(status.end_on);
@@ -1198,6 +1231,88 @@ export function TaskRepetition({
                       </select>
                     </label>
                   </div>
+                  <fieldset className="space-y-2 rounded-md border border-border p-3">
+                    <legend className="px-1 font-semibold text-text-muted text-xs">
+                      Checklist de las próximas tarjetas
+                    </legend>
+                    <p className="text-text-secondary text-xs">
+                      Cada próxima tarjeta recibe estos pasos sin marcar. Los
+                      pasos de la tarjeta actual permanecen independientes.
+                    </p>
+                    {templateSteps.map((step, index) => (
+                      <div
+                        key={step.id}
+                        className="flex flex-wrap items-end gap-2"
+                      >
+                        <label
+                          className="flex min-w-40 flex-1 flex-col gap-1.5 font-semibold text-text-muted text-xs"
+                          htmlFor={`repetition-template-step-${index}`}
+                        >
+                          Paso {index + 1}
+                          <input
+                            id={`repetition-template-step-${index}`}
+                            type="text"
+                            value={step.text}
+                            onChange={(event) => {
+                              setTemplateSteps((current) =>
+                                current.map((value) =>
+                                  value.id === step.id
+                                    ? { ...value, text: event.target.value }
+                                    : value,
+                                ),
+                              );
+                              clearPreview();
+                            }}
+                            className="h-10 rounded-md border border-border bg-transparent px-3 text-sm text-text-primary outline-none focus:border-accent disabled:opacity-60"
+                          />
+                        </label>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          aria-label={`Subir el paso ${index + 1}`}
+                          disabled={index === 0}
+                          onClick={() => moveTemplateStep(index, -1)}
+                        >
+                          ↑
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          aria-label={`Bajar el paso ${index + 1}`}
+                          disabled={index === templateSteps.length - 1}
+                          onClick={() => moveTemplateStep(index, 1)}
+                        >
+                          ↓
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          aria-label={`Quitar el paso ${index + 1}`}
+                          onClick={() => {
+                            setTemplateSteps((current) =>
+                              current.filter((value) => value.id !== step.id),
+                            );
+                            clearPreview();
+                          }}
+                        >
+                          Quitar
+                        </Button>
+                      </div>
+                    ))}
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      onClick={() => {
+                        setTemplateSteps((current) => [
+                          ...current,
+                          { id: generateUUID(), text: "" },
+                        ]);
+                        clearPreview();
+                      }}
+                    >
+                      Agregar paso
+                    </Button>
+                  </fieldset>
                 </fieldset>
               ) : null}
               <div className="grid gap-3 sm:grid-cols-2">
@@ -1602,6 +1717,25 @@ export function TaskRepetition({
                       {editPreview.template_snapshot.description}
                     </p>
                   ) : null}
+                  <div className="text-text-secondary">
+                    <p>Checklist de futuras tarjetas:</p>
+                    {editPreview.template_snapshot?.steps?.length ? (
+                      <ol
+                        aria-label="Pasos de la checklist de futuras tarjetas"
+                        className="list-inside list-decimal pl-2"
+                      >
+                        {editPreview.template_snapshot.steps.map(
+                          (step, index) => (
+                            <li key={`${step.position}-${index}`}>
+                              {step.text}
+                            </li>
+                          ),
+                        )}
+                      </ol>
+                    ) : (
+                      <p>Sin pasos de checklist.</p>
+                    )}
+                  </div>
                   {editPreview.requires_date_choice ? (
                     <div className="space-y-2 rounded-md border border-priority-medium/40 p-3 text-text-secondary">
                       <p>

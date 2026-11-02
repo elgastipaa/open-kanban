@@ -349,8 +349,11 @@ SET search_path = pg_catalog, public, auth, pg_temp
 AS $$
 DECLARE
   v_series public.daily_repetition_series%ROWTYPE;
+  v_job public.daily_repetition_jobs%ROWTYPE;
   v_board public.boards%ROWTYPE;
   v_column public.columns%ROWTYPE;
+  v_series_board_id uuid;
+  v_series_generation_id uuid;
   v_pattern jsonb;
   v_today date;
   v_appearance_on date;
@@ -370,39 +373,72 @@ DECLARE
   v_new_steps jsonb;
   v_finished boolean;
 BEGIN
+  -- Resolve the board FK without taking a row lock so every worker follows
+  -- the board -> series -> job order used by series edits.
+  SELECT series.board_id, series.generation_id
+  INTO v_series_board_id, v_series_generation_id
+  FROM public.daily_repetition_series AS series
+  WHERE series.id = p_job.series_id;
+  IF NOT FOUND THEN RETURN pg_catalog.jsonb_build_object('status', 'superseded'); END IF;
+
+  SELECT board.* INTO v_board
+  FROM public.boards AS board
+  WHERE board.id = v_series_board_id
+  FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN pg_catalog.jsonb_build_object('status', 'series_unavailable');
+  END IF;
+
   SELECT series.* INTO v_series
   FROM public.daily_repetition_series AS series
   WHERE series.id = p_job.series_id
   FOR UPDATE;
   IF NOT FOUND THEN RETURN pg_catalog.jsonb_build_object('status', 'superseded'); END IF;
-  IF v_series.state IS DISTINCT FROM 'active'
-    OR v_series.revision IS DISTINCT FROM p_job.series_revision
-    OR v_series.next_due_on IS DISTINCT FROM p_job.scheduled_on THEN
+
+  SELECT job.* INTO v_job
+  FROM public.daily_repetition_jobs AS job
+  WHERE job.id = p_job.id
+  FOR UPDATE;
+  IF NOT FOUND OR v_job.state = 'superseded' THEN
     RETURN pg_catalog.jsonb_build_object('status', 'superseded');
   END IF;
-
-  SELECT board.* INTO v_board
-  FROM public.boards AS board
-  WHERE board.id = v_series.board_id
-    AND board.active_generation_id = v_series.generation_id
-  FOR UPDATE;
-  IF NOT FOUND THEN
+  IF v_job.state IN ('succeeded', 'dead_letter') THEN
+    RETURN pg_catalog.jsonb_build_object('status', 'already_processed');
+  END IF;
+  IF v_job.state IS DISTINCT FROM p_job.state
+    OR v_job.series_id IS DISTINCT FROM p_job.series_id
+    OR v_job.series_revision IS DISTINCT FROM p_job.series_revision
+    OR v_job.scheduled_on IS DISTINCT FROM p_job.scheduled_on
+    OR v_job.lease_token IS DISTINCT FROM p_job.lease_token
+    OR (v_job.state = 'leased' AND v_job.lease_expires_at <= p_now) THEN
+    RETURN pg_catalog.jsonb_build_object('status', 'lease_lost');
+  END IF;
+  IF v_series.board_id IS DISTINCT FROM v_series_board_id
+    OR v_series.generation_id IS DISTINCT FROM v_series_generation_id THEN
+    RETURN pg_catalog.jsonb_build_object('status', 'superseded');
+  END IF;
+  IF v_board.active_generation_id IS DISTINCT FROM v_series.generation_id THEN
     UPDATE public.daily_repetition_series AS series
     SET state = 'stopped', next_due_on = NULL, stopped_at = p_now,
         revision = series.revision + 1, updated_at = p_now
     WHERE series.id = v_series.id;
     RETURN pg_catalog.jsonb_build_object('status', 'series_unavailable');
   END IF;
+  IF v_series.state IS DISTINCT FROM 'active'
+    OR v_series.revision IS DISTINCT FROM v_job.series_revision
+    OR v_series.next_due_on IS DISTINCT FROM v_job.scheduled_on THEN
+    RETURN pg_catalog.jsonb_build_object('status', 'superseded');
+  END IF;
 
   v_pattern := v_series.calendar_pattern;
   v_today := public.board_calendar_day(v_board.time_zone, p_now);
-  v_appearance_on := p_job.scheduled_on - v_series.advance_days;
+  v_appearance_on := v_job.scheduled_on - v_series.advance_days;
   IF v_today < v_appearance_on THEN
     UPDATE public.daily_repetition_jobs AS job
     SET state = 'queued',
         available_at = v_appearance_on::timestamp AT TIME ZONE v_board.time_zone,
         lease_token = NULL, lease_expires_at = NULL, updated_at = p_now
-    WHERE job.id = p_job.id;
+    WHERE job.id = v_job.id;
     RETURN pg_catalog.jsonb_build_object('status', 'not_due');
   END IF;
 
@@ -436,7 +472,7 @@ BEGIN
   END IF;
 
   v_through_on := CASE
-    WHEN v_today < p_job.scheduled_on THEN p_job.scheduled_on
+    WHEN v_today < v_job.scheduled_on THEN v_job.scheduled_on
     WHEN v_final_on IS NOT NULL THEN least(v_today, v_final_on)
     ELSE v_today END;
   v_effective_count := public.repetition_calendar_count_internal_p(
@@ -592,6 +628,258 @@ REVOKE ALL ON FUNCTION public.advance_daily_repetition_internal_p(
   public.daily_repetition_jobs, timestamptz
 ) FROM PUBLIC, anon, authenticated, service_role;
 
+-- Advance workers resolve the board first, so the dispatcher must not hold a
+-- job-row lock while they wait for the board. The advance function re-locks
+-- and validates its job after board and series; purge jobs keep their job-first
+-- path because they do not participate in the series lock order.
+CREATE OR REPLACE FUNCTION public.process_daily_repetition_job_internal_p(
+  p_job_id uuid,
+  p_lease_token uuid,
+  p_now timestamptz
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public, auth, pg_temp
+AS $$
+DECLARE
+  v_job public.daily_repetition_jobs%ROWTYPE;
+  v_result jsonb;
+  v_failed boolean := false;
+  v_error_code text;
+BEGIN
+  IF current_setting('request.jwt.claim.role', true) IS DISTINCT FROM 'service_role'
+    AND current_user IS DISTINCT FROM 'service_role' THEN
+    RAISE EXCEPTION 'Service role is required' USING ERRCODE = '42501';
+  END IF;
+  IF p_job_id IS NULL OR p_lease_token IS NULL
+    OR p_now IS NULL OR NOT pg_catalog.isfinite(p_now) THEN
+    RAISE EXCEPTION 'A leased job and valid timestamp are required' USING ERRCODE = '22023';
+  END IF;
+  SELECT job.* INTO v_job
+  FROM public.daily_repetition_jobs AS job
+  WHERE job.id = p_job_id;
+  IF NOT FOUND THEN
+    RETURN pg_catalog.jsonb_build_object('status', 'lease_lost');
+  END IF;
+  IF v_job.state IN ('succeeded', 'superseded') THEN
+    RETURN pg_catalog.jsonb_build_object('status', 'already_processed');
+  END IF;
+  IF v_job.state IS DISTINCT FROM 'leased'
+    OR v_job.lease_token IS DISTINCT FROM p_lease_token
+    OR v_job.lease_expires_at <= p_now THEN
+    RETURN pg_catalog.jsonb_build_object('status', 'lease_lost');
+  END IF;
+
+  IF v_job.job_kind = 'purge' THEN
+    SELECT job.* INTO v_job
+    FROM public.daily_repetition_jobs AS job
+    WHERE job.id = p_job_id
+    FOR UPDATE;
+    IF NOT FOUND OR v_job.state IS DISTINCT FROM 'leased'
+      OR v_job.lease_token IS DISTINCT FROM p_lease_token
+      OR v_job.lease_expires_at <= p_now THEN
+      RETURN pg_catalog.jsonb_build_object('status', 'lease_lost');
+    END IF;
+  END IF;
+
+  BEGIN
+    IF v_job.job_kind = 'advance' THEN
+      v_result := public.advance_daily_repetition_internal_p(v_job, p_now);
+    ELSE
+      v_result := pg_catalog.jsonb_build_object(
+        'status', 'confirmed',
+        'purged_tasks', public.purge_daily_repetition_tasks_internal_p(1000, p_now)
+      );
+    END IF;
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_error_code = RETURNED_SQLSTATE;
+    v_failed := true;
+  END;
+
+  IF v_failed THEN
+    UPDATE public.daily_repetition_jobs AS job
+    SET state = CASE WHEN job.attempt_count >= job.max_attempts
+        THEN 'dead_letter' ELSE 'retry_wait' END,
+        available_at = CASE WHEN job.attempt_count >= job.max_attempts
+          THEN job.available_at
+          ELSE p_now + least(interval '1 hour',
+            interval '30 seconds' * pg_catalog.power(2::numeric,
+              greatest(0, job.attempt_count - 1))::double precision) END,
+        lease_token = NULL, lease_expires_at = NULL,
+        last_error_code = v_error_code, last_error_at = p_now,
+        completed_at = CASE WHEN job.attempt_count >= job.max_attempts THEN p_now ELSE NULL END,
+        updated_at = p_now
+    WHERE job.id = v_job.id;
+    IF v_job.job_kind = 'purge' AND v_job.attempt_count >= v_job.max_attempts THEN
+      INSERT INTO public.daily_repetition_jobs(job_kind, dedupe_key, available_at)
+      VALUES ('purge', pg_catalog.format('purge:after:%s', v_job.id), p_now + interval '1 hour')
+      ON CONFLICT (dedupe_key) DO NOTHING;
+    END IF;
+    RETURN pg_catalog.jsonb_build_object(
+      'status', CASE WHEN v_job.attempt_count >= v_job.max_attempts
+        THEN 'dead_letter' ELSE 'retry_wait' END,
+      'error_code', v_error_code, 'attempt_count', v_job.attempt_count,
+      'available_at', CASE WHEN v_job.attempt_count >= v_job.max_attempts
+        THEN NULL ELSE p_now + least(interval '1 hour',
+          interval '30 seconds' * pg_catalog.power(2::numeric,
+            greatest(0, v_job.attempt_count - 1))::double precision) END
+    );
+  END IF;
+
+  IF v_result->>'status' IN ('not_due', 'lease_lost', 'already_processed') THEN
+    RETURN v_result;
+  ELSIF v_result->>'status' = 'superseded' THEN
+    UPDATE public.daily_repetition_jobs AS job
+    SET state = 'superseded', lease_token = NULL, lease_expires_at = NULL,
+        completed_at = p_now, updated_at = p_now
+    WHERE job.id = v_job.id;
+    RETURN v_result;
+  END IF;
+
+  UPDATE public.daily_repetition_jobs AS job
+  SET state = 'succeeded', lease_token = NULL, lease_expires_at = NULL,
+      completed_at = p_now, updated_at = p_now
+  WHERE job.id = v_job.id;
+  IF v_job.job_kind = 'purge' THEN
+    INSERT INTO public.daily_repetition_jobs(job_kind, dedupe_key, available_at)
+    VALUES ('purge', pg_catalog.format('purge:after:%s', v_job.id), p_now + interval '1 hour')
+    ON CONFLICT (dedupe_key) DO NOTHING;
+  END IF;
+  RETURN coalesce(v_result, pg_catalog.jsonb_build_object('status', 'confirmed'));
+END;
+$$;
+REVOKE ALL ON FUNCTION public.process_daily_repetition_job_internal_p(uuid, uuid, timestamptz)
+  FROM PUBLIC, anon, authenticated, service_role;
+
+CREATE OR REPLACE FUNCTION public.claim_daily_repetition_jobs_internal_p(
+  p_limit integer,
+  p_now timestamptz
+)
+RETURNS TABLE (
+  id uuid,
+  job_kind text,
+  series_id uuid,
+  series_revision bigint,
+  scheduled_on date,
+  lease_token uuid,
+  lease_expires_at timestamptz,
+  attempt_count integer
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public, auth, pg_temp
+AS $$
+DECLARE
+  v_candidate record;
+  v_board_id uuid;
+  v_series public.daily_repetition_series%ROWTYPE;
+  v_job public.daily_repetition_jobs%ROWTYPE;
+  v_claimed integer := 0;
+BEGIN
+  IF current_setting('request.jwt.claim.role', true) IS DISTINCT FROM 'service_role'
+    AND current_user IS DISTINCT FROM 'service_role' THEN
+    RAISE EXCEPTION 'Service role is required' USING ERRCODE = '42501';
+  END IF;
+  IF p_limit IS NULL OR p_limit < 1 OR p_limit > 100
+    OR p_now IS NULL OR NOT pg_catalog.isfinite(p_now) THEN
+    RAISE EXCEPTION 'Choose a valid worker batch and timestamp' USING ERRCODE = '22023';
+  END IF;
+
+  FOR v_candidate IN
+    SELECT job.id, job.job_kind, job.series_id, job.state,
+      job.lease_expires_at, job.attempt_count, job.max_attempts, series.board_id,
+      series.id AS candidate_series_id
+    FROM public.daily_repetition_jobs AS job
+    LEFT JOIN public.daily_repetition_series AS series ON series.id = job.series_id
+    WHERE (
+        job.state IN ('queued', 'retry_wait') AND job.available_at <= p_now
+      ) OR (
+        job.state = 'leased' AND job.lease_expires_at <= p_now
+      )
+    ORDER BY series.board_id NULLS FIRST, series.id NULLS FIRST,
+      job.available_at, job.created_at, job.id
+  LOOP
+    -- Preserve the worker's full expired-lease sweep after the claim batch is
+    -- full, without taking locks for additional ready jobs.
+    IF v_claimed >= p_limit AND NOT (
+      v_candidate.state = 'leased'
+      AND v_candidate.lease_expires_at <= p_now
+      AND v_candidate.attempt_count >= v_candidate.max_attempts
+    ) THEN
+      CONTINUE;
+    END IF;
+
+    IF v_candidate.job_kind = 'advance' THEN
+      SELECT board.id INTO v_board_id
+      FROM public.boards AS board
+      WHERE board.id = v_candidate.board_id
+      FOR UPDATE;
+      IF NOT FOUND THEN CONTINUE; END IF;
+
+      SELECT series.* INTO v_series
+      FROM public.daily_repetition_series AS series
+      WHERE series.id = v_candidate.candidate_series_id
+      FOR UPDATE;
+      IF NOT FOUND OR v_series.board_id IS DISTINCT FROM v_board_id THEN
+        CONTINUE;
+      END IF;
+    END IF;
+
+    SELECT job.* INTO v_job
+    FROM public.daily_repetition_jobs AS job
+    WHERE job.id = v_candidate.id
+    FOR UPDATE SKIP LOCKED;
+    IF NOT FOUND THEN CONTINUE; END IF;
+
+    IF v_job.state = 'leased' AND v_job.lease_expires_at <= p_now
+      AND v_job.attempt_count >= v_job.max_attempts THEN
+      UPDATE public.daily_repetition_jobs AS job
+      SET state = 'dead_letter', lease_token = NULL, lease_expires_at = NULL,
+          last_error_code = coalesce(job.last_error_code, 'lease_expired'),
+          last_error_at = p_now, completed_at = p_now, updated_at = p_now
+      WHERE job.id = v_job.id;
+      IF v_job.job_kind = 'purge' THEN
+        INSERT INTO public.daily_repetition_jobs(job_kind, dedupe_key, available_at)
+        VALUES ('purge', pg_catalog.format('purge:after:%s', v_job.id), p_now + interval '1 hour')
+        ON CONFLICT (dedupe_key) DO NOTHING;
+      END IF;
+      CONTINUE;
+    END IF;
+
+    IF NOT (
+      v_job.state IN ('queued', 'retry_wait') AND v_job.available_at <= p_now
+      OR v_job.state = 'leased' AND v_job.lease_expires_at <= p_now
+        AND v_job.attempt_count < v_job.max_attempts
+    ) THEN
+      CONTINUE;
+    END IF;
+
+    IF v_claimed >= p_limit THEN CONTINUE; END IF;
+
+    UPDATE public.daily_repetition_jobs AS job
+    SET state = 'leased', lease_token = pg_catalog.gen_random_uuid(),
+        lease_expires_at = p_now + interval '2 minutes',
+        attempt_count = job.attempt_count + 1, updated_at = p_now
+    WHERE job.id = v_job.id
+    RETURNING job.* INTO v_job;
+
+    id := v_job.id;
+    job_kind := v_job.job_kind;
+    series_id := v_job.series_id;
+    series_revision := v_job.series_revision;
+    scheduled_on := v_job.scheduled_on;
+    lease_token := v_job.lease_token;
+    lease_expires_at := v_job.lease_expires_at;
+    attempt_count := v_job.attempt_count;
+    RETURN NEXT;
+    v_claimed := v_claimed + 1;
+  END LOOP;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.claim_daily_repetition_jobs_internal_p(integer, timestamptz)
+  FROM PUBLIC, anon, authenticated, service_role;
+
 CREATE OR REPLACE FUNCTION public.get_repetition_p(p_slug text, p_task_id uuid)
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -726,8 +1014,18 @@ BEGIN
     OR pg_catalog.length(pg_catalog.btrim(p_template->>'title')) NOT BETWEEN 1 AND 200
     OR pg_catalog.jsonb_typeof(p_template->'description') NOT IN ('string', 'null')
     OR pg_catalog.length(p_template->>'description') > 2000
-    OR p_template->>'priority' NOT IN ('low', 'medium', 'high', 'urgent') THEN
-    RAISE EXCEPTION 'Revisa el título, la descripción y la prioridad de la plantilla' USING ERRCODE = '22023';
+    OR p_template->>'priority' NOT IN ('low', 'medium', 'high', 'urgent')
+    OR pg_catalog.jsonb_typeof(p_template->'steps') IS DISTINCT FROM 'array'
+    OR EXISTS (
+      SELECT 1 FROM pg_catalog.jsonb_array_elements(
+        CASE WHEN pg_catalog.jsonb_typeof(p_template->'steps') = 'array'
+          THEN p_template->'steps' ELSE '[]'::jsonb END
+      ) AS template_step(value)
+      WHERE pg_catalog.jsonb_typeof(template_step.value) IS DISTINCT FROM 'object'
+        OR pg_catalog.jsonb_typeof(template_step.value->'text') IS DISTINCT FROM 'string'
+        OR pg_catalog.length(pg_catalog.btrim(template_step.value->>'text')) = 0
+    ) THEN
+    RAISE EXCEPTION 'Revisa la plantilla y sus pasos de checklist' USING ERRCODE = '22023';
   END IF;
   IF p_future_count IS NOT NULL AND p_future_count - 1 > 2147483647 THEN
     RAISE EXCEPTION 'La cantidad de próximas repeticiones supera el calendario disponible'
@@ -799,7 +1097,15 @@ BEGIN
     'title', pg_catalog.btrim(p_template->>'title'),
     'description', p_template->'description',
     'priority', p_template->>'priority',
-    'assignee_id', p_template->'assignee_id'
+    'assignee_id', p_template->'assignee_id',
+    'steps', (
+      SELECT coalesce(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+        'text', pg_catalog.btrim(template_step.value->>'text'),
+        'position', template_step.ordinality - 1
+      ) ORDER BY template_step.ordinality), '[]'::jsonb)
+      FROM pg_catalog.jsonb_array_elements(p_template->'steps')
+        WITH ORDINALITY AS template_step(value, ordinality)
+    )
   );
   IF v_template->'assignee_id' IS NOT NULL
     AND v_template->'assignee_id' <> 'null'::jsonb
@@ -951,6 +1257,15 @@ BEGIN
     'appearance_column_id', p_appearance_column_id, 'template', p_template,
     'confirm_date_choice', p_confirm_date_choice
   )::text, 'UTF8'), 'sha256');
+  SELECT board.* INTO v_board FROM public.boards AS board
+  WHERE board.slug = p_slug AND public.is_board_member(board.id);
+  IF NOT FOUND THEN RETURN pg_catalog.jsonb_build_object('status', 'unavailable'); END IF;
+  PERFORM 1 FROM public.boards AS board WHERE board.id = v_board.id FOR UPDATE;
+  SELECT board.* INTO v_board FROM public.boards AS board WHERE board.id = v_board.id;
+  IF NOT FOUND OR NOT public.is_application_user()
+    OR NOT public.is_board_member(v_board.id) THEN
+    RETURN pg_catalog.jsonb_build_object('status', 'unavailable');
+  END IF;
   SELECT receipt.* INTO v_receipt FROM public.daily_repetition_receipts AS receipt
   WHERE receipt.actor_id = v_actor_id AND receipt.operation_id = p_operation_id
   FOR UPDATE;
@@ -966,16 +1281,6 @@ BEGIN
       );
     END IF;
     RETURN v_receipt.result;
-  END IF;
-
-  SELECT board.* INTO v_board FROM public.boards AS board
-  WHERE board.slug = p_slug AND public.is_board_member(board.id);
-  IF NOT FOUND THEN RETURN pg_catalog.jsonb_build_object('status', 'unavailable'); END IF;
-  PERFORM 1 FROM public.boards AS board WHERE board.id = v_board.id FOR UPDATE;
-  SELECT board.* INTO v_board FROM public.boards AS board WHERE board.id = v_board.id;
-  IF NOT FOUND OR NOT public.is_application_user()
-    OR NOT public.is_board_member(v_board.id) THEN
-    RETURN pg_catalog.jsonb_build_object('status', 'unavailable');
   END IF;
   SELECT series.* INTO v_series
   FROM public.daily_repetition_occurrences AS occurrence

@@ -10,6 +10,7 @@ import {
   updateSavedView,
 } from "@/lib/saved-view-actions";
 import {
+  detectSavedViewVersionChange,
   isSavedViewDefinition,
   resolveSavedViewConflict,
   type SavedView,
@@ -129,8 +130,10 @@ export function SavedViewsPanel({
   const selectedIdRef = useRef(selectedId);
   const deletedIdRef = useRef(deletedId);
   const hasSyncedSnapshotRef = useRef(false);
+  const activeViewsRef = useRef(activeViews);
   selectedIdRef.current = selectedId;
   deletedIdRef.current = deletedId;
+  activeViewsRef.current = activeViews;
   const clearPrivateViewState = useCallback(() => {
     setActiveViews([]);
     setDeletedViews([]);
@@ -177,6 +180,17 @@ export function SavedViewsPanel({
       setDeletedViews(deleted);
       setSelectedId(nextSelectedId);
       setDeletedId(nextDeletedId);
+      const versionConflict = detectSavedViewVersionChange(
+        activeViewsRef.current,
+        active,
+        nextSelectedId === currentSelectedId ? currentSelectedId : "",
+      );
+      if (versionConflict) {
+        setUpdateConflict(versionConflict);
+        setMessage(
+          "La vista cambió en otro dispositivo. Tu variación se conserva para revisarla.",
+        );
+      }
       if (nextSelectedId !== currentSelectedId) {
         setName(active.find((view) => view.id === nextSelectedId)?.name ?? "");
       }
@@ -212,30 +226,43 @@ export function SavedViewsPanel({
         setMessage("No se pudieron actualizar las vistas. Puedes reintentar.");
         return false;
       }
-      setActiveViews(snapshot.active_views ?? []);
-      setDeletedViews(snapshot.deleted_views ?? []);
-      setSelectedId((current) =>
-        snapshot.active_views?.some((view) => view.id === current)
-          ? current
-          : (snapshot.active_views?.[0]?.id ?? ""),
+      const active = snapshot.active_views ?? [];
+      const deleted = snapshot.deleted_views ?? [];
+      const nextSelectedId = active.some((view) => view.id === selectedId)
+        ? selectedId
+        : (active[0]?.id ?? "");
+      const nextDeletedId = deleted.some((view) => view.id === deletedId)
+        ? deletedId
+        : (deleted[0]?.id ?? "");
+      const versionConflict = detectSavedViewVersionChange(
+        activeViewsRef.current,
+        active,
+        nextSelectedId === selectedId ? selectedId : "",
       );
-      if (!snapshot.active_views?.some((view) => view.id === selectedId)) {
-        setName(snapshot.active_views?.[0]?.name ?? "");
+
+      setActiveViews(active);
+      setDeletedViews(deleted);
+      setSelectedId(nextSelectedId);
+      setDeletedId(nextDeletedId);
+      if (versionConflict) {
+        setUpdateConflict(versionConflict);
+        setMessage(
+          "La vista cambió en otro dispositivo. Tu variación se conserva para revisarla.",
+        );
+      } else if (nextSelectedId !== selectedId) {
+        setName(active.find((view) => view.id === nextSelectedId)?.name ?? "");
+        setUpdateConflict(null);
+        setMessage("");
       }
-      setDeletedId((current) =>
-        snapshot.deleted_views?.some((view) => view.id === current)
-          ? current
-          : (snapshot.deleted_views?.[0]?.id ?? ""),
-      );
-      if (!snapshot.deleted_views?.some((view) => view.id === deletedId)) {
-        const nextDeleted = snapshot.deleted_views?.[0];
+      if (nextDeletedId !== deletedId) {
+        const nextDeleted = deleted.find((view) => view.id === nextDeletedId);
         setRestoreName(nextDeleted?.name ?? "");
         setRestoreDefinition(nextDeleted?.definition ?? null);
         setPreview(null);
         setRestoreConflict(null);
       }
       setAccessUnavailable(false);
-      setMessage("");
+      if (!versionConflict && nextSelectedId === selectedId) setMessage("");
       return true;
     } catch {
       setMessage("No se pudieron actualizar las vistas. Puedes reintentar.");
@@ -277,7 +304,13 @@ export function SavedViewsPanel({
   }
 
   async function handleUpdate() {
-    if (!selectedView || !currentDefinitionValid || busy || accessUnavailable)
+    if (
+      !selectedView ||
+      !currentDefinitionValid ||
+      busy ||
+      accessUnavailable ||
+      updateConflict
+    )
       return;
     setBusy(true);
     setMessage("");
@@ -329,8 +362,14 @@ export function SavedViewsPanel({
     setUpdateConflict(null);
     if (choice === "use_current") {
       setName(updateConflict.name);
-      onApply(resolution.definition);
-      setMessage("Se cargó la versión actual. Revísala antes de guardar.");
+      if (updateConflict.needs_review) {
+        setMessage(
+          "La versión actual necesita revisión. Usa Revisar definición para resolver sus condiciones antes de aplicarla.",
+        );
+      } else {
+        onApply(resolution.definition);
+        setMessage("Se cargó la versión actual. Revísala antes de guardar.");
+      }
     } else {
       setMessage(
         "Tu variación se conserva. Revisa y pulsa Actualizar vista para enviarla con la versión actual.",
@@ -574,7 +613,11 @@ export function SavedViewsPanel({
                   <button
                     type="button"
                     onClick={() => onApply(selectedView.definition)}
-                    disabled={selectedView.needs_review || busy}
+                    disabled={
+                      selectedView.needs_review ||
+                      busy ||
+                      Boolean(updateConflict)
+                    }
                     className="rounded-lg bg-accent px-3 py-2 font-medium text-accent-foreground text-sm disabled:opacity-50"
                   >
                     Restablecer vista
@@ -612,7 +655,12 @@ export function SavedViewsPanel({
                   <button
                     type="button"
                     onClick={() => void handleUpdate()}
-                    disabled={busy || !currentDefinitionValid || !name.trim()}
+                    disabled={
+                      busy ||
+                      !currentDefinitionValid ||
+                      !name.trim() ||
+                      Boolean(updateConflict)
+                    }
                     className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-surface-hover disabled:opacity-50"
                   >
                     {selectedView.needs_review

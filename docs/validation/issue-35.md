@@ -24,25 +24,30 @@ Se conserva `Blocked by #14/#34`; esta implementación bajo LP-0.2 no declara ce
 
 ### Regresión de sincronización de UI (TDD)
 
-Una prueba de contrato falló primero porque el efecto que importa el snapshot inicial también dependía de `selectedId`/`deletedId`: después de crear una vista y refrescar, seleccionar su ID podía volver a cargar la lista inicial antigua. El efecto ahora solo reconcilia cuando cambia el snapshot autorizado; las acciones explícitas del cliente controlan la selección y preservan la edición local. La prueba verifica las dependencias, que el selector cargue el nombre de la vista elegida y que Restablecer vista siga siendo una acción explícita. El estado final es verde en `pnpm test:unit:issue-35` (6/6).
+Una prueba de contrato falló primero porque el efecto que importa el snapshot inicial también dependía de `selectedId`/`deletedId`: después de crear una vista y refrescar, seleccionar su ID podía volver a cargar la lista inicial antigua. El efecto ahora solo reconcilia cuando cambia el snapshot autorizado; las acciones explícitas del cliente controlan la selección y preservan la edición local. La prueba verifica las dependencias, que el selector cargue el nombre de la vista elegida y que Restablecer vista siga siendo una acción explícita.
+
+Una segunda regresión comprobó el CAS del cliente: tras “Actualizar lista”, comparar la versión previa con la versión recibida detecta cambios remotos, mantiene la consulta local y bloquea Actualizar/Restablecer hasta que la persona elija cómo resolver el conflicto. El caso se probó primero en rojo con el helper inexistente y sin comparación del refresh; quedó verde después de añadir detección de versión y bloquear las acciones durante el conflicto. Una vista remota que ya necesita revisión continúa sujeta al flujo explícito “Revisar definición”. El estado final es verde en `pnpm test:unit:issue-35` (8/8).
 
 ## Comandos y resultados
 
 Entorno: PostgreSQL local descartable creado por `scripts/test-db.sh`; ejecución con identidades sintéticas. `next` local: 16.4.2.
 
+La corrida DB completa se hizo después de cerrar SQL y el harness. Los commits posteriores solo ajustan sincronización/CAS del panel, su contrato unitario y esta evidencia; no cambian migraciones ni el runner DB.
+
 | Comando | Resultado |
 | --- | --- |
 | `pnpm test:db:issue-35` | Exit 0; suite focal y carrera de dos clientes sobre cupo 50. |
 | `pnpm test:db` | Exit 0; migraciones y regresiones 001–060, incluidas las suites de #35; mensaje final `Database regression tests passed (disposable PostgreSQL).` |
-| `pnpm test:unit` | Exit 0; tests existentes y suites unitarias focales de #33, #34 y #35; la suite #35 pasa 6/6 (`saved-view-state` y contrato de panel). |
+| `pnpm test:unit` | Exit 0; tests existentes y suites unitarias focales de #33, #34 y #35; la suite #35 pasa 8/8 (`saved-view-state` y contrato de panel). |
 | `pnpm exec next typegen` | Exit 0; rutas generadas por Next 16.4.2. |
 | `pnpm typecheck` | Exit 0 (`tsc --noEmit`). |
 | `pnpm build` | Exit 0; build optimizado de Next 16.4.2. |
 | `pnpm exec biome check --line-ending=crlf` sobre los 10 archivos TS/TSX/MJS del cambio | Exit 0; sin diagnósticos. |
 | `pnpm exec biome check --formatter-enabled=false` | Exit 0; 251 archivos revisados sin diagnósticos de lint. |
+| `pnpm exec biome check --line-ending=crlf` global | Exit 1 por formato previo en cinco archivos ajenos al diff: `src/hooks/use-board/use-board-sync.ts`, `src/lib/task-draft-preservation.ts`, `src/lib/task-edit-read.ts`, `tests/realtime/epoch-smoke.mjs` y `tests/unit/task-draft-preservation.test.mjs`. No se reformatearon. |
 | `bash -n scripts/test-db.sh scripts/test-db-issue-35.sh scripts/test-db-issue-35-race.sh` | Exit 0. |
 | `git diff --check` | Exit 0. |
-| `pnpm lint` | Exit 1 porque el chequeo de formato global usa LF y el repositorio conserva CRLF: reporta diferencias de finales de línea en archivos no relacionados. Los archivos TS/TSX del ticket pasan el chequeo focal con `--line-ending=crlf`; la revisión global sin formatter pasa. No se reformateó el repositorio completo. |
+| `pnpm lint` | Exit 1: el chequeo de formato global no pasa con el estado actual del repositorio; quedan diferencias de formato fuera del diff. El chequeo focal con `--line-ending=crlf` y el lint global sin formatter pasan. No se reformateó el repositorio completo. |
 
 ## Gates humanos pendientes
 

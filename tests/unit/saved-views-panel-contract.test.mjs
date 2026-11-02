@@ -36,3 +36,35 @@ test("choosing a saved view selects its server name while preserving the explici
     /onClick=\{\(\) => onApply\(selectedView\.definition\)\}[\s\S]*?>\s*Restablecer vista/,
   );
 });
+
+test("a catalog refresh surfaces newer versions and blocks updates until review", () => {
+  const refresh = panelSource.match(
+    /const refresh = useCallback\(async \(\) => \{([\s\S]*?)\n {2}\}, \[/,
+  );
+  const update = panelSource.match(
+    /async function handleUpdate\(\) \{([\s\S]*?)\n {2}\}/,
+  );
+
+  assert.ok(refresh, "the authorized refresh action exists");
+  assert.ok(update, "the explicit update action exists");
+  assert.match(
+    refresh[1],
+    /detectSavedViewVersionChange\(\s*activeViewsRef\.current,\s*active,\s*nextSelectedId === selectedId \? selectedId : "",\s*\)/,
+    "refresh must compare the selected version before adopting the catalog",
+  );
+  assert.match(
+    update[1],
+    /updateConflict/,
+    "an unresolved remote-version conflict must block mutation",
+  );
+  assert.match(
+    panelSource,
+    /disabled=\{[\s\S]*?!currentDefinitionValid[\s\S]*?Boolean\(updateConflict\)\s*\}/,
+    "the UI must disable Update while the remote version is unresolved",
+  );
+  assert.match(
+    panelSource,
+    /disabled=\{\s*selectedView\.needs_review\s*\|\|\s*busy\s*\|\|\s*Boolean\(updateConflict\)\s*\}/,
+    "applying the selected view must wait for an explicit conflict choice",
+  );
+});

@@ -73,6 +73,19 @@ export interface SavedViewConflictDraft {
   current: SavedView;
 }
 
+export function detectSavedViewVersionChange(
+  currentViews: SavedView[],
+  latestViews: SavedView[],
+  selectedId: string,
+): SavedView | null {
+  if (!selectedId) return null;
+  const current = currentViews.find((view) => view.id === selectedId);
+  const latest = latestViews.find((view) => view.id === selectedId);
+  return current && latest && current.version !== latest.version
+    ? latest
+    : null;
+}
+
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const definitionKeys = [

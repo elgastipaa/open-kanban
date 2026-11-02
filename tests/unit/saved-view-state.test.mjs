@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  detectSavedViewVersionChange,
   isSavedViewDefinition,
   parseSavedViewReferenceFields,
   parseSavedViewsSnapshot,
@@ -138,4 +139,19 @@ test("a stale update preserves the local variation until an explicit conflict ch
     expectedVersion: 5,
   });
   assert.equal(conflict.localDefinition.query, "reunión urgente");
+});
+
+test("an authorized refresh identifies a newer selected view version", () => {
+  const current = savedView({ version: 3 });
+  const latest = savedView({ version: 4, name: "Plan actualizado" });
+
+  assert.equal(
+    detectSavedViewVersionChange([current], [latest], current.id),
+    latest,
+  );
+  assert.equal(
+    detectSavedViewVersionChange([current], [current], current.id),
+    null,
+  );
+  assert.equal(detectSavedViewVersionChange([current], [latest], ""), null);
 });

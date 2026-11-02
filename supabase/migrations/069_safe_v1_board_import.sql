@@ -1175,8 +1175,10 @@ DECLARE
   v_retention public.board_generation_retention%ROWTYPE;
   v_owner_id uuid;
   v_cleaned integer := 0;
+  v_limit integer;
 BEGIN
   IF p_limit IS NULL OR p_limit < 1 THEN RETURN 0; END IF;
+  v_limit := LEAST(p_limit, 100);
   FOR v_board_id IN
     SELECT board.id
     FROM public.boards AS board
@@ -1190,8 +1192,9 @@ BEGIN
         AND retention.expires_at <= pg_catalog.clock_timestamp()
     )
     ORDER BY board.id
-    LIMIT LEAST(p_limit, 100)
+    LIMIT v_limit
   LOOP
+    EXIT WHEN v_cleaned >= v_limit;
     PERFORM 1 FROM public.boards AS board
     WHERE board.id = v_board_id FOR UPDATE SKIP LOCKED;
     IF NOT FOUND THEN CONTINUE; END IF;
@@ -1207,6 +1210,7 @@ BEGIN
       WHERE retention.board_id = v_board_id
         AND retention.expires_at <= pg_catalog.clock_timestamp()
       ORDER BY retention.expires_at, retention.generation_id
+      LIMIT v_limit - v_cleaned
       FOR UPDATE OF retention SKIP LOCKED
     LOOP
       UPDATE public.task_attachments AS attachment

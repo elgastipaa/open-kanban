@@ -74,6 +74,76 @@ BEGIN
 END;
 $$;
 
+-- p_limit also caps expired retained generations on one board.
+WITH fixture AS (
+  SELECT board.id AS board_id, board.active_generation_id, board.owner_id
+  FROM public.issue43_import_fixture AS import_fixture
+  JOIN public.boards AS board ON board.id = import_fixture.board_id
+), synthetic(generation_id) AS (
+  VALUES
+    ('a4390000-0000-4000-8000-00000000001a'::uuid),
+    ('a4390000-0000-4000-8000-00000000001b'::uuid),
+    ('a4390000-0000-4000-8000-00000000001c'::uuid)
+)
+INSERT INTO public.board_generations(id, board_id, status, created_by)
+SELECT synthetic.generation_id, fixture.board_id, 'archived', fixture.owner_id
+FROM fixture CROSS JOIN synthetic;
+WITH fixture AS (
+  SELECT board.id AS board_id, board.active_generation_id
+  FROM public.issue43_import_fixture AS import_fixture
+  JOIN public.boards AS board ON board.id = import_fixture.board_id
+), synthetic(generation_id) AS (
+  VALUES
+    ('a4390000-0000-4000-8000-00000000001a'::uuid),
+    ('a4390000-0000-4000-8000-00000000001b'::uuid),
+    ('a4390000-0000-4000-8000-00000000001c'::uuid)
+)
+INSERT INTO public.board_generation_retention(
+  board_id, generation_id, replacement_generation_id, retained_at, expires_at
+)
+SELECT fixture.board_id, synthetic.generation_id, fixture.active_generation_id,
+  expired_time.retained_at, expired_time.retained_at + interval '168 hours'
+FROM fixture CROSS JOIN synthetic
+CROSS JOIN (SELECT clock_timestamp() - interval '169 hours' AS retained_at) AS expired_time;
+BEGIN;
+SET LOCAL ROLE service_role;
+SELECT public.cleanup_expired_board_generation_retention_p(2);
+COMMIT;
+DO $$
+BEGIN
+  IF (SELECT count(*) FROM public.board_generations
+      WHERE id IN (
+        'a4390000-0000-4000-8000-00000000001a',
+        'a4390000-0000-4000-8000-00000000001b',
+        'a4390000-0000-4000-8000-00000000001c'
+      )) <> 1
+    OR (SELECT count(*) FROM public.board_generation_retention
+      WHERE generation_id IN (
+        'a4390000-0000-4000-8000-00000000001a',
+        'a4390000-0000-4000-8000-00000000001b',
+        'a4390000-0000-4000-8000-00000000001c'
+      )) <> 1 THEN
+    RAISE EXCEPTION 'Generation retention cleanup exceeded its per-call row limit';
+  END IF;
+END;
+$$;
+BEGIN;
+SET LOCAL ROLE service_role;
+SELECT public.cleanup_expired_board_generation_retention_p(1);
+COMMIT;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM public.board_generations
+      WHERE id IN (
+        'a4390000-0000-4000-8000-00000000001a',
+        'a4390000-0000-4000-8000-00000000001b',
+        'a4390000-0000-4000-8000-00000000001c'
+      )) THEN
+    RAISE EXCEPTION 'Generation retention cleanup did not finish the bounded backlog';
+  END IF;
+END;
+$$;
+
 -- Expired unconfirmed previews are removed by the service cleanup worker.
 BEGIN;
 SET LOCAL ROLE authenticated;

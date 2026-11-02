@@ -104,6 +104,17 @@ test("the database stages invisible generations and revalidates publication unde
     migration,
     /LIMIT LEAST\(GREATEST\(p_limit - v_cleaned, 0\), 100\)/u,
   );
+  const retentionCleanupStart = migration.indexOf(
+    "CREATE FUNCTION public.cleanup_expired_board_generation_retention_p",
+  );
+  assert.notEqual(retentionCleanupStart, -1);
+  const retentionCleanup = migration.slice(retentionCleanupStart);
+  assert.match(retentionCleanup, /v_limit := LEAST\(p_limit, 100\)/u);
+  assert.match(retentionCleanup, /EXIT WHEN v_cleaned >= v_limit/u);
+  assert.match(
+    retentionCleanup,
+    /LIMIT v_limit - v_cleaned\s+FOR UPDATE OF retention SKIP LOCKED/u,
+  );
   assert.match(migration, /generation_id = v_generation_id/u);
   assert.doesNotMatch(migration, /board_import_restore_previews/u);
   assert.doesNotMatch(migration, /list_board_import_recoveries_p/u);

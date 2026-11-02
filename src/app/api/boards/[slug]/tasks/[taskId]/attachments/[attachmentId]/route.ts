@@ -5,7 +5,7 @@ import {
 } from "@/lib/supabase/task-attachment-storage";
 import {
   isConfirmedMissingTaskAttachmentObject,
-  isTaskAttachmentStorageNotFound,
+  isTaskAttachmentStorageObjectNotFound,
   TASK_ATTACHMENT_MISSING_MESSAGE,
 } from "@/lib/task-attachment-download";
 import {
@@ -76,7 +76,7 @@ export async function GET(
     const { data: storedObject, error: storageError } = await service.storage
       .from(TASK_ATTACHMENT_BUCKET)
       .download(metadata.object_key);
-    if (isTaskAttachmentStorageNotFound(storageError)) {
+    if (isTaskAttachmentStorageObjectNotFound(storageError)) {
       if (
         !(await isConfirmedMissingTaskAttachmentObject(
           storageError,

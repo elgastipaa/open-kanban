@@ -7,20 +7,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export function isTaskAttachmentStorageNotFound(error: unknown): boolean {
+export function isTaskAttachmentStorageObjectNotFound(error: unknown): boolean {
   return (
     isRecord(error) &&
     error.__isStorageError === true &&
     error.name === "StorageApiError" &&
-    error.status === 404
-  );
-}
-
-function isTaskAttachmentStorageBucketNotFound(error: unknown): boolean {
-  return (
-    isRecord(error) &&
-    (error.statusCode === "NoSuchBucket" ||
-      (error.status === 404 && error.message === "Bucket not found"))
+    (error.namespace === undefined || error.namespace === "storage") &&
+    error.status === 404 &&
+    error.message === "Object not found" &&
+    (error.statusCode === "NoSuchKey" || error.statusCode === "404")
   );
 }
 
@@ -52,10 +47,7 @@ export async function isConfirmedMissingTaskAttachmentObject(
   bucketId: string,
   storage: TaskAttachmentStorageBucketLookup,
 ): Promise<boolean> {
-  if (
-    !isTaskAttachmentStorageNotFound(downloadError) ||
-    isTaskAttachmentStorageBucketNotFound(downloadError)
-  ) {
+  if (!isTaskAttachmentStorageObjectNotFound(downloadError)) {
     return false;
   }
 

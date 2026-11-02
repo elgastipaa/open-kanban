@@ -1,11 +1,33 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { createClient } from "@supabase/supabase-js";
 import {
   isConfirmedMissingTaskAttachmentObject,
   isTaskAttachmentObjectAbsentFromCompleteInventory,
   readTaskAttachmentDownloadResponse,
   TASK_ATTACHMENT_MISSING_MESSAGE,
 } from "../../src/lib/task-attachment-download.ts";
+
+async function readStorageDownloadError(body) {
+  const client = createClient("https://storage.test.invalid", "synthetic-key", {
+    auth: {
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+      persistSession: false,
+    },
+    global: {
+      fetch: async () =>
+        new Response(JSON.stringify(body), {
+          status: 404,
+          headers: { "Content-Type": "application/json" },
+        }),
+    },
+  });
+  const { error } = await client.storage
+    .from("task-attachments")
+    .download("attachments/id-1");
+  return error;
+}
 
 test("only a complete exact-key inventory confirms object absence", () => {
   assert.equal(
@@ -205,6 +227,81 @@ test("fails closed when the bucket lookup is absent, invalid, rejected, or times
     ),
     false,
   );
+});
+
+test("accepts only the SDK's explicit object-not-found StorageApiError shape", async () => {
+  const storage = {
+    getBucket: async (bucketId) => ({ data: { id: bucketId }, error: null }),
+  };
+  const objectMissing = await readStorageDownloadError({
+    code: "NoSuchKey",
+    message: "Object not found",
+  });
+  const legacyHttpStatusOnly = await readStorageDownloadError({
+    statusCode: "404",
+    code: "NoSuchKey",
+    message: "Object not found",
+  });
+  const bucketMissing = await readStorageDownloadError({
+    code: "NoSuchBucket",
+    message: "Bucket not found",
+  });
+  const tenantMissing = await readStorageDownloadError({
+    code: "TenantNotFound",
+    message: "Tenant not found",
+  });
+  const legacyNotFound = await readStorageDownloadError({
+    httpStatusCode: 404,
+    code: "not_found",
+    message: "not_found",
+  });
+  const generic404 = await readStorageDownloadError({
+    statusCode: "404",
+    message: "Not Found",
+  });
+  const unknownCode = await readStorageDownloadError({
+    code: "UnknownNotFound",
+    message: "Object not found",
+  });
+
+  assert.equal(objectMissing?.name, "StorageApiError");
+  assert.equal(objectMissing?.__isStorageError, true);
+  assert.equal(objectMissing?.status, 404);
+  assert.equal(objectMissing?.statusCode, "NoSuchKey");
+  assert.equal(objectMissing?.namespace, "storage");
+  assert.equal(
+    await isConfirmedMissingTaskAttachmentObject(
+      objectMissing,
+      "task-attachments",
+      storage,
+    ),
+    true,
+  );
+  assert.equal(
+    await isConfirmedMissingTaskAttachmentObject(
+      legacyHttpStatusOnly,
+      "task-attachments",
+      storage,
+    ),
+    true,
+  );
+  for (const error of [
+    bucketMissing,
+    tenantMissing,
+    legacyNotFound,
+    generic404,
+    unknownCode,
+  ]) {
+    assert.equal(
+      await isConfirmedMissingTaskAttachmentObject(
+        error,
+        "task-attachments",
+        storage,
+      ),
+      false,
+      `${error?.statusCode}: ${error?.message}`,
+    );
+  }
 });
 
 test("reads a safe missing-object HTTP response without reflecting storage details", async () => {

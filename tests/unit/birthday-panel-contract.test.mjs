@@ -350,6 +350,75 @@ test("a reappeared label ID requires explicit conflict resolution", () => {
   );
 });
 
+test("a deleted label carries its stale-version proposal through orphaning and reappearance", () => {
+  const current = {
+    id: "label-one",
+    board_id: "board-one",
+    name: "Versión actual",
+    color: "green",
+    version: 4,
+  };
+  const proposal = {
+    name: "Propuesta del conflicto stale",
+    color: "red",
+    baseName: "Versión anterior",
+    baseColor: "blue",
+    baseVersion: 3,
+  };
+  const disappeared = reconcileBoardLabelCatalogRead({
+    status: "available",
+    slug: "board-one",
+    labels: [],
+    previousLabels: [current],
+    drafts: { "label-one": createBoardLabelDraft(current) },
+    orphanedDrafts: {},
+    labelConflicts: { "label-one": { current, proposal } },
+  });
+  assert.deepEqual(disappeared.orphanedDrafts, {
+    "label-one": { slug: "board-one", label: current, draft: proposal },
+  });
+  assert.deepEqual(disappeared.drafts, {});
+
+  const reappeared = {
+    ...current,
+    name: "Nombre actual tras restaurar",
+    version: 6,
+  };
+  const reopened = reconcileBoardLabelCatalogRead({
+    status: "available",
+    slug: "board-one",
+    labels: [reappeared],
+    previousLabels: [],
+    drafts: {},
+    orphanedDrafts: disappeared.orphanedDrafts,
+  });
+  assert.deepEqual(reopened.pendingConflicts, {
+    "label-one": { current: reappeared, proposal },
+  });
+  assert.deepEqual(
+    reopened.drafts["label-one"],
+    createBoardLabelDraft(reappeared),
+  );
+  const staleVersionFlow = labelsDialogSource.match(
+    /if \(result\.reason === "stale_version"\) \{([\s\S]*?)\n {8}\} else/,
+  );
+  assert.ok(
+    staleVersionFlow,
+    "a stale-version response creates the conflict proposal",
+  );
+  assert.match(staleVersionFlow[1], /proposal: draft/);
+  assert.match(
+    labelsDialogSource,
+    /labelConflicts: editorSnapshotRef\.current\.labelConflicts/,
+    "authorized catalog refresh must include unresolved proposals in reconciliation",
+  );
+  assert.match(
+    labelsDialogSource,
+    /Promise\.allSettled\([\s\S]*?applyActiveCatalog\(activeResult\.value\)/,
+    "reopening the dialog must reconcile the restored ID and proposal",
+  );
+});
+
 test("closing label administration retains drafts and board filters", () => {
   assert.match(
     labelsDialogSource,

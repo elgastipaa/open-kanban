@@ -127,13 +127,21 @@ export function BoardLabelsDialog({
     labels,
     drafts,
     orphanedDrafts,
+    labelConflicts,
   });
   editorSnapshotRef.current =
     editorSnapshotRef.current.slug === slug
-      ? { ...editorSnapshotRef.current, drafts, orphanedDrafts }
-      : { slug, labels, drafts: {}, orphanedDrafts: {} };
+      ? { ...editorSnapshotRef.current, drafts, orphanedDrafts, labelConflicts }
+      : { slug, labels, drafts: {}, orphanedDrafts: {}, labelConflicts: {} };
 
   const clearDialogDrafts = useCallback(() => {
+    editorSnapshotRef.current = {
+      slug,
+      labels: [],
+      drafts: {},
+      orphanedDrafts: {},
+      labelConflicts: {},
+    };
     setTrash([]);
     setDrafts({});
     setOrphanedDrafts({});
@@ -151,7 +159,7 @@ export function BoardLabelsDialog({
     setError(null);
     setCatalogReadFailed(false);
     setTrashReadFailed(false);
-  }, []);
+  }, [slug]);
 
   const clearPrivateCatalogContent = useCallback(() => {
     clearDialogDrafts();
@@ -171,26 +179,32 @@ export function BoardLabelsDialog({
         previousLabels: editorSnapshotRef.current.labels,
         drafts: editorSnapshotRef.current.drafts,
         orphanedDrafts: editorSnapshotRef.current.orphanedDrafts,
+        labelConflicts: editorSnapshotRef.current.labelConflicts,
       });
+      const refreshedConflicts = Object.fromEntries(
+        Object.entries(editorSnapshotRef.current.labelConflicts).flatMap(
+          ([labelId, conflict]) => {
+            const latest = active.find((label) => label.id === labelId);
+            return latest ? [[labelId, { ...conflict, current: latest }]] : [];
+          },
+        ),
+      );
+      const nextConflicts = {
+        ...refreshedConflicts,
+        ...editorState.pendingConflicts,
+      };
       editorSnapshotRef.current = {
         slug,
         labels: active,
         drafts: editorState.drafts,
         orphanedDrafts: editorState.orphanedDrafts,
+        labelConflicts: nextConflicts,
       };
       setDrafts(editorState.drafts);
       setOrphanedDrafts(editorState.orphanedDrafts);
       setCatalogReadFailed(false);
       onLabelsChange(active);
-      setLabelConflicts((current) => {
-        const refreshed = Object.fromEntries(
-          Object.entries(current).flatMap(([labelId, conflict]) => {
-            const latest = active.find((label) => label.id === labelId);
-            return latest ? [[labelId, { ...conflict, current: latest }]] : [];
-          }),
-        );
-        return { ...refreshed, ...editorState.pendingConflicts };
-      });
+      setLabelConflicts(nextConflicts);
     },
     [onLabelsChange, slug],
   );
@@ -203,24 +217,30 @@ export function BoardLabelsDialog({
       previousLabels: editorSnapshotRef.current.labels,
       drafts: editorSnapshotRef.current.drafts,
       orphanedDrafts: editorSnapshotRef.current.orphanedDrafts,
+      labelConflicts: editorSnapshotRef.current.labelConflicts,
     });
+    const refreshedConflicts = Object.fromEntries(
+      Object.entries(editorSnapshotRef.current.labelConflicts).flatMap(
+        ([labelId, conflict]) => {
+          const latest = labels.find((label) => label.id === labelId);
+          return latest ? [[labelId, { ...conflict, current: latest }]] : [];
+        },
+      ),
+    );
+    const nextConflicts = {
+      ...refreshedConflicts,
+      ...editorState.pendingConflicts,
+    };
     editorSnapshotRef.current = {
       slug,
       labels,
       drafts: editorState.drafts,
       orphanedDrafts: editorState.orphanedDrafts,
+      labelConflicts: nextConflicts,
     };
     setDrafts(editorState.drafts);
     setOrphanedDrafts(editorState.orphanedDrafts);
-    setLabelConflicts((current) => {
-      const refreshed = Object.fromEntries(
-        Object.entries(current).flatMap(([labelId, conflict]) => {
-          const latest = labels.find((label) => label.id === labelId);
-          return latest ? [[labelId, { ...conflict, current: latest }]] : [];
-        }),
-      );
-      return { ...refreshed, ...editorState.pendingConflicts };
-    });
+    setLabelConflicts(nextConflicts);
   }, [labels, slug]);
 
   useEffect(() => {

@@ -84,6 +84,7 @@ export function reconcileBoardLabelCatalogRead(
         previousLabels: BoardLabel[];
         drafts: BoardLabelDrafts;
         orphanedDrafts: OrphanedBoardLabelDrafts;
+        labelConflicts?: Record<string, BoardLabelDraftConflict>;
       }
     | { status: "unavailable" },
 ): BoardLabelCatalogEditorState {
@@ -93,6 +94,7 @@ export function reconcileBoardLabelCatalogRead(
 
   const activeIds = new Set(result.labels.map((label) => label.id));
   const pendingConflicts: Record<string, BoardLabelDraftConflict> = {};
+  const labelConflicts = result.labelConflicts ?? {};
   const orphanedDrafts = Object.fromEntries(
     Object.entries(result.orphanedDrafts).filter(
       ([, orphan]) =>
@@ -122,6 +124,18 @@ export function reconcileBoardLabelCatalogRead(
     } else if (orphanedDrafts[labelId]) {
       orphanedDrafts[labelId] = { ...orphanedDrafts[labelId], draft };
     }
+  }
+
+  for (const [labelId, conflict] of Object.entries(labelConflicts)) {
+    if (activeIds.has(labelId)) continue;
+    const label =
+      result.previousLabels.find((item) => item.id === labelId) ??
+      conflict.current;
+    orphanedDrafts[labelId] = {
+      slug: result.slug,
+      label,
+      draft: conflict.proposal,
+    };
   }
 
   return {

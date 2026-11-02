@@ -19,6 +19,24 @@ SET auth_user_id = '43100000-0000-4000-8000-000000000002',
     google_subject = 'issue31-google-subject', state = 'active'
 WHERE email = 'issue31@example.test';
 
+INSERT INTO public.application_access (email, state, is_admin)
+VALUES ('issue31-outsider@example.test', 'pending', false);
+INSERT INTO auth.users (id, email, email_confirmed_at, raw_app_meta_data)
+VALUES (
+  '43100000-0000-4000-8000-000000000003',
+  'issue31-outsider@example.test', now(), '{"provider":"google"}'
+);
+INSERT INTO auth.identities (id, user_id, provider, provider_id, identity_data)
+VALUES (
+  '53100000-0000-4000-8000-000000000003',
+  '43100000-0000-4000-8000-000000000003', 'google', 'issue31-outsider-subject',
+  '{"email":"issue31-outsider@example.test","email_verified":true}'
+);
+UPDATE public.application_access
+SET auth_user_id = '43100000-0000-4000-8000-000000000003',
+    google_subject = 'issue31-outsider-subject', state = 'active'
+WHERE email = 'issue31-outsider@example.test';
+
 CREATE TEMP TABLE issue31_repetition_refs (
   board_id uuid NOT NULL,
   board_slug text NOT NULL,
@@ -527,6 +545,297 @@ BEGIN
 END;
 $$;
 COMMIT;
+
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '43100000-0000-4000-8000-000000000002', true);
+DO $$
+DECLARE
+  v_ref issue31_repetition_refs%ROWTYPE;
+  v_status jsonb;
+  v_label jsonb;
+  v_deleted_label jsonb;
+  v_deleted_series jsonb;
+  v_restored_series jsonb;
+  v_preview jsonb;
+  v_restored_label jsonb;
+  v_template jsonb;
+  v_task_labels jsonb;
+  v_set_result jsonb;
+  v_edit_result jsonb;
+  v_expected uuid[];
+  v_label_id uuid;
+BEGIN
+  SELECT * INTO STRICT v_ref FROM pg_temp.issue31_repetition_refs;
+  v_label := public.create_board_label_p(v_ref.board_slug, 'Recuperación serie #31', 'blue');
+  IF v_label->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Could not create the synthetic recovery template label: %', v_label;
+  END IF;
+  v_label_id := (v_label->'label'->>'id')::uuid;
+
+  v_status := public.get_repetition_p(v_ref.board_slug, v_ref.current_task_id);
+  SELECT coalesce(array_agg((item #>> '{}')::uuid ORDER BY item #>> '{}'), ARRAY[]::uuid[])
+  INTO v_expected FROM jsonb_array_elements(v_status->'template_label_ids') AS item;
+  v_set_result := public.set_repetition_template_labels_p(
+    v_ref.board_slug, v_ref.current_task_id, v_expected,
+    ARRAY[v_ref.label_a, v_label_id]::uuid[]
+  );
+  IF v_set_result->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Could not set the two recovery template labels: %', v_set_result;
+  END IF;
+  v_status := public.get_repetition_p(v_ref.board_slug, v_ref.current_task_id);
+  -- Leave a future slot after the recovery inheritance assertion; the original
+  -- finite fixture is one occurrence from completion at this point.
+  v_edit_result := public.edit_repetition_p(
+    '31000000-0000-4000-8000-000000000024', v_ref.board_slug,
+    v_ref.current_task_id, (v_status->>'revision')::bigint,
+    (v_status->>'next_due_on')::date, 'none', NULL, NULL,
+    v_status->'pattern', (v_status->>'advance_days')::integer,
+    (v_status->>'appearance_column_id')::uuid,
+    v_status->'template_snapshot', false
+  );
+  IF v_edit_result->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Could not leave a future slot for the recovery test: %', v_edit_result;
+  END IF;
+  v_status := public.get_repetition_p(v_ref.board_slug, v_ref.current_task_id);
+  v_deleted_label := public.delete_board_label_p(v_ref.board_slug, v_label_id, 1);
+  IF v_deleted_label->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Could not hide a selected template label before series recovery: %',
+      v_deleted_label;
+  END IF;
+
+  v_status := public.get_repetition_p(v_ref.board_slug, v_ref.current_task_id);
+  v_deleted_series := public.delete_repetition_series_p(
+    '31000000-0000-4000-8000-000000000020', v_ref.board_slug, v_ref.series_id,
+    (v_status->>'revision')::bigint, true
+  );
+  IF v_deleted_series->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Could not delete the synthetic repetition series: %', v_deleted_series;
+  END IF;
+  v_restored_series := public.restore_repetition_series_p(
+    '31000000-0000-4000-8000-000000000021', v_ref.board_slug, v_ref.series_id,
+    (v_status->>'appearance_column_id')::uuid
+  );
+  IF v_restored_series->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Could not restore the synthetic repetition series: %', v_restored_series;
+  END IF;
+
+  v_template := public.get_repetition_p(v_ref.board_slug, v_ref.current_task_id);
+  IF v_template->>'state' IS DISTINCT FROM 'active'
+    OR v_template->'template_label_ids' IS DISTINCT FROM jsonb_build_array(v_ref.label_a) THEN
+    RAISE EXCEPTION 'Series restore lost its active template labels or exposed the hidden tag: %',
+      v_template;
+  END IF;
+  v_preview := public.preview_restore_board_label_with_series_p(
+    v_ref.board_slug, v_label_id, v_deleted_label->'label'->>'name'
+  );
+  IF v_preview->>'status' IS DISTINCT FROM 'preview'
+    OR NOT EXISTS (
+      SELECT 1 FROM jsonb_array_elements(v_preview->'associated_series') AS item
+      WHERE item->>'id' = v_ref.series_id::text
+    ) THEN
+    RAISE EXCEPTION 'A soft-deleted template link must remain available in label restore preview: %',
+      v_preview;
+  END IF;
+  SELECT array_agg(selected.id ORDER BY selected.id)
+  INTO v_expected FROM unnest(ARRAY[v_ref.label_a, v_label_id]::uuid[]) AS selected(id);
+  v_restored_label := public.restore_board_label_with_series_p(
+    v_ref.board_slug, v_label_id,
+    (v_deleted_label->'label'->>'version')::bigint,
+    v_deleted_label->'label'->>'name',
+    ARRAY[]::uuid[], ARRAY[]::uuid[], ARRAY[v_ref.series_id]::uuid[]
+  );
+  IF v_restored_label->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Could not explicitly restore the selected series label: %',
+      v_restored_label;
+  END IF;
+  v_template := public.get_repetition_p(v_ref.board_slug, v_ref.current_task_id);
+  IF v_template->'template_label_ids' IS DISTINCT FROM to_jsonb(v_expected) THEN
+    RAISE EXCEPTION 'Explicit label restore did not restore the saved series template: %',
+      v_template;
+  END IF;
+  v_task_labels := public.get_task_labels_p(v_ref.board_slug, v_ref.current_task_id);
+  IF EXISTS (
+    SELECT 1 FROM jsonb_array_elements(v_task_labels->'labels') AS item
+    WHERE item->>'id' = v_label_id::text
+  ) THEN
+    RAISE EXCEPTION 'Restoring a template label retroactively changed the current occurrence: %',
+      v_task_labels;
+  END IF;
+
+END;
+$$;
+COMMIT;
+
+-- The worker is a service-only path; run it as the disposable database owner,
+-- then verify the occurrence relation directly without exposing job rows to a
+-- board member RPC.
+DO $$
+DECLARE
+  v_ref issue31_repetition_refs%ROWTYPE;
+  v_job public.daily_repetition_jobs%ROWTYPE;
+  v_result jsonb;
+  v_future_ids uuid[];
+  v_expected uuid[];
+  v_now timestamptz;
+  v_template_label_id uuid;
+BEGIN
+  SELECT * INTO STRICT v_ref FROM pg_temp.issue31_repetition_refs;
+  SELECT label.id INTO STRICT v_template_label_id
+  FROM public.board_labels AS label
+  WHERE label.board_id = v_ref.board_id AND label.name = 'Recuperación serie #31';
+  SELECT job.* INTO STRICT v_job
+  FROM public.daily_repetition_jobs AS job
+  WHERE job.series_id = v_ref.series_id AND job.job_kind = 'advance'
+    AND job.state = 'queued'
+  ORDER BY job.created_at DESC LIMIT 1;
+  v_now := ((v_job.scheduled_on::timestamp + interval '12 hours')
+    AT TIME ZONE 'America/Argentina/Buenos_Aires');
+  v_result := public.advance_daily_repetition_internal_p(v_job, v_now);
+  IF v_result->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Generation after series/template recovery failed: %', v_result;
+  END IF;
+  SELECT coalesce(array_agg(assignment.label_id ORDER BY assignment.label_id), ARRAY[]::uuid[])
+  INTO v_future_ids
+  FROM public.board_label_task_assignments AS assignment
+  WHERE assignment.task_id = (v_result->>'task_id')::uuid;
+  SELECT array_agg(selected.id ORDER BY selected.id)
+  INTO v_expected FROM unnest(ARRAY[v_ref.label_a, v_template_label_id]::uuid[]) AS selected(id);
+  IF v_future_ids IS DISTINCT FROM v_expected THEN
+    RAISE EXCEPTION 'The next occurrence did not inherit the restored template: expected %, actual %',
+      v_expected, v_future_ids;
+  END IF;
+  UPDATE pg_temp.issue31_repetition_refs
+  SET current_task_id = (v_result->>'task_id')::uuid
+  WHERE series_id = v_ref.series_id;
+END;
+$$;
+
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '43100000-0000-4000-8000-000000000002', true);
+DO $$
+DECLARE
+  v_ref issue31_repetition_refs%ROWTYPE;
+  v_status jsonb;
+  v_label jsonb;
+  v_selection jsonb;
+  v_deleted_label jsonb;
+  v_deleted_series jsonb;
+  v_expected uuid[];
+  v_purged_label_id uuid;
+BEGIN
+  SELECT * INTO STRICT v_ref FROM pg_temp.issue31_repetition_refs;
+  v_label := public.create_board_label_p(v_ref.board_slug, 'Purgada durante recuperación #31', 'orange');
+  IF v_label->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Could not create the synthetic purge label: %', v_label;
+  END IF;
+  v_purged_label_id := (v_label->'label'->>'id')::uuid;
+
+  v_status := public.get_repetition_p(v_ref.board_slug, v_ref.current_task_id);
+  SELECT array_agg((item #>> '{}')::uuid ORDER BY item #>> '{}')
+  INTO v_expected FROM jsonb_array_elements(v_status->'template_label_ids') AS item;
+  v_selection := public.set_repetition_template_labels_p(
+    v_ref.board_slug, v_ref.current_task_id, v_expected,
+    ARRAY[v_ref.label_a, v_purged_label_id]::uuid[]
+  );
+  IF v_selection->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Could not set the template before physical label purge: %', v_selection;
+  END IF;
+  v_deleted_label := public.delete_board_label_p(v_ref.board_slug, v_purged_label_id, 1);
+  IF v_deleted_label->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Could not soft-delete the synthetic purge label: %', v_deleted_label;
+  END IF;
+  v_status := public.get_repetition_p(v_ref.board_slug, v_ref.current_task_id);
+  v_deleted_series := public.delete_repetition_series_p(
+    '31000000-0000-4000-8000-000000000025', v_ref.board_slug, v_ref.series_id,
+    (v_status->>'revision')::bigint, true
+  );
+  IF v_deleted_series->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Could not delete series before physical label purge: %', v_deleted_series;
+  END IF;
+END;
+$$;
+COMMIT;
+
+DO $$
+DECLARE
+  v_ref issue31_repetition_refs%ROWTYPE;
+  v_label_id uuid;
+  v_purged integer;
+  v_remaining integer;
+BEGIN
+  SELECT * INTO STRICT v_ref FROM pg_temp.issue31_repetition_refs;
+  SELECT label.id INTO STRICT v_label_id FROM public.board_labels AS label
+  WHERE label.board_id = v_ref.board_id
+    AND label.name = 'Purgada durante recuperación #31';
+  UPDATE public.board_labels AS label
+  SET deleted_at = pg_catalog.clock_timestamp() - interval '8 days'
+  WHERE label.id = v_label_id;
+  v_purged := public.purge_expired_board_labels_p(100);
+  SELECT count(*)::integer INTO v_remaining
+  FROM public.board_labels AS label WHERE label.id = v_label_id;
+  IF v_purged <> 1 OR v_remaining <> 0 THEN
+    RAISE EXCEPTION 'The selected synthetic label was not physically purged: %, %',
+      v_purged, v_remaining;
+  END IF;
+END;
+$$;
+
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '43100000-0000-4000-8000-000000000002', true);
+DO $$
+DECLARE
+  v_ref issue31_repetition_refs%ROWTYPE;
+  v_restored jsonb;
+  v_template jsonb;
+BEGIN
+  SELECT * INTO STRICT v_ref FROM pg_temp.issue31_repetition_refs;
+  v_restored := public.restore_repetition_series_p(
+    '31000000-0000-4000-8000-000000000026', v_ref.board_slug, v_ref.series_id, NULL
+  );
+  IF v_restored->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Could not recover the series after its template label was purged: %', v_restored;
+  END IF;
+  v_template := public.get_repetition_p(v_ref.board_slug, v_ref.current_task_id);
+  IF v_template->'template_label_ids' IS DISTINCT FROM jsonb_build_array(v_ref.label_a) THEN
+    RAISE EXCEPTION 'Restore recreated a template relation for a physically purged label: %',
+      v_template;
+  END IF;
+END;
+$$;
+COMMIT;
+
+DO $$
+DECLARE
+  v_ref issue31_repetition_refs%ROWTYPE;
+  v_job public.daily_repetition_jobs%ROWTYPE;
+  v_result jsonb;
+  v_now timestamptz;
+  v_labels uuid[];
+BEGIN
+  SELECT * INTO STRICT v_ref FROM pg_temp.issue31_repetition_refs;
+  SELECT job.* INTO STRICT v_job FROM public.daily_repetition_jobs AS job
+  WHERE job.series_id = v_ref.series_id AND job.job_kind = 'advance'
+    AND job.state = 'queued' ORDER BY job.created_at DESC LIMIT 1;
+  v_now := ((v_job.scheduled_on::timestamp + interval '12 hours')
+    AT TIME ZONE 'America/Argentina/Buenos_Aires');
+  v_result := public.advance_daily_repetition_internal_p(v_job, v_now);
+  IF v_result->>'status' IS DISTINCT FROM 'confirmed' THEN
+    RAISE EXCEPTION 'Generation after recovery with a purged template label failed: %', v_result;
+  END IF;
+  SELECT coalesce(array_agg(assignment.label_id ORDER BY assignment.label_id), ARRAY[]::uuid[])
+  INTO v_labels FROM public.board_label_task_assignments AS assignment
+  WHERE assignment.task_id = (v_result->>'task_id')::uuid;
+  IF v_labels IS DISTINCT FROM ARRAY[v_ref.label_a]::uuid[] THEN
+    RAISE EXCEPTION 'The next occurrence inherited a physically purged label: %', v_labels;
+  END IF;
+  UPDATE pg_temp.issue31_repetition_refs
+  SET current_task_id = (v_result->>'task_id')::uuid
+  WHERE series_id = v_ref.series_id;
+END;
+$$;
 
 BEGIN;
 SET LOCAL ROLE authenticated;

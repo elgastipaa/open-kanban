@@ -628,8 +628,22 @@ SECURITY DEFINER
 SET search_path = pg_catalog, public, auth, pg_temp
 AS $$
 DECLARE
+  v_actor_id uuid := auth.uid();
+  v_board public.boards%ROWTYPE;
   v_series_ids uuid[];
 BEGIN
+  IF v_actor_id IS NULL OR NOT public.is_application_user() THEN
+    RETURN jsonb_build_object('status', 'unavailable');
+  END IF;
+  SELECT board.* INTO v_board
+  FROM public.boards AS board
+  WHERE board.slug = p_slug
+    AND board.owner_id = v_actor_id
+    AND public.is_board_member(board.id);
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('status', 'unavailable');
+  END IF;
+
   SELECT coalesce(array_agg(assignment.series_id ORDER BY assignment.series_id), ARRAY[]::uuid[])
   INTO v_series_ids
   FROM public.board_label_repetition_assignments AS assignment
@@ -639,16 +653,111 @@ BEGIN
     AND series.generation_id = assignment.generation_id
   JOIN public.board_labels AS label
     ON label.id = assignment.label_id
-    AND label.board_id = assignment.board_id
-    AND label.generation_id = assignment.generation_id
+    AND label.board_id = v_board.id
+    AND label.generation_id = v_board.active_generation_id
   WHERE label.id = p_label_id
-    AND label.deleted_at IS NOT NULL;
+    AND label.deleted_at IS NOT NULL
+    AND assignment.board_id = v_board.id
+    AND assignment.generation_id = v_board.active_generation_id
+    AND assignment.label_id = p_label_id;
   RETURN public.restore_board_label_with_series_p(
     p_slug, p_label_id, p_expected_version, p_name,
     p_task_ids, p_birthday_ids, v_series_ids
   );
 END;
 $$;
+
+-- The series recovery ledger is created before #28 removes the series row.
+-- Capture template IDs there before the FK cascade deletes the live relation.
+-- Do not filter soft-deleted labels: their rows must remain eligible for an
+-- explicit label restore after the series itself is restored.
+CREATE FUNCTION public.capture_repetition_template_labels_for_recovery_p()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public, pg_temp
+AS $$
+DECLARE
+  v_template_label_ids jsonb;
+BEGIN
+  SELECT coalesce(
+    pg_catalog.jsonb_agg(assignment.label_id ORDER BY assignment.label_id),
+    '[]'::jsonb
+  ) INTO v_template_label_ids
+  FROM public.board_label_repetition_assignments AS assignment
+  WHERE assignment.series_id = OLD.id
+    AND assignment.board_id = OLD.board_id
+    AND assignment.generation_id = OLD.generation_id;
+
+  UPDATE public.daily_repetition_series_deletions AS deletion
+  SET series_snapshot = deletion.series_snapshot || pg_catalog.jsonb_build_object(
+    'template_label_ids', v_template_label_ids
+  )
+  WHERE deletion.series_id = OLD.id
+    AND deletion.board_id = OLD.board_id
+    AND deletion.state = 'deleted'
+    AND deletion.series_snapshot IS NOT NULL;
+  RETURN OLD;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.capture_repetition_template_labels_for_recovery_p()
+  FROM PUBLIC, anon, authenticated, service_role;
+
+CREATE TRIGGER daily_repetition_series_capture_template_labels_for_recovery
+BEFORE DELETE ON public.daily_repetition_series
+FOR EACH ROW EXECUTE FUNCTION public.capture_repetition_template_labels_for_recovery_p();
+
+CREATE FUNCTION public.restore_repetition_template_labels_from_recovery_p()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public, pg_temp
+AS $$
+DECLARE
+  v_template_label_ids jsonb;
+BEGIN
+  SELECT deletion.series_snapshot->'template_label_ids'
+  INTO v_template_label_ids
+  FROM public.daily_repetition_series_deletions AS deletion
+  WHERE deletion.series_id = NEW.id
+    AND deletion.board_id = NEW.board_id
+    AND deletion.state = 'deleted'
+    AND deletion.series_snapshot IS NOT NULL
+    AND deletion.series_snapshot ? 'template_label_ids';
+  IF NOT FOUND OR pg_catalog.jsonb_typeof(v_template_label_ids) IS DISTINCT FROM 'array' THEN
+    RETURN NEW;
+  END IF;
+
+  -- This trigger sorts after the seed trigger. Replace any seed result with
+  -- the exact saved set, retaining soft-deleted label rows but not IDs already
+  -- physically purged from the board.
+  DELETE FROM public.board_label_repetition_assignments AS assignment
+  WHERE assignment.series_id = NEW.id
+    AND assignment.board_id = NEW.board_id
+    AND assignment.generation_id = NEW.generation_id;
+  INSERT INTO public.board_label_repetition_assignments(
+    board_id, generation_id, label_id, series_id
+  )
+  SELECT NEW.board_id, NEW.generation_id, requested.label_id, NEW.id
+  FROM (
+    SELECT DISTINCT (item.value #>> '{}')::uuid AS label_id
+    FROM pg_catalog.jsonb_array_elements(v_template_label_ids) AS item(value)
+  ) AS requested
+  JOIN public.board_labels AS label
+    ON label.id = requested.label_id
+    AND label.board_id = NEW.board_id
+    AND label.generation_id = NEW.generation_id
+  ORDER BY requested.label_id
+  ON CONFLICT (series_id, label_id) DO NOTHING;
+  RETURN NEW;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.restore_repetition_template_labels_from_recovery_p()
+  FROM PUBLIC, anon, authenticated, service_role;
+
+CREATE TRIGGER daily_repetition_series_z_restore_template_labels
+AFTER INSERT ON public.daily_repetition_series
+FOR EACH ROW EXECUTE FUNCTION public.restore_repetition_template_labels_from_recovery_p();
 
 REVOKE ALL ON FUNCTION public.preview_restore_board_label_with_series_p(text, uuid, text)
   FROM PUBLIC, anon, authenticated, service_role;

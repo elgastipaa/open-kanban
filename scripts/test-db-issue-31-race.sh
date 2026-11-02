@@ -274,4 +274,80 @@ if [[ "$race_checks" != 't|t|t|t' ]]; then
   exit 1
 fi
 
+assignment_lock_log="$test_dir/assignment-table-lock.log"
+unauthorized_restore_log="$test_dir/unauthorized-restore.log"
+PGAPPNAME=openkanban_issue31_assignment_table_lock "${psql[@]}" -qAt \
+  >"$assignment_lock_log" 2>&1 <<'SQL' &
+BEGIN;
+LOCK TABLE public.board_label_repetition_assignments IN ACCESS EXCLUSIVE MODE;
+SELECT pg_sleep(20) /* issue31 unauthorized wrapper lock held */;
+COMMIT;
+SQL
+assignment_lock_pid=$!
+
+assignment_lock_ready=false
+for _ in $(seq 1 120); do
+  assignment_lock_state=$("${psql[@]}" -At -c "SELECT state FROM pg_stat_activity
+    WHERE application_name = 'openkanban_issue31_assignment_table_lock'
+      AND state = 'active' AND query LIKE '%issue31 unauthorized wrapper lock held%'")
+  if [[ "$assignment_lock_state" == active ]]; then
+    assignment_lock_ready=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$assignment_lock_ready" != true ]]; then
+  cat -- "$assignment_lock_log" >&2
+  echo 'Issue #31 assignment-table lock probe did not acquire its holdpoint.' >&2
+  kill "$assignment_lock_pid" 2>/dev/null || true
+  wait "$assignment_lock_pid" || true
+  exit 1
+fi
+
+PGAPPNAME=openkanban_issue31_unauthorized_restore "${psql[@]}" -qAt \
+  -v board_slug="$gen_first_slug" -v label_id="$gen_first_label" \
+  >"$unauthorized_restore_log" 2>&1 <<'SQL' &
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '43100000-0000-4000-8000-000000000003', true) \gset
+SELECT public.restore_board_label_p(
+  :'board_slug', :'label_id'::uuid, 1, 'Etiqueta no autorizada',
+  ARRAY[]::uuid[], ARRAY[]::uuid[]
+);
+COMMIT;
+SQL
+unauthorized_restore_pid=$!
+
+unauthorized_waiting=false
+for _ in $(seq 1 20); do
+  waiting_count=$("${psql[@]}" -At -c "SELECT count(*) FROM pg_stat_activity
+    WHERE application_name = 'openkanban_issue31_unauthorized_restore'
+      AND wait_event_type = 'Lock'")
+  if [[ "$waiting_count" == 1 ]]; then
+    unauthorized_waiting=true
+    break
+  fi
+  if grep -q '"status": "unavailable"' "$unauthorized_restore_log"; then
+    break
+  fi
+  sleep 0.05
+done
+
+unauthorized_lock_count=$("${psql[@]}" -At -c "SELECT count(*) FROM pg_stat_activity
+  WHERE application_name = 'openkanban_issue31_unauthorized_restore'
+    AND wait_event_type = 'Lock'")
+kill "$assignment_lock_pid" 2>/dev/null || true
+wait "$assignment_lock_pid" || true
+unauthorized_restore_exit=0
+wait "$unauthorized_restore_pid" || unauthorized_restore_exit=$?
+if [[ "$unauthorized_waiting" == true || "$unauthorized_lock_count" != 0 \
+  || "$unauthorized_restore_exit" != 0 ]] \
+  || ! grep -q '"status": "unavailable"' "$unauthorized_restore_log" \
+  || grep -Eq 'series_ids|restored_series_ids|omitted_series_ids' "$unauthorized_restore_log"; then
+  cat -- "$unauthorized_restore_log" >&2
+  echo 'Issue #31 unauthorized restore read template assignments before denying access.' >&2
+  exit 1
+fi
+
 echo 'PASS: delete and occurrence generation serialize by board in both orders; labels are inherited only when active.'
+echo 'PASS: non-member restore is denied before it reads the repetition-assignment table.'

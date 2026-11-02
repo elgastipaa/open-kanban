@@ -1,124 +1,79 @@
-import { z } from "zod/v4";
-import { createColumn, createTask, getBoard, getColumns } from "@/lib/db";
-import type { ExportData } from "@/lib/export";
-import { ensureImportReplacementAvailable } from "@/lib/import-replacement-boundary";
-import { createClient } from "@/lib/supabase/client";
-import type { Board, ColumnWithTasks, Priority } from "@/lib/types";
-import { generateUUID } from "@/lib/utils";
+import "server-only";
+
 import {
-  columnTitleSchema,
-  prioritySchema,
-  taskDescriptionSchema,
-  taskTitleSchema,
-} from "@/lib/validations";
+  MAX_LEGACY_BOARD_IMPORT_BYTES,
+  parseLegacyBoardImport,
+  validateLegacyBoardImportSize,
+} from "@/lib/legacy-board-import";
 
-// ---------------------------------------------------------------------------
-// Import file validation (Finding #3)
-// ---------------------------------------------------------------------------
+export { parseLegacyBoardImport, validateLegacyBoardImportSize };
+export type { LegacyBoardImport } from "@/lib/legacy-board-import";
 
-/** Maximum import file size: 2 MB */
-const MAX_IMPORT_SIZE = 2 * 1024 * 1024;
+export const MAX_LEGACY_IMPORT_REQUEST_BYTES =
+  MAX_LEGACY_BOARD_IMPORT_BYTES + 65536;
 
-/** Maximum columns per board import */
-const MAX_COLUMNS = 50;
-
-/** Maximum tasks per column import */
-const MAX_TASKS_PER_COLUMN = 500;
-
-const importTaskSchema = z.object({
-  title: taskTitleSchema,
-  description: taskDescriptionSchema.or(z.null()),
-  priority: prioritySchema,
-  position: z.number().int().nonnegative(),
-});
-
-const importColumnSchema = z.object({
-  title: columnTitleSchema,
-  position: z.number().int().nonnegative(),
-  tasks: z.array(importTaskSchema).max(MAX_TASKS_PER_COLUMN),
-});
-
-const importFileSchema = z.object({
-  version: z.literal(1),
-  exportedAt: z.string(),
-  board: z.object({
-    slug: z.string(),
-    columns: z.array(importColumnSchema).max(MAX_COLUMNS),
-  }),
-});
-
-/**
- * Import a board from a JSON file.
- * Validates file size, parses JSON, validates schema with Zod,
- * and upserts columns/tasks into the DB.
- * If the board already exists, existing columns/tasks are cleared first.
- */
-export async function importBoard(
-  file: File,
-  slug: string,
-): Promise<{ board: Board; columns: ColumnWithTasks[] } | null> {
-  // Finding #3: File size check before reading content
-  if (file.size > MAX_IMPORT_SIZE) {
-    throw new Error(
-      `Import file too large (max ${MAX_IMPORT_SIZE / 1024 / 1024}MB)`,
-    );
-  }
-
-  const text = await file.text();
-  let rawData: unknown;
-
+export async function readBoundedRequestBody(
+  request: Request,
+  maxBytes = MAX_LEGACY_IMPORT_REQUEST_BYTES,
+): Promise<ArrayBuffer | null> {
+  if (!request.body) return new ArrayBuffer(0);
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
   try {
-    rawData = JSON.parse(text);
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const body = new ArrayBuffer(totalBytes);
+  const view = new Uint8Array(body);
+  let offset = 0;
+  for (const chunk of chunks) {
+    view.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return body;
+}
+
+export async function readLegacyBoardImportFile(file: File): Promise<{
+  sourceSha256: string;
+  document: ReturnType<typeof parseLegacyBoardImport>;
+}> {
+  validateLegacyBoardImportSize(file.size);
+  let bytes: Uint8Array<ArrayBuffer>;
+  let text: string;
+  try {
+    bytes = new Uint8Array(await file.arrayBuffer());
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch {
-    throw new Error("Invalid JSON file");
+    throw new Error("El archivo no contiene texto UTF-8 válido.");
   }
 
-  // Finding #3: Full Zod schema validation with length caps
-  let data: ExportData;
+  let raw: unknown;
   try {
-    data = importFileSchema.parse(rawData) as ExportData;
-  } catch (err) {
-    if (err instanceof z.ZodError) {
-      throw new Error(`Invalid export format: ${err.issues[0]?.message}`);
-    }
-    throw new Error("Invalid export format");
+    raw = JSON.parse(text);
+  } catch {
+    throw new Error("El archivo no contiene JSON válido.");
   }
 
-  const supabase = createClient();
-
-  // Get or create the board
-  const board = await getBoard(supabase, slug);
-
-  if (board) {
-    const existingCols = await getColumns(supabase, board.id);
-    ensureImportReplacementAvailable(existingCols.length);
-  } else {
-    throw new Error("This board is no longer available.");
+  let document: ReturnType<typeof parseLegacyBoardImport>;
+  try {
+    document = parseLegacyBoardImport(raw);
+  } catch {
+    throw new Error("El respaldo no cumple el formato v1.");
   }
-
-  // Create columns and tasks from import data
-  const columnsWithTasks: ColumnWithTasks[] = [];
-
-  for (const colData of data.board.columns) {
-    const col = await createColumn(supabase, slug, {
-      board_id: board.id,
-      title: colData.title,
-      position: colData.position,
-    });
-
-    const tasks = [];
-    for (const taskData of colData.tasks) {
-      const task = await createTask(supabase, slug, generateUUID(), board.id, {
-        column_id: col.id,
-        title: taskData.title,
-        description: taskData.description ?? undefined,
-        priority: (taskData.priority as Priority) ?? "medium",
-      });
-      tasks.push(task);
-    }
-
-    columnsWithTasks.push({ ...col, tasks });
-  }
-
-  return { board, columns: columnsWithTasks };
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  const sourceSha256 = Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+  return { document, sourceSha256 };
 }

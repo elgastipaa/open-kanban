@@ -16,6 +16,7 @@ import { toast } from "sonner";
 import { BirthdayPanel } from "@/components/birthdays/birthday-panel";
 import { AddColumn } from "@/components/board/add-column";
 import { BoardExportDialog } from "@/components/board/board-export-dialog";
+import { BoardImportDialog } from "@/components/board/board-import-dialog";
 import { BoardToolbar } from "@/components/board/board-toolbar";
 import { Column } from "@/components/board/column";
 import { ColumnDeletionDialog } from "@/components/board/column-deletion-dialog";
@@ -51,7 +52,6 @@ import {
   updateBoardTimeZone,
 } from "@/lib/db/boards";
 import { setTaskAssignee, TaskAssigneeError } from "@/lib/db/my-tasks";
-import { importBoard } from "@/lib/import";
 import {
   abortPendingSessionRequests,
   createClient,
@@ -393,6 +393,7 @@ function BoardWorkspace({
   >("loading");
   const [isLabelsDialogOpen, setIsLabelsDialogOpen] = useState(false);
   const [isExportDialogOpen, setIsExportDialogOpen] = useState(false);
+  const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
   const [birthdayLabelRefreshSignal, setBirthdayLabelRefreshSignal] =
     useState(0);
   const refreshBoardLabels = useCallback(async () => {
@@ -1285,26 +1286,8 @@ function BoardWorkspace({
     if (result.restoreTaskFocus) restoreTaskFocus();
   }
 
-  // Import handler
-  async function handleImport() {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = ".json";
-    input.onchange = async (e) => {
-      const file = (e.target as HTMLInputElement).files?.[0];
-      if (!file) return;
-      try {
-        await importBoard(file, slug);
-        await refreshFromDB();
-        toast.success("Board imported successfully");
-      } catch (err) {
-        toast.error("Import failed", {
-          description:
-            err instanceof Error ? err.message : "Invalid file format.",
-        });
-      }
-    };
-    input.click();
+  function handleImport() {
+    setIsImportDialogOpen(true);
   }
 
   return (
@@ -1625,6 +1608,15 @@ function BoardWorkspace({
         open={isExportDialogOpen}
         slug={slug}
         onClose={() => setIsExportDialogOpen(false)}
+      />
+
+      <BoardImportDialog
+        open={isImportDialogOpen}
+        slug={slug}
+        onClose={() => setIsImportDialogOpen(false)}
+        onConfirmed={async () => {
+          await refreshFromDB();
+        }}
       />
 
       <ConfirmDialog

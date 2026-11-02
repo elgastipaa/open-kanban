@@ -31,6 +31,32 @@ export async function POST(request: Request): Promise<NextResponse> {
   if (!hasValidSecret(request)) return json({ status: "unavailable" }, 404);
   try {
     const service = createTaskAttachmentServiceClient();
+    const {
+      data: expiredImportOperations,
+      error: importOperationCleanupError,
+    } = await service.rpc("cleanup_expired_board_import_operations_p", {
+      p_limit: 50,
+    });
+    if (
+      importOperationCleanupError ||
+      typeof expiredImportOperations !== "number" ||
+      !Number.isSafeInteger(expiredImportOperations)
+    ) {
+      return json({ status: "error" }, 503);
+    }
+
+    const { data: expiredGenerations, error: generationCleanupError } =
+      await service.rpc("cleanup_expired_board_generation_retention_p", {
+        p_limit: 50,
+      });
+    if (
+      generationCleanupError ||
+      typeof expiredGenerations !== "number" ||
+      !Number.isSafeInteger(expiredGenerations)
+    ) {
+      return json({ status: "error" }, 503);
+    }
+
     const { data: expiredExports, error: exportCleanupError } =
       await service.rpc("cleanup_expired_board_export_snapshots_p", {
         p_limit: 100,
@@ -90,6 +116,8 @@ export async function POST(request: Request): Promise<NextResponse> {
 
     return json({
       status: "processed",
+      import_operations_expired: expiredImportOperations,
+      previous_generations_expired: expiredGenerations,
       export_snapshots_cleaned: expiredExports,
       claimed: data.length,
       purged,

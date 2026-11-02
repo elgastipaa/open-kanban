@@ -361,6 +361,16 @@ if [[ "${TEST_DB_FOCUS:-}" == 'issue42' ]]; then
   printf 'Issue #42 database regression tests passed (disposable PostgreSQL).\n'
   exit 0
 fi
+if [[ "${TEST_DB_FOCUS:-}" == 'issue43' ]]; then
+  "${psql[@]}" -f "$repo_dir/tests/db/board_import_v1.sql"
+  bash "$repo_dir/scripts/test-db-issue-43-race.sh" \
+    "$pg_bin/psql" "$test_dir" 55439 "$test_dir/issue43-import-race"
+  "${psql[@]}" -f "$repo_dir/tests/db/board_import_v1_cleanup.sql"
+  "${psql[@]}" -q -c 'DROP FUNCTION public.issue43_hold_board_lock_p(text, integer)'
+  "${psql[@]}" -q -c 'DROP TABLE public.issue43_import_results, public.issue43_import_fixture'
+  printf 'Issue #43 database regression tests passed (disposable PostgreSQL).\n'
+  exit 0
+fi
 "${psql[@]}" -f "$repo_dir/tests/db/closed_access.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/authentication.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/realtime_epoch.sql"

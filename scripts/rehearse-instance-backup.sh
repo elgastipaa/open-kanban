@@ -62,6 +62,12 @@ target_pg_restore() {
     --dbname="$database" "$bundle_dir/database.dump"
 }
 
+assert_issue52_restore() {
+  if [[ "${OPENKANBAN_TEST_DB_FOCUS:-}" == 'issue52' ]]; then
+    target_psql "$1" -q -f "$repo_dir/tests/db/issue52_restore_assert.sql"
+  fi
+}
+
 printf 'Cargando un fixture local de mantenimiento con actores y bytes sintéticos.\n'
 source_psql -q -f "$repo_dir/tests/db/issue50_rehearsal_fixture.sql"
 source_psql -q -f "$repo_dir/tests/db/anonymous_surface.sql"
@@ -179,6 +185,7 @@ printf 'Ejecutando el primer restore aislado.\n'
   -U postgres --owner=postgres --template=template0 issue50_failed_upgrade
 target_pg_restore issue50_failed_upgrade
 target_psql issue50_failed_upgrade -q -f "$repo_dir/tests/db/issue50_restore_assert.sql"
+assert_issue52_restore issue50_failed_upgrade
 target_psql issue50_failed_upgrade -q -f "$repo_dir/tests/db/anonymous_surface.sql"
 
 printf 'Inyectando una migración fallida y comprobando el rollback de su DDL.\n'
@@ -197,6 +204,12 @@ if [[ "$failed_upgrade_rolled_back" != 't' ]]; then
   printf 'La migración fallida dejó un cambio parcial en el esquema restaurado.\n' >&2
   exit 1
 fi
+if [[ "${OPENKANBAN_TEST_DB_FOCUS:-}" == 'issue52' ]]; then
+  printf 'Comprobando privacidad y contenido después del rollback de migración.\n'
+  target_psql issue50_failed_upgrade -q -f "$repo_dir/tests/db/issue50_restore_assert.sql"
+  assert_issue52_restore issue50_failed_upgrade
+  target_psql issue50_failed_upgrade -q -f "$repo_dir/tests/db/anonymous_surface.sql"
+fi
 
 printf 'Reintentando el restore en una base aislada y limpia.\n'
 "${safe_env[@]}" "$pg_bin/dropdb" -w -h "$target_socket" -p "$target_port" \
@@ -204,6 +217,7 @@ printf 'Reintentando el restore en una base aislada y limpia.\n'
 "${safe_env[@]}" "$pg_bin/createdb" -w -h "$target_socket" -p "$target_port" \
   -U postgres --owner=postgres --template=template0 issue50_recovered
 target_pg_restore issue50_recovered
+assert_issue52_restore issue50_recovered
 
 restore_stage=$run_dir/restored-bundle
 mkdir -m 700 -- "$restore_stage"

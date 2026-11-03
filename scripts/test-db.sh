@@ -46,7 +46,8 @@ for migration in "$repo_dir"/supabase/migrations/*.sql; do
   "${psql[@]}" -q -f "$migration"
 done
 
-"${psql[@]}" -f "$repo_dir/tests/db/security.sql"
+if [[ "${TEST_DB_FOCUS:-}" != 'issue52' ]]; then
+  "${psql[@]}" -f "$repo_dir/tests/db/security.sql"
 
 # Force a genuine concurrent edit/move race. The editor holds the task row,
 # the move RPC starts and waits on it, then the editor commits its field change.
@@ -226,8 +227,13 @@ $$;
 DROP TABLE public.task_write_order_reference;
 SQL
 echo 'PASS: task updated_at follows write order after a delayed transaction start.'
+fi
 
 "${psql[@]}" -q -f "$repo_dir/tests/db/auth_schema.sql"
+if [[ "${TEST_DB_FOCUS:-}" == 'issue52' ]]; then
+  "${psql[@]}" -f "$repo_dir/tests/db/issue52_legacy_inventory.sql"
+  "${psql[@]}" -f "$repo_dir/tests/db/issue52_legacy_access_assert.sql"
+fi
 private_migrations=false
 for migration in "$repo_dir"/supabase/migrations/*.sql; do
   if [[ "$(basename -- "$migration")" == '015_closed_google_access.sql' ]]; then
@@ -245,9 +251,22 @@ for migration in "$repo_dir"/supabase/migrations/*.sql; do
     fi
     printf 'Applying %s\n' "$(basename -- "$migration")"
     "${psql[@]}" -q -f "$migration"
+    if [[ "${TEST_DB_FOCUS:-}" == 'issue52' \
+      && "$(basename -- "$migration")" == '015_closed_google_access.sql' ]]; then
+      "${psql[@]}" -f "$repo_dir/tests/db/issue52_assign_owners.sql"
+    fi
   fi
 done
 "${psql[@]}" -f "$repo_dir/tests/fixtures/google-access.sql"
+if [[ "${TEST_DB_FOCUS:-}" == 'issue52' ]]; then
+  "${psql[@]}" -f "$repo_dir/tests/db/anonymous_surface.sql"
+  "${psql[@]}" -f "$repo_dir/tests/db/issue52_private_transition_assert.sql"
+  PG_BINDIR="$pg_bin" OPENKANBAN_TEST_DB_DIR="$test_dir" \
+    OPENKANBAN_TEST_DB_PORT=55439 OPENKANBAN_TEST_DB_FOCUS=issue52 \
+    bash "$repo_dir/scripts/rehearse-instance-backup.sh"
+  printf 'Issue #52 transition and private restore assertions passed (disposable PostgreSQL).\n'
+  exit 0
+fi
 if [[ "${TEST_DB_FOCUS:-}" == 'issue50' ]]; then
   PG_BINDIR="$pg_bin" OPENKANBAN_TEST_DB_DIR="$test_dir" \
     OPENKANBAN_TEST_DB_PORT=55439 \

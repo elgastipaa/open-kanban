@@ -5,7 +5,7 @@
 **Base fija de implementación/revisión:** `ba29e2a9d758fcf5ff9761dc4e66fd4e32c2756f` (`codex/openkanban-1-0`).
 **Código validado:** `6ea31011b806fc5505f91d684f4ab4ee7ba91987`.
 **Rama:** `codex/issue-44`.
-**Estado del tracker:** #44 sigue OPEN/`ready-for-agent`; conserva `Blocked by #43`. #43 sigue OPEN/`ready-for-human` con Storage/G04, navegador/aceptación y cron pendientes. Esta evidencia sintética no cambia estados ni dependencias.
+**Estado del tracker:** #44 permanece OPEN/`ready-for-human`; AC1–3 y AC6 están marcados, AC4/AC5 quedan parciales por E2E, Storage/G04, G06 y QA humana. Conserva `Blocked by #43`; #43 sigue OPEN/`ready-for-human` con Storage/G04, navegador/aceptación y cron pendientes. Esta evidencia sintética no cambia dependencias.
 
 ## Alcance implementado
 

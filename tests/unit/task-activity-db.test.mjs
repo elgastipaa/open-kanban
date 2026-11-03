@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   listTaskActivity,
+  parseTaskActivityPage,
   TaskActivityError,
 } from "../../src/lib/db/task-activity.ts";
 
@@ -86,5 +87,39 @@ test("activity adapter distinguishes inaccessible data and rejects malformed pag
       "task",
     ),
     TaskActivityError,
+  );
+});
+
+test("activity page keeps imported events without an actor and rejects unnamed users", () => {
+  const imported = {
+    id: "imported-event",
+    category: "completion",
+    actor_type: "imported",
+    actor_name: null,
+    occurred_at: "2026-11-02T12:00:00.000Z",
+    before_value: false,
+    after_value: true,
+  };
+  const base = {
+    status: "available",
+    events: [imported],
+    has_more: false,
+    next_cursor: null,
+    retention_days: 180,
+  };
+
+  assert.deepEqual(parseTaskActivityPage(base), {
+    status: "available",
+    events: [imported],
+    has_more: false,
+    next_cursor: null,
+    retention_days: 180,
+  });
+  assert.equal(
+    parseTaskActivityPage({
+      ...base,
+      events: [{ ...imported, actor_type: "user" }],
+    }),
+    null,
   );
 });

@@ -72,7 +72,7 @@ function parseEvent(value: unknown): TaskActivityEvent | null {
   }
   if (
     (value.actor_type === "system" && value.actor_name !== null) ||
-    (value.actor_type !== "system" &&
+    (value.actor_type === "user" &&
       (typeof value.actor_name !== "string" || value.actor_name.trim() === ""))
   ) {
     return null;

@@ -70,4 +70,4 @@ No hay aceptación manual de Auth, navegador, lector de pantalla ni datos reales
 
 ## Revisiones finales
 
-En el candidato `d998c72858e524f9ee478a952dfb5873351fff2f`, revisión read-only Spec encontró una imprecisión documental sobre resultados de pérdida de acceso, corregida arriba; Standards/Privacy pasó sin hallazgos accionables. Ambas revisarán de nuevo el SHA final con esta precisión incorporada. El issue permanece abierto y sin cierre.
+En `c0551d6d276262d469652ca46db62d6808a98be2`, las revisiones read-only finales Spec y Standards/Privacy pasaron sin hallazgos accionables. La primera revisión Spec había detectado una imprecisión documental sobre los resultados de pérdida de acceso, corregida arriba antes de ambas revisiones finales. El issue permanece abierto y sin cierre.

@@ -51,9 +51,25 @@ function validCursor(
     return false;
   }
   const keys = Object.keys(value).sort().join(",");
-  if (order === "created") return keys === "created_at,id";
+  if (order === "created") {
+    if (keys !== "created_at,id" && keys !== "created_at,id,revision") {
+      return false;
+    }
+  } else if (
+    keys !== "created_at,due_on,id" &&
+    keys !== "created_at,due_on,id,revision"
+  ) {
+    return false;
+  }
   if (
-    keys !== "created_at,due_on,id" ||
+    "revision" in value &&
+    (typeof value.revision !== "string" ||
+      !/^[0-9a-f]{32}$/.test(value.revision))
+  ) {
+    return false;
+  }
+  if (order === "created") return true;
+  if (
     (value.due_on !== null &&
       (typeof value.due_on !== "string" ||
         !/^\d{4}-\d{2}-\d{2}$/.test(value.due_on)))

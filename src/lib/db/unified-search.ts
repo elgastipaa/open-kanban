@@ -14,7 +14,12 @@ export interface UnifiedSearchResult extends Record<string, unknown> {
 }
 
 export interface UnifiedSearchResponse {
-  status: "available" | "scope_unavailable" | "unavailable" | "invalid_filter";
+  status:
+    | "available"
+    | "scope_unavailable"
+    | "unavailable"
+    | "invalid_filter"
+    | "stale_page";
   results: UnifiedSearchResult[];
   has_more: boolean;
   next_cursor: Record<string, unknown> | null;
@@ -68,6 +73,7 @@ function isSearchResponse(value: unknown): value is UnifiedSearchResponse {
       "scope_unavailable",
       "unavailable",
       "invalid_filter",
+      "stale_page",
     ].includes(String(value.status)) &&
     Array.isArray(value.results) &&
     value.results.every(isUnifiedSearchResult) &&
@@ -93,7 +99,7 @@ export async function searchUnified(
     };
   }
 
-  const { data, error } = await supabase.rpc("search_unified_p", {
+  const { data, error } = await supabase.rpc("search_unified_page_p", {
     p_query: command.query,
     p_scope: command.scope,
     p_scope_board_id: scopeBoard?.id ?? null,

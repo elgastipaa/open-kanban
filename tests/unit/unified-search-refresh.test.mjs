@@ -64,6 +64,37 @@ test("refresh nonce advances the request generation and drives the POST effect",
   );
 });
 
+test("stale cursors are explicit conflicts for old bundles and restart in the current client", () => {
+  const routeSource = readFileSync(
+    new URL("../../src/app/api/search/route.ts", import.meta.url),
+    "utf8",
+  );
+  const componentSource = readFileSync(
+    new URL(
+      "../../src/components/search/unified-search-client.tsx",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+
+  assert.match(
+    routeSource,
+    /const result = await searchUnified\(supabase, command\);[\s\S]*?return json\(\{ \.\.\.result \}, result\.status === "stale_page" \? 409 : 200\);/,
+  );
+  assert.match(
+    componentSource,
+    /const data = \(await response\.json\(\)\) as SearchResponse;\s*if \(!response\.ok && data\.status !== "stale_page"\)/,
+  );
+  assert.match(
+    componentSource,
+    /if \(data\.status === "stale_page"\)[\s\S]*?setResults\(\[\]\);[\s\S]*?setPageCursor\(null\);/,
+  );
+  assert.match(
+    componentSource,
+    /message\.startsWith\("No se pudo buscar"\)[\s\S]*?setResults\(\[\]\);[\s\S]*?setPageCursor\(null\);[\s\S]*?setRefreshNonce\(\(current\) => current \+ 1\)/,
+  );
+});
+
 test("search preference controls are disabled while their save or conflict is unresolved", () => {
   const componentSource = readFileSync(
     new URL(

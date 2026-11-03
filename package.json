@@ -32,6 +32,7 @@
     "test:db:issue-43": "bash scripts/test-db-issue-43.sh",
     "test:db:issue-44": "bash scripts/test-db-issue-44.sh",
     "test:db:issue-45": "bash scripts/test-db-issue-45.sh",
+    "test:db:issue-48": "bash scripts/test-db-issue-48.sh",
     "test:unit:issue-33": "node --experimental-strip-types --test tests/unit/unified-search-navigation.test.mjs tests/unit/unified-search-state.test.mjs tests/unit/unified-search-request.test.mjs tests/unit/unified-search-refresh.test.mjs",
     "test:unit:issue-34": "node --experimental-strip-types --test tests/unit/view-preference-state.test.mjs tests/unit/view-preference-access.test.mjs tests/unit/my-task-view.test.mjs",
     "test:unit:issue-35": "node --experimental-strip-types --test tests/unit/saved-view-state.test.mjs tests/unit/saved-views-panel-contract.test.mjs",

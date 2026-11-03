@@ -72,7 +72,8 @@ export async function POST(request: Request): Promise<NextResponse> {
         });
       }
     }
-    return json({ ...(await searchUnified(supabase, command)) });
+    const result = await searchUnified(supabase, command);
+    return json({ ...result }, result.status === "stale_page" ? 409 : 200);
   } catch {
     return json(
       { status: "error", message: "No se pudo buscar. Inténtalo de nuevo." },

@@ -5,6 +5,7 @@ import { parseUnifiedSearchRequest } from "../../src/lib/unified-search-request.
 const boardId = "33000000-0000-4000-8000-000000000001";
 const labelId = "33000000-0000-4000-8000-000000000002";
 const taskId = "33000000-0000-4000-8000-000000000003";
+const searchRevision = "0123456789abcdef0123456789abcdef";
 
 function request(overrides = {}) {
   return {
@@ -72,7 +73,53 @@ test("rejects invalid scope, oversized query, foreign-shaped labels and stale cu
   );
 });
 
-test("accepts only a well-shaped task cursor and drops unrecognized request keys by rejection", () => {
+test("accepts versioned and legacy task cursors and rejects malformed input", () => {
+  assert.notEqual(
+    parseUnifiedSearchRequest(
+      request({
+        mode: "tasks",
+        cursor: {
+          created_at: "2026-11-01T00:00:00Z",
+          id: taskId,
+          due_on: null,
+          revision: searchRevision,
+        },
+      }),
+    ),
+    null,
+  );
+  assert.notEqual(
+    parseUnifiedSearchRequest(
+      request({
+        mode: "tasks",
+        order: "created",
+        cursor: {
+          created_at: "2026-11-01T00:00:00Z",
+          id: taskId,
+          revision: searchRevision,
+        },
+      }),
+    ),
+    null,
+  );
+  assert.equal(
+    parseUnifiedSearchRequest(request({ token: "not-accepted" })),
+    null,
+  );
+  assert.equal(
+    parseUnifiedSearchRequest(
+      request({
+        mode: "tasks",
+        cursor: {
+          created_at: "bad",
+          id: taskId,
+          due_on: null,
+          revision: searchRevision,
+        },
+      }),
+    ),
+    null,
+  );
   assert.notEqual(
     parseUnifiedSearchRequest(
       request({
@@ -87,14 +134,15 @@ test("accepts only a well-shaped task cursor and drops unrecognized request keys
     null,
   );
   assert.equal(
-    parseUnifiedSearchRequest(request({ token: "not-accepted" })),
-    null,
-  );
-  assert.equal(
     parseUnifiedSearchRequest(
       request({
         mode: "tasks",
-        cursor: { created_at: "bad", id: taskId, due_on: null },
+        cursor: {
+          created_at: "2026-11-01T00:00:00Z",
+          id: taskId,
+          due_on: null,
+          revision: "not-a-revision",
+        },
       }),
     ),
     null,

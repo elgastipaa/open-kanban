@@ -361,6 +361,11 @@ if [[ "${TEST_DB_FOCUS:-}" == 'issue42' ]]; then
   printf 'Issue #42 database regression tests passed (disposable PostgreSQL).\n'
   exit 0
 fi
+if [[ "${TEST_DB_FOCUS:-}" == 'issue48' ]]; then
+  "${psql[@]}" -f "$repo_dir/tests/db/issue48_scale.sql"
+  printf 'Issue #48 synthetic scale and baseline cursor measurements passed (disposable PostgreSQL).\n'
+  exit 0
+fi
 if [[ "${TEST_DB_FOCUS:-}" == 'issue43' ]]; then
   "${psql[@]}" -f "$repo_dir/tests/db/board_import_v1.sql"
   bash "$repo_dir/scripts/test-db-issue-43-race.sh" \

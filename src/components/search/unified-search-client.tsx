@@ -67,7 +67,12 @@ interface SearchUiState {
 }
 
 interface SearchResponse {
-  status: "available" | "scope_unavailable" | "unavailable" | "invalid_filter";
+  status:
+    | "available"
+    | "scope_unavailable"
+    | "unavailable"
+    | "invalid_filter"
+    | "stale_page";
   results: UnifiedSearchResult[];
   has_more: boolean;
   next_cursor: Record<string, unknown> | null;
@@ -292,6 +297,7 @@ export function UnifiedSearchClient({
     initialScopeUnavailable,
   );
   const requestId = useRef(0);
+  const stalePageRestartRef = useRef(false);
   const accountIdRef = useRef(accountId);
   accountIdRef.current = accountId;
   const queryInputRef = useRef<HTMLInputElement>(null);
@@ -484,8 +490,10 @@ export function UnifiedSearchClient({
           },
           controller.signal,
         );
-        if (!response.ok) throw new Error("search-failed");
         const data = (await response.json()) as SearchResponse;
+        if (!response.ok && data.status !== "stale_page") {
+          throw new Error("search-failed");
+        }
         if (
           !isCurrentUnifiedSearchRequest(
             currentRequestId,
@@ -524,13 +532,32 @@ export function UnifiedSearchClient({
           );
           return;
         }
+        if (data.status === "stale_page") {
+          setResults([]);
+          setHasMore(false);
+          setNextCursor(null);
+          if (pageCursor) {
+            stalePageRestartRef.current = true;
+            setPageCursor(null);
+          } else {
+            setMessage(
+              "Los resultados cambiaron. Vuelve a ejecutar la búsqueda.",
+            );
+          }
+          return;
+        }
+        const restartedAfterEdit =
+          pageCursor === null && stalePageRestartRef.current;
+        if (restartedAfterEdit) stalePageRestartRef.current = false;
         setResults((current) =>
           pageCursor ? [...current, ...data.results] : data.results,
         );
         setHasMore(data.has_more);
         setNextCursor(data.next_cursor);
         setMessage(
-          data.results.length === 0 && !pageCursor
+          restartedAfterEdit
+            ? "Los resultados cambiaron y la búsqueda se reinició desde la primera página."
+            : data.results.length === 0 && !pageCursor
             ? "No hay coincidencias para esta búsqueda y estos filtros."
             : "",
         );
@@ -562,6 +589,7 @@ export function UnifiedSearchClient({
   ]);
 
   function updateState(patch: Partial<SearchUiState>) {
+    stalePageRestartRef.current = false;
     setPageCursor(null);
     setHasMore(false);
     setNextCursor(null);
@@ -1373,6 +1401,11 @@ export function UnifiedSearchClient({
                     disabled={loading}
                     onClick={() => {
                       setMessage("");
+                      stalePageRestartRef.current = false;
+                      setResults([]);
+                      setPageCursor(null);
+                      setNextCursor(null);
+                      setHasMore(false);
                       setRefreshNonce((current) => current + 1);
                     }}
                     className="ml-3 underline underline-offset-4 disabled:opacity-60"

@@ -1,88 +1,4 @@
-\set ON_ERROR_STOP on
-\echo 'Comprobando propiedad explícita, contenido y separación entre admin y tablero'
-
-DO $$
-DECLARE
-  v_inventory issue52_rehearsal.inventory%ROWTYPE;
-  v_board public.boards%ROWTYPE;
-  v_admin issue52_rehearsal.bootstrap%ROWTYPE;
-  v_payload jsonb;
-  v_count integer;
-BEGIN
-  IF (SELECT count(*) FROM issue52_rehearsal.inventory) <> 2 THEN
-    RAISE EXCEPTION 'El ensayo no tiene el inventario ficticio completo';
-  END IF;
-
-  SELECT * INTO STRICT v_admin FROM issue52_rehearsal.bootstrap WHERE singleton;
-  IF NOT EXISTS (
-    SELECT 1 FROM public.application_access AS access
-    WHERE access.email = v_admin.admin_email
-      AND access.auth_user_id = v_admin.admin_id
-      AND access.google_subject = v_admin.admin_subject
-      AND access.state = 'active'
-      AND access.is_admin
-  ) THEN
-    RAISE EXCEPTION 'El administrador bootstrap no coincide con la elección explícita del fixture';
-  END IF;
-
-  FOR v_inventory IN SELECT * FROM issue52_rehearsal.inventory ORDER BY slug LOOP
-    SELECT * INTO STRICT v_board FROM public.boards WHERE id = v_inventory.board_id;
-    IF v_board.slug IS DISTINCT FROM v_inventory.slug
-      OR v_board.owner_id IS DISTINCT FROM v_inventory.explicit_owner_id THEN
-      RAISE EXCEPTION 'El tablero % no conserva el owner explícito del inventario', v_inventory.slug;
-    END IF;
-
-    IF NOT EXISTS (
-      SELECT 1 FROM public.application_access AS access
-      WHERE access.auth_user_id = v_inventory.explicit_owner_id
-        AND access.state = 'active'
-        AND NOT access.is_admin
-    ) OR NOT EXISTS (
-      SELECT 1 FROM public.board_memberships AS membership
-      WHERE membership.board_id = v_board.id
-        AND membership.user_id = v_inventory.explicit_owner_id
-        AND membership.role = 'owner'
-        AND membership.revoked_at IS NULL
-    ) THEN
-      RAISE EXCEPTION 'Falta la identidad habilitada o membresía dueña explícita para %', v_inventory.slug;
-    END IF;
-
-    SELECT count(*) INTO v_count
-    FROM public.columns AS column_row
-    WHERE column_row.board_id = v_board.id;
-    IF v_count <> 1 THEN
-      RAISE EXCEPTION 'El tablero % cambió su número de columnas durante la migración', v_inventory.slug;
-    END IF;
-
-    SELECT count(*) INTO v_count
-    FROM public.columns AS column_row
-    JOIN public.tasks AS task ON task.column_id = column_row.id
-    WHERE column_row.board_id = v_board.id;
-    IF v_count <> 1 THEN
-      RAISE EXCEPTION 'El tablero % cambió su número de tareas durante la migración', v_inventory.slug;
-    END IF;
-    IF NOT EXISTS (
-      SELECT 1
-      FROM public.columns AS column_row
-      JOIN public.tasks AS task ON task.column_id = column_row.id
-      WHERE column_row.board_id = v_board.id
-        AND task.id = v_inventory.expected_task_id
-        AND task.title = v_inventory.expected_task_title
-    ) THEN
-      RAISE EXCEPTION 'El tablero % perdió su tarea sintética al migrar', v_inventory.slug;
-    END IF;
-  END LOOP;
-
-  IF EXISTS (
-    SELECT 1 FROM public.board_memberships AS membership
-    WHERE membership.board_id IN (SELECT board_id FROM issue52_rehearsal.inventory)
-      AND membership.user_id = v_admin.admin_id
-      AND membership.revoked_at IS NULL
-  ) THEN
-    RAISE EXCEPTION 'El bootstrap admin recibió membresía de tablero por ser el primer usuario';
-  END IF;
-END;
-$$;
+\ir issue52_inventory_assert.sql
 
 BEGIN;
 SET LOCAL ROLE authenticated;
@@ -130,4 +46,4 @@ END;
 $$;
 COMMIT;
 
-\echo 'PASS: dos owners explícitos conservan contenido; el admin bootstrap no obtiene lectura de tableros ajenos.'
+\echo 'PASS: los dos propietarios pueden leer solo su tablero y el admin no tiene lectura de tablero.'

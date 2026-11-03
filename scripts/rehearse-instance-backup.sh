@@ -218,6 +218,7 @@ printf 'Reintentando el restore en una base aislada y limpia.\n'
   -U postgres --owner=postgres --template=template0 issue50_recovered
 target_pg_restore issue50_recovered
 assert_issue52_restore issue50_recovered
+target_psql issue50_recovered -q -f "$repo_dir/tests/db/anonymous_surface.sql"
 
 restore_stage=$run_dir/restored-bundle
 mkdir -m 700 -- "$restore_stage"
@@ -246,7 +247,6 @@ if [[ "$restored_marker" != 'snapshot-v1' || "$restored_storage_hash" != "$fixtu
   exit 1
 fi
 target_psql issue50_recovered -q -f "$repo_dir/tests/db/issue50_restore_assert.sql"
-target_psql issue50_recovered -q -f "$repo_dir/tests/db/anonymous_surface.sql"
 
 source_acl=$run_dir/source-acl.txt
 target_acl=$run_dir/target-acl.txt

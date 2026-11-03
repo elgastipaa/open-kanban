@@ -69,7 +69,13 @@ Read-only sobre el primer commit de código/evidencia 3eb9d920cca3af4c28e84ddd46
 
 - Normas: PASS, sin hallazgos accionables. Se revisaron AGENTS.md, docs/agents/domain.md, docs/agents/implementation-loop.md y el diff completo; no hay CONTRIBUTING/CODING_STANDARDS adicionales.
 - Spec/Privacy: PASS, sin hallazgos accionables; confirmó la distinción entre PostgreSQL sintético, inspección estática y gates externos, además de preservar los nueve blockers.
-- Se solicita una segunda revisión read-only sobre el HEAD final porque este artefacto añade el resultado de la suite completa después de la primera revisión. El código productivo y SQL no cambian en esa actualización documental.
+
+Tras registrar la corrida completa y enumerar las 15 rutas, se hizo segunda pasada read-only sobre HEAD afea14b4c7d9a71ff2a96f74867d67cc43df324c contra la misma base:
+
+- Normas: PASS, sin hallazgos accionables; verificó el resultado exacto de la suite DB y que el resto del diff permanecía igual.
+- Spec/Privacy: PASS, sin hallazgos accionables; confirmó los límites de evidencia y que los nueve blockers siguen preservados.
+
+Después de esas revisiones solo se registra este resultado de revisión en el artefacto; no cambia código productivo, SQL, scripts ni pruebas.
 
 ## Gates que siguen pendientes
 

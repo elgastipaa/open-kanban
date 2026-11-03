@@ -738,6 +738,10 @@ GitHub muestra #50 «Ensayar respaldo y recuperación de instancia» OPEN/`ready
 - Blocked by #35/#41/#45/#47/#49 permanece intacto. No se usaron Docker, .env/.env.local, Auth/SQL/Storage remotos, datos reales, main, producción ni deploy.
 - PR #54 sigue OPEN/draft, base main, con título y resumen #3–#50 y evidencia #50. main local/remoto conserva 46c94139bac67aaca1d491b29afc3bc999fc288f. Se preservan docs/VALIDATION.md ajeno (SHA-256 B8669EAAFEA1A6D41C1342470E49324D2FAA50BED03DCCCFE7E94AF17D51FD9C) y .scratch/ (58 archivos) fuera de Git.
 
-## Frontera siguiente LP-0.2 — #51 — 2026-11-03
+## Reconciliación de #51 y frontera siguiente LP-0.2 — #52 — 2026-11-03
 
-GitHub muestra #51 «Validar uso cotidiano con móvil y accesibilidad» OPEN/ready-for-agent con Blocked by #47/#48/#49; los tres bloqueadores siguen OPEN/ready-for-human. No iniciar otro implementer en este cierre. #52 «Ensayar la transición privada y preparar el corte» sigue OPEN/ready-for-agent y bloqueado por #21/#50/#51; #53 «Ejecutar el corte privado autorizado» sigue OPEN/ready-for-agent y bloqueado por #52, con autorización específica aún obligatoria. No alterar estas aristas ni inferir aceptación manual.
+GitHub #51 «Validar uso cotidiano con móvil y accesibilidad» está OPEN/`ready-for-human`, con todos los criterios sin marcar y `Blocked by #47/#48/#49` intactos. AC1/AC3 requieren participantes y equipos físicos; no hay evidencia de esa evaluación en este entorno, y la automatización no sustituye el piloto. Queda registrada la acción humana necesaria en el [issue #51](https://github.com/elgastipaa/open-kanban/issues/51#issuecomment-6595521211).
+
+#52 «Ensayar la transición privada y preparar el corte» sigue OPEN/`ready-for-agent`, con `Blocked by #21/#50/#51`; #21/#50/#51 continúan OPEN/`ready-for-human`. LP-0.2 y G08 permiten avanzar únicamente con inventario ficticio, backup/rollback y restore local aislado porque G08 bloquea producción pero no el trabajo aislado. Antes de reclamar, revalidar issue/comentarios y blockers; fijar base; mantener todos los edges sin retirar ni aceptar sus gates; no consultar ni cambiar datos/servicios remotos, owners reales ni configuración/secretos. La entrega seguirá parcial y OPEN/ready-for-human si restan criterios externos.
+
+#53 «Ejecutar el corte privado autorizado» permanece OPEN/`ready-for-agent`, bloqueado por #52 y exige autorización específica vigente. No forma parte del avance automático.

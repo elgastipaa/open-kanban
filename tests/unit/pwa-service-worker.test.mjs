@@ -30,6 +30,7 @@ function createWorker({ fetchFails = false } = {}) {
   let didClaimClients = false;
   let didSkipWaiting = false;
   let networkIsAvailable = !fetchFails;
+  let networkAccount = null;
 
   const cache = {
     added: [],
@@ -94,6 +95,11 @@ function createWorker({ fetchFails = false } = {}) {
           headers: { "Content-Type": "text/html; charset=utf-8" },
         });
       }
+      if (networkAccount) {
+        return new Response(
+          `network:${networkAccount}:${url.pathname}${url.search}`,
+        );
+      }
       return new Response(`network:${url.pathname}${url.search}`);
     },
     Response,
@@ -145,6 +151,9 @@ function createWorker({ fetchFails = false } = {}) {
     openedCaches,
     set networkIsAvailable(value) {
       networkIsAvailable = value;
+    },
+    set networkAccount(value) {
+      networkAccount = value;
     },
   };
 }
@@ -198,15 +207,21 @@ test("private navigation and login return URLs stay network-only and unchanged",
 test("logout and account change never reuse prior session content from CacheStorage", async () => {
   const worker = createWorker();
   await worker.dispatchLifecycle("install");
+  const privateUrl = `${origin}/planning-board?filter=assigned`;
 
+  worker.networkAccount = "account-a";
   const firstAccount = worker.dispatchFetch({
     method: "GET",
     mode: "navigate",
-    url: `${origin}/planning-board?fixture=account-a`,
+    url: privateUrl,
   });
   const firstResponse = await firstAccount.responsePromise;
-  assert.match(await firstResponse.text(), /fixture=account-a/);
+  assert.equal(
+    await firstResponse.text(),
+    "network:account-a:/planning-board?filter=assigned",
+  );
 
+  worker.networkAccount = null;
   const logout = worker.dispatchFetch({
     method: "GET",
     mode: "navigate",
@@ -214,13 +229,17 @@ test("logout and account change never reuse prior session content from CacheStor
   });
   assert.equal(await (await logout.responsePromise).text(), "network:/");
 
+  worker.networkAccount = "account-b";
   const secondAccount = worker.dispatchFetch({
     method: "GET",
     mode: "navigate",
-    url: `${origin}/planning-board?fixture=account-b`,
+    url: privateUrl,
   });
   const secondResponse = await secondAccount.responsePromise;
-  assert.match(await secondResponse.text(), /fixture=account-b/);
+  assert.equal(
+    await secondResponse.text(),
+    "network:account-b:/planning-board?filter=assigned",
+  );
 
   assert.deepEqual(worker.cacheWrites, []);
   assert.ok(

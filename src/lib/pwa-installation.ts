@@ -19,17 +19,18 @@ export function getPwaInstallGuidance({
   const isAppleMobile =
     /iPad|iPhone|iPod/i.test(userAgent) ||
     (/Macintosh/i.test(userAgent) && isAppleTouchDevice);
-  if (isAppleMobile) {
-    return {
-      kind: "manual",
-      instructions:
-        "En Safari, tocá Compartir y elegí «Añadir a pantalla de inicio».",
-    };
-  }
-
   const isSafari =
     /Safari/i.test(userAgent) &&
     !/(Chrome|Chromium|CriOS|Edg|OPR|FxiOS)/i.test(userAgent);
+  if (isAppleMobile) {
+    return {
+      kind: "manual",
+      instructions: isSafari
+        ? "En Safari, tocá Compartir y elegí «Añadir a pantalla de inicio»."
+        : "En el navegador de tu iPhone o iPad, tocá Compartir y elegí «Añadir a pantalla de inicio».",
+    };
+  }
+
   if (isSafari && /Macintosh|Mac OS X/i.test(userAgent)) {
     return {
       kind: "manual",

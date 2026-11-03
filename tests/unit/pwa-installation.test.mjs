@@ -57,6 +57,25 @@ test("iPhone Safari receives a manual home screen path without a fake success", 
   );
 });
 
+test("non-Safari iOS browsers get browser-neutral home screen steps", () => {
+  const instructions =
+    "En el navegador de tu iPhone o iPad, tocá Compartir y elegí «Añadir a pantalla de inicio».";
+
+  for (const userAgent of [
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/130.0.0.0 Mobile/15E148 Safari/604.1",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) FxiOS/133.0 Mobile/15E148 Safari/605.1.15",
+  ]) {
+    assert.deepEqual(
+      getPwaInstallGuidance({
+        canPrompt: false,
+        isStandalone: false,
+        userAgent,
+      }),
+      { kind: "manual", instructions },
+    );
+  }
+});
+
 test("unsupported Firefox remains available as web access", () => {
   assert.deepEqual(
     getPwaInstallGuidance({

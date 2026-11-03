@@ -376,6 +376,14 @@ if [[ "${TEST_DB_FOCUS:-}" == 'issue44' ]]; then
   printf 'Issue #44 database regression tests passed (disposable PostgreSQL; Storage is simulated by DB-level object acknowledgements only).\n'
   exit 0
 fi
+if [[ "${TEST_DB_FOCUS:-}" == 'issue45' ]]; then
+  "${psql[@]}" -v issue45_recovery=true -f "$repo_dir/tests/db/board_import_v2.sql"
+  "${psql[@]}" -f "$repo_dir/tests/db/board_import_recovery.sql"
+  bash "$repo_dir/scripts/test-db-issue-45-race.sh" \
+    "$pg_bin/psql" "$test_dir" 55439 "$test_dir/issue45-restore-cleanup-race"
+  printf 'Issue #45 database regression tests passed (disposable PostgreSQL; Storage is simulated by DB-level object acknowledgements only).\n'
+  exit 0
+fi
 "${psql[@]}" -f "$repo_dir/tests/db/closed_access.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/authentication.sql"
 "${psql[@]}" -f "$repo_dir/tests/db/realtime_epoch.sql"

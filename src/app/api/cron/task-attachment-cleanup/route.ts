@@ -45,6 +45,20 @@ export async function POST(request: Request): Promise<NextResponse> {
       return json({ status: "error" }, 503);
     }
 
+    const {
+      data: expiredRestoreOperations,
+      error: restoreOperationCleanupError,
+    } = await service.rpc("cleanup_expired_board_import_restore_operations_p", {
+      p_limit: 50,
+    });
+    if (
+      restoreOperationCleanupError ||
+      typeof expiredRestoreOperations !== "number" ||
+      !Number.isSafeInteger(expiredRestoreOperations)
+    ) {
+      return json({ status: "error" }, 503);
+    }
+
     const { data: expiredGenerations, error: generationCleanupError } =
       await service.rpc("cleanup_expired_board_generation_retention_p", {
         p_limit: 50,
@@ -117,6 +131,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     return json({
       status: "processed",
       import_operations_expired: expiredImportOperations,
+      import_restore_operations_expired: expiredRestoreOperations,
       previous_generations_expired: expiredGenerations,
       export_snapshots_cleaned: expiredExports,
       claimed: data.length,

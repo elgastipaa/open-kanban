@@ -93,16 +93,73 @@ test("the owner-facing UI shows the version and requires explicit replacement co
   assert.match(board, /<BoardImportDialog/u);
   assert.doesNotMatch(board, /importBoard\(/u);
   assert.match(toolbar, /canRename \? \(/u);
-  await assert.rejects(
-    source("src/app/api/boards/[slug]/import/recoveries/route.ts"),
-    { code: "ENOENT" },
+  const recoveriesRoute = await source(
+    "src/app/api/boards/[slug]/import/recoveries/route.ts",
   );
-  await assert.rejects(
-    source(
-      "src/app/api/boards/[slug]/import/recoveries/[operationId]/confirm/route.ts",
-    ),
-    { code: "ENOENT" },
+  const restoreConfirmRoute = await source(
+    "src/app/api/boards/[slug]/import/recoveries/[operationId]/confirm/route.ts",
   );
+  assert.match(recoveriesRoute, /list_board_import_recoveries_p/u);
+  assert.match(recoveriesRoute, /prepare_board_import_restore_p/u);
+  assert.match(restoreConfirmRoute, /confirm_board_import_restore_p/u);
+  assert.match(restoreConfirmRoute, /p_expected_content_revision/u);
+  assert.match(dialog, /Recuperar contenido previo a una importación/u);
+  assert.match(dialog, /recuperable hasta/u);
+  assert.match(dialog, /Confirmar recuperación/u);
+  assert.match(dialog, /prepara una vista nueva/u);
+});
+
+test("restore snapshots headers and publishes only an unexpired owner preview", async () => {
+  const migration = await source(
+    "supabase/migrations/071_restore_import_replacements.sql",
+  );
+  const dialog = await source("src/components/board/board-import-dialog.tsx");
+  const cleanupRoute = await source(
+    "src/app/api/cron/task-attachment-cleanup/route.ts",
+  );
+
+  assert.match(migration, /retained_board_name text/u);
+  assert.match(migration, /retained_time_zone text/u);
+  assert.match(
+    migration,
+    /BEFORE INSERT ON public\.board_generation_retention/u,
+  );
+  assert.match(
+    migration,
+    /'reason', CASE WHEN retention\.retained_board_name IS NULL/u,
+  );
+  assert.match(
+    migration,
+    /CREATE FUNCTION public\.list_board_import_recoveries_p/u,
+  );
+  assert.match(
+    migration,
+    /CREATE FUNCTION public\.prepare_board_import_restore_p/u,
+  );
+  assert.match(
+    migration,
+    /CREATE FUNCTION public\.confirm_board_import_restore_p/u,
+  );
+  assert.match(
+    migration,
+    /operation\.expected_content_revision IS DISTINCT FROM v_revision/u,
+  );
+  assert.match(migration, /retention\.expires_at <= v_now/u);
+  assert.match(
+    migration,
+    /attachment\.state NOT IN \('active', 'recoverable'\)/u,
+  );
+  assert.match(migration, /'content_revision', v_revision \+ 1/u);
+  assert.match(migration, /replacement_generation_id/u);
+  assert.match(migration, /retained_at, expires_at/u);
+  assert.match(migration, /interval '168 hours'/u);
+  assert.match(migration, /cleanup_expired_board_import_restore_operations_p/u);
+  assert.match(
+    cleanupRoute,
+    /cleanup_expired_board_import_restore_operations_p/u,
+  );
+  assert.match(dialog, /propietario actual/u);
+  assert.match(dialog, /membresías, los avisos y las preferencias actuales/u);
 });
 
 test("v2 preview returns and compares destination and proposed board headers", async () => {

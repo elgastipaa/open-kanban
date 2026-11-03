@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { MAX_LEGACY_BOARD_IMPORT_BYTES } from "@/lib/legacy-board-import";
@@ -26,6 +26,44 @@ interface CapacitySnapshot {
   used_bytes: number;
   available_bytes: number;
   can_replace: boolean;
+}
+
+interface RecoveryCapacity extends CapacitySnapshot {
+  can_restore: boolean;
+}
+
+interface ImportRecovery {
+  generation_id: string;
+  retained_at: string;
+  expires_at: string;
+  board: { name: string; time_zone: string } | null;
+  content: GenerationSummary;
+  restorable: boolean;
+  reason: string | null;
+}
+
+interface RecoveryList {
+  current_generation_id: string;
+  content_revision: number;
+  current_board: { name: string; time_zone: string };
+  current: GenerationSummary;
+  capacity: CapacitySnapshot;
+  recoveries: ImportRecovery[];
+}
+
+interface RestorePreview {
+  operation_id: string;
+  restored_generation_id: string;
+  replaced_generation_id: string;
+  retained_at: string;
+  expires_at: string;
+  preview_expires_at: string;
+  content_revision: number;
+  restored_board: { name: string; time_zone: string };
+  current_board: { name: string; time_zone: string };
+  restored: GenerationSummary;
+  current: GenerationSummary;
+  capacity: RecoveryCapacity;
 }
 
 interface ImportPreview {
@@ -133,6 +171,105 @@ function parseCapacity(value: unknown): CapacitySnapshot | null {
     used_bytes: used,
     available_bytes: available,
     can_replace: row.can_replace,
+  };
+}
+
+function parseRecoveryList(value: unknown): RecoveryList | null {
+  const row = asRecord(value);
+  if (!row || row.status !== "ok") return null;
+  const currentGenerationId = row.current_generation_id;
+  const contentRevision = count(row.content_revision);
+  const currentBoard = parseBoardHeader(row.current_board);
+  const current = parseSummary(row.current);
+  const capacity = parseCapacity(row.capacity);
+  if (
+    typeof currentGenerationId !== "string" ||
+    contentRevision === null ||
+    !currentBoard ||
+    !current ||
+    !capacity ||
+    !Array.isArray(row.recoveries)
+  ) {
+    return null;
+  }
+  const recoveries: ImportRecovery[] = [];
+  for (const value of row.recoveries) {
+    const recovery = asRecord(value);
+    const content = parseSummary(recovery?.content);
+    const board =
+      recovery?.board === null ? null : parseBoardHeader(recovery?.board);
+    if (
+      !recovery ||
+      typeof recovery.generation_id !== "string" ||
+      typeof recovery.retained_at !== "string" ||
+      typeof recovery.expires_at !== "string" ||
+      !content ||
+      (recovery.restorable !== true && recovery.restorable !== false) ||
+      (recovery.restorable && !board) ||
+      (recovery.reason !== null && typeof recovery.reason !== "string")
+    ) {
+      return null;
+    }
+    recoveries.push({
+      generation_id: recovery.generation_id,
+      retained_at: recovery.retained_at,
+      expires_at: recovery.expires_at,
+      board,
+      content,
+      restorable: recovery.restorable,
+      reason: recovery.reason,
+    });
+  }
+  return {
+    current_generation_id: currentGenerationId,
+    content_revision: contentRevision,
+    current_board: currentBoard,
+    current,
+    capacity,
+    recoveries,
+  };
+}
+
+function parseRestorePreview(value: unknown): RestorePreview | null {
+  const row = asRecord(value);
+  if (!row || row.status !== "ready") return null;
+  const contentRevision = count(row.content_revision);
+  const restoredBoard = parseBoardHeader(row.restored_board);
+  const currentBoard = parseBoardHeader(row.current_board);
+  const restored = parseSummary(row.restored);
+  const current = parseSummary(row.current);
+  const rawCapacity = asRecord(row.capacity);
+  const capacity = parseCapacity(rawCapacity);
+  if (
+    typeof row.operation_id !== "string" ||
+    typeof row.restored_generation_id !== "string" ||
+    typeof row.replaced_generation_id !== "string" ||
+    typeof row.retained_at !== "string" ||
+    typeof row.expires_at !== "string" ||
+    typeof row.preview_expires_at !== "string" ||
+    contentRevision === null ||
+    !restoredBoard ||
+    !currentBoard ||
+    !restored ||
+    !current ||
+    !capacity ||
+    typeof rawCapacity?.can_restore !== "boolean"
+  ) {
+    return null;
+  }
+  return {
+    operation_id: row.operation_id,
+    restored_generation_id: row.restored_generation_id,
+    replaced_generation_id: row.replaced_generation_id,
+    retained_at: row.retained_at,
+    expires_at: row.expires_at,
+    preview_expires_at: row.preview_expires_at,
+    content_revision: contentRevision,
+    restored_board: restoredBoard,
+    current_board: currentBoard,
+    restored,
+    current,
+    capacity: { ...capacity, can_restore: rawCapacity.can_restore },
   };
 }
 
@@ -359,9 +496,52 @@ export function BoardImportDialog({
   const [isConfirming, setIsConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [recoveryList, setRecoveryList] = useState<RecoveryList | null>(null);
+  const [recoveryLoadState, setRecoveryLoadState] = useState<
+    "loading" | "ready" | "unavailable" | "error"
+  >("loading");
+  const [restorePreview, setRestorePreview] = useState<RestorePreview | null>(
+    null,
+  );
+  const [pendingRestoreOperation, setPendingRestoreOperation] = useState<{
+    generationId: string;
+    operationId: string;
+  } | null>(null);
+  const [restoreError, setRestoreError] = useState<string | null>(null);
+  const [isPreparingRestore, setIsPreparingRestore] = useState(false);
+  const [isConfirmingRestore, setIsConfirmingRestore] = useState(false);
+
+  const loadRecoveries = useCallback(
+    async (signal?: AbortSignal) => {
+      try {
+        const response = await fetch(
+          `/api/boards/${encodeURIComponent(slug)}/import/recoveries`,
+          { cache: "no-store", signal },
+        );
+        const body: unknown = await response.json();
+        if (signal?.aborted) return;
+        const parsed = parseRecoveryList(body);
+        if (response.ok && parsed) {
+          setRecoveryList(parsed);
+          setRecoveryLoadState("ready");
+          return;
+        }
+        setRecoveryList(null);
+        setRecoveryLoadState(
+          asRecord(body)?.status === "unavailable" ? "unavailable" : "error",
+        );
+      } catch {
+        if (signal?.aborted) return;
+        setRecoveryList(null);
+        setRecoveryLoadState("error");
+      }
+    },
+    [slug],
+  );
 
   useEffect(() => {
     if (!open) return;
+    const controller = new AbortController();
     setFile(null);
     setImportPreview(null);
     setAssigneeMappings({});
@@ -369,10 +549,24 @@ export function BoardImportDialog({
     setLabelResolutions({});
     setError(null);
     setNotice(null);
-  }, [open]);
+    setRecoveryList(null);
+    setRecoveryLoadState("loading");
+    setRestorePreview(null);
+    setPendingRestoreOperation(null);
+    setRestoreError(null);
+    void loadRecoveries(controller.signal);
+    return () => controller.abort();
+  }, [loadRecoveries, open]);
 
   function handleClose() {
-    if (isPreparing || isSavingDecisions || isConfirming) return;
+    if (
+      isPreparing ||
+      isSavingDecisions ||
+      isConfirming ||
+      isPreparingRestore ||
+      isConfirmingRestore
+    )
+      return;
     onClose();
   }
 
@@ -801,7 +995,153 @@ export function BoardImportDialog({
     }
   }
 
-  const busy = isPreparing || isSavingDecisions || isConfirming;
+  async function prepareRestore(recovery: ImportRecovery) {
+    if (!recovery.restorable || isPreparingRestore) return;
+    setIsPreparingRestore(true);
+    setRestoreError(null);
+    setRestorePreview(null);
+    const operationId =
+      pendingRestoreOperation?.generationId === recovery.generation_id
+        ? pendingRestoreOperation.operationId
+        : crypto.randomUUID();
+    setPendingRestoreOperation({
+      generationId: recovery.generation_id,
+      operationId,
+    });
+    try {
+      const response = await fetch(
+        `/api/boards/${encodeURIComponent(slug)}/import/recoveries`,
+        {
+          method: "POST",
+          cache: "no-store",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            generation_id: recovery.generation_id,
+            operation_id: operationId,
+          }),
+        },
+      );
+      const body: unknown = await response.json();
+      const parsed = parseRestorePreview(body);
+      if (
+        response.ok &&
+        parsed &&
+        parsed.operation_id === operationId &&
+        parsed.restored_generation_id === recovery.generation_id
+      ) {
+        setPendingRestoreOperation(null);
+        setRestorePreview(parsed);
+        return;
+      }
+      const status = asRecord(body)?.status;
+      if (status === "conflict") {
+        setPendingRestoreOperation(null);
+        setRestoreError(
+          "El tablero cambió. La vista previa anterior ya no sirve; revisa la versión vigente y prepara otra.",
+        );
+        await loadRecoveries();
+        return;
+      }
+      if (status === "expired" || status === "metadata_unavailable") {
+        setPendingRestoreOperation(null);
+        setRestoreError(
+          status === "metadata_unavailable"
+            ? "Esta versión es anterior al registro del nombre y la zona horaria reemplazados, así que no se puede restaurar completa."
+            : "El plazo de siete días venció. Esta versión ya no se puede restaurar.",
+        );
+        await loadRecoveries();
+        return;
+      }
+      setRestoreError(
+        "No se pudo preparar la vista previa. El contenido actual no cambió.",
+      );
+    } catch {
+      setRestoreError(
+        "No se confirmó el resultado de la vista previa. Vuelve a intentarlo para consultar la misma operación.",
+      );
+    } finally {
+      setIsPreparingRestore(false);
+    }
+  }
+
+  async function confirmRestore() {
+    if (!restorePreview || isConfirmingRestore) return;
+    setIsConfirmingRestore(true);
+    setRestoreError(null);
+    try {
+      const response = await fetch(
+        `/api/boards/${encodeURIComponent(slug)}/import/recoveries/${encodeURIComponent(restorePreview.operation_id)}/confirm`,
+        {
+          method: "POST",
+          cache: "no-store",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            generation_id: restorePreview.restored_generation_id,
+            expected_content_revision: restorePreview.content_revision,
+          }),
+        },
+      );
+      const body: unknown = await response.json();
+      if (response.ok && asRecord(body)?.status === "confirmed") {
+        setRestorePreview(null);
+        setPendingRestoreOperation(null);
+        try {
+          await onConfirmed();
+          onClose();
+        } catch {
+          setNotice(
+            "La recuperación se confirmó, pero no se pudo actualizar la vista. Recarga el tablero para ver la versión recuperada.",
+          );
+          await loadRecoveries();
+        }
+        return;
+      }
+      const status = asRecord(body)?.status;
+      if (status === "conflict") {
+        setRestorePreview(null);
+        setPendingRestoreOperation(null);
+        setRestoreError(
+          "El contenido cambió desde la vista previa. Se descartó esa confirmación; prepara una vista nueva para revisar la versión vigente.",
+        );
+        await loadRecoveries();
+        return;
+      }
+      if (status === "capacity") {
+        setRestorePreview(null);
+        setPendingRestoreOperation(null);
+        setRestoreError(
+          "La cuota ya no alcanza para conservar el contenido sustituido. Libera capacidad y prepara una vista previa nueva.",
+        );
+        await loadRecoveries();
+        return;
+      }
+      if (status === "expired" || status === "metadata_unavailable") {
+        setRestorePreview(null);
+        setPendingRestoreOperation(null);
+        setRestoreError(
+          status === "metadata_unavailable"
+            ? "No se puede restaurar esta versión porque falta su snapshot histórico del tablero."
+            : "Venció el plazo de recuperación de siete días antes de confirmar.",
+        );
+        await loadRecoveries();
+        return;
+      }
+      setRestoreError("No se pudo confirmar la recuperación.");
+    } catch {
+      setRestoreError(
+        "No se confirmó el resultado. Vuelve a confirmar esta misma vista previa para consultar el recibo de la operación.",
+      );
+    } finally {
+      setIsConfirmingRestore(false);
+    }
+  }
+
+  const busy =
+    isPreparing ||
+    isSavingDecisions ||
+    isConfirming ||
+    isPreparingRestore ||
+    isConfirmingRestore;
 
   return (
     <Modal
@@ -811,6 +1151,173 @@ export function BoardImportDialog({
       fullScreenMobile
     >
       <div className="space-y-5 text-sm text-text-secondary leading-relaxed">
+        <section
+          className="space-y-3"
+          aria-labelledby="board-import-recovery-heading"
+        >
+          <h3
+            id="board-import-recovery-heading"
+            className="font-medium text-text-primary"
+          >
+            Recuperar contenido previo a una importación
+          </h3>
+          <p>
+            Solo el propietario actual puede consultar y recuperar versiones
+            reemplazadas. Cada versión aparece hasta su vencimiento, a los siete
+            días de haber sido sustituida. La recuperación conserva el
+            propietario, las membresías, los avisos y las preferencias actuales.
+          </p>
+          {recoveryLoadState === "loading" ? (
+            <p aria-live="polite">Cargando versiones recuperables…</p>
+          ) : null}
+          {recoveryLoadState === "unavailable" ? (
+            <p>
+              La recuperación de reemplazos está disponible para el propietario
+              actual del tablero.
+            </p>
+          ) : null}
+          {recoveryLoadState === "error" ? (
+            <div className="space-y-2">
+              <p role="alert" className="text-priority-urgent">
+                No se pudieron cargar las versiones recuperables. Intenta de
+                nuevo más tarde.
+              </p>
+              <Button onClick={() => void loadRecoveries()} disabled={busy}>
+                Volver a cargar versiones
+              </Button>
+            </div>
+          ) : null}
+          {recoveryList ? (
+            <>
+              <div className="space-y-1 rounded-md border border-border bg-surface-raised p-3">
+                <p className="font-medium text-text-primary">
+                  Tablero actual: {recoveryList.current_board.name} ·{" "}
+                  {recoveryList.current_board.time_zone}
+                </p>
+                <p>{describeGeneration(recoveryList.current)}</p>
+                <p>
+                  Capacidad de adjuntos:{" "}
+                  {formatBytes(recoveryList.capacity.used_bytes)} de{" "}
+                  {formatBytes(recoveryList.capacity.limit_bytes)}.
+                </p>
+              </div>
+              {recoveryList.recoveries.length === 0 ? (
+                <p>No hay reemplazos dentro de la ventana de siete días.</p>
+              ) : (
+                <div className="space-y-3">
+                  {recoveryList.recoveries.map((recovery) => (
+                    <article
+                      key={recovery.generation_id}
+                      className="space-y-2 rounded-md border border-border p-3"
+                    >
+                      <h4 className="font-medium text-text-primary">
+                        {recovery.board?.name ?? "Versión histórica"}
+                        {recovery.board
+                          ? ` · ${recovery.board.time_zone}`
+                          : " · encabezado histórico no disponible"}
+                      </h4>
+                      <p>{describeGeneration(recovery.content)}</p>
+                      <p>
+                        Conservada desde {formatDate(recovery.retained_at)} ·
+                        recuperable hasta {formatDate(recovery.expires_at)}.
+                      </p>
+                      {recovery.restorable ? (
+                        <Button
+                          onClick={() => void prepareRestore(recovery)}
+                          disabled={
+                            busy ||
+                            restorePreview !== null ||
+                            importPreview !== null
+                          }
+                          aria-busy={isPreparingRestore}
+                          aria-label={`Revisar recuperación de ${recovery.board?.name ?? "versión histórica"}`}
+                        >
+                          {isPreparingRestore
+                            ? "Preparando vista previa…"
+                            : "Revisar recuperación"}
+                        </Button>
+                      ) : (
+                        <output aria-live="polite">
+                          No se puede restaurar: falta el snapshot histórico de
+                          nombre y zona horaria de una versión anterior a esta
+                          función.
+                        </output>
+                      )}
+                    </article>
+                  ))}
+                </div>
+              )}
+            </>
+          ) : null}
+          {restorePreview ? (
+            <div className="space-y-3 rounded-md border border-border bg-surface-raised p-3">
+              <h4 className="font-medium text-text-primary">
+                Vista previa de la recuperación
+              </h4>
+              <p>
+                Nombre y zona horaria: actual «
+                {restorePreview.current_board.name}» (
+                {restorePreview.current_board.time_zone}); recuperado «
+                {restorePreview.restored_board.name}» (
+                {restorePreview.restored_board.time_zone}).
+              </p>
+              <p>
+                <strong className="text-text-primary">Se sustituiría:</strong>{" "}
+                {describeGeneration(restorePreview.current)}
+              </p>
+              <p>
+                <strong className="text-text-primary">Se recuperaría:</strong>{" "}
+                {describeGeneration(restorePreview.restored)}
+              </p>
+              <p>
+                Capacidad de adjuntos:{" "}
+                {formatBytes(restorePreview.capacity.used_bytes)} de{" "}
+                {formatBytes(restorePreview.capacity.limit_bytes)}. El contenido
+                sustituido también quedaría retenido siete días.
+              </p>
+              <p>
+                Esta versión vence {formatDate(restorePreview.expires_at)}. La
+                vista previa vence{" "}
+                {formatDate(restorePreview.preview_expires_at)}; cualquier
+                cambio exige preparar otra.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="primary"
+                  onClick={() => void confirmRestore()}
+                  disabled={busy || !restorePreview.capacity.can_restore}
+                  aria-busy={isConfirmingRestore}
+                >
+                  {isConfirmingRestore
+                    ? "Recuperando…"
+                    : "Confirmar recuperación"}
+                </Button>
+                <Button
+                  onClick={() => {
+                    setRestorePreview(null);
+                    setPendingRestoreOperation(null);
+                    setRestoreError(null);
+                  }}
+                  disabled={busy}
+                >
+                  Descartar vista previa
+                </Button>
+              </div>
+              {!restorePreview.capacity.can_restore ? (
+                <p role="alert" className="text-priority-urgent">
+                  La cuota actual no permite conservar el contenido que se
+                  sustituiría.
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+          {restoreError ? (
+            <p role="alert" className="text-priority-urgent">
+              {restoreError}
+            </p>
+          ) : null}
+        </section>
+
         <section className="space-y-3" aria-labelledby="board-import-heading">
           <h3
             id="board-import-heading"
@@ -899,6 +1406,7 @@ export function BoardImportDialog({
                 !file ||
                 busy ||
                 importPreview !== null ||
+                restorePreview !== null ||
                 labelConflicts.some(
                   (conflict) =>
                     !labelResolutions[conflict.source_ref]?.trim() ||
@@ -1041,6 +1549,7 @@ export function BoardImportDialog({
                     onClick={() => void confirmImport()}
                     disabled={
                       busy ||
+                      restorePreview !== null ||
                       importPreview.status !== "prepared" ||
                       !importPreview.capacity.can_replace ||
                       (importPreview.source_version === 2 &&

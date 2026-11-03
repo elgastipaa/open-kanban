@@ -1027,5 +1027,8 @@ BEGIN
 END;
 $$;
 
+\if :{?issue45_recovery}
+\else
 DROP TABLE public.issue44_import_fixture;
+\endif
 \echo 'PASS: v2 preserves all content relationships/history, reserves objects before publication, and swaps metadata/pointer atomically.'

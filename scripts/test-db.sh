@@ -248,6 +248,13 @@ for migration in "$repo_dir"/supabase/migrations/*.sql; do
   fi
 done
 "${psql[@]}" -f "$repo_dir/tests/fixtures/google-access.sql"
+if [[ "${TEST_DB_FOCUS:-}" == 'issue50' ]]; then
+  PG_BINDIR="$pg_bin" OPENKANBAN_TEST_DB_DIR="$test_dir" \
+    OPENKANBAN_TEST_DB_PORT=55439 \
+    bash "$repo_dir/scripts/rehearse-instance-backup.sh"
+  printf 'Issue #50 instance restore assertions passed (disposable PostgreSQL).\n'
+  exit 0
+fi
 if [[ "${TEST_DB_FOCUS:-}" == 'issue49' ]]; then
   "${psql[@]}" -f "$repo_dir/tests/db/anonymous_surface.sql"
   "${psql[@]}" -f "$repo_dir/tests/db/closed_access.sql"

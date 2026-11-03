@@ -64,6 +64,7 @@ target_pg_restore() {
 
 printf 'Cargando un fixture local de mantenimiento con actores y bytes sintéticos.\n'
 source_psql -q -f "$repo_dir/tests/db/issue50_rehearsal_fixture.sql"
+source_psql -q -f "$repo_dir/tests/db/anonymous_surface.sql"
 
 snapshot_id=$(source_psql -At -c 'SELECT snapshot_id FROM issue50_rehearsal.instance_snapshot WHERE singleton')
 checkpoint_ms=$(source_psql -At -c "SELECT floor(extract(epoch FROM checkpoint_at) * 1000)::bigint FROM issue50_rehearsal.instance_snapshot WHERE snapshot_id = '$snapshot_id'")
@@ -178,6 +179,7 @@ printf 'Ejecutando el primer restore aislado.\n'
   -U postgres --owner=postgres --template=template0 issue50_failed_upgrade
 target_pg_restore issue50_failed_upgrade
 target_psql issue50_failed_upgrade -q -f "$repo_dir/tests/db/issue50_restore_assert.sql"
+target_psql issue50_failed_upgrade -q -f "$repo_dir/tests/db/anonymous_surface.sql"
 
 printf 'Inyectando una migración fallida y comprobando el rollback de su DDL.\n'
 failure_log=$run_dir/failed-upgrade.log
@@ -230,6 +232,7 @@ if [[ "$restored_marker" != 'snapshot-v1' || "$restored_storage_hash" != "$fixtu
   exit 1
 fi
 target_psql issue50_recovered -q -f "$repo_dir/tests/db/issue50_restore_assert.sql"
+target_psql issue50_recovered -q -f "$repo_dir/tests/db/anonymous_surface.sql"
 
 source_acl=$run_dir/source-acl.txt
 target_acl=$run_dir/target-acl.txt

@@ -32,7 +32,7 @@ La matriz reúne pruebas PostgreSQL existentes y añade una regresión para los 
 
 ## Inspección estática HTTP/Next
 
-Se inventariaron los 15 Route Handlers en src/app/api/**/route.ts, src/app/auth/callback/route.ts y módulos "use server" de src/lib/*actions.ts: auth, board-departure, board-member-removal, invitation, saved-view, theme-preference y view-preference. Los endpoints privados de tablero/adjuntos/import/export/admin/capacidad pasan por getTaskAttachmentSession(), que llama auth.getUser() y requiere acceso de aplicación activo; /api/search verifica auth.getUser() explícitamente. El cron valida Authorization: Bearer con secreto configurado, comparación de bytes de longitud constante y 404 si no coincide. El callback es una entrada pública al intercambio de código de Auth, no devuelve contenido del tablero y marca éxito/error private, no-store. /invite/[token] requiere sesión antes de obtener la vista previa de invitación dirigida por token.
+Se inventariaron los 15 Route Handlers: /api/admin/task-attachments; /api/admin/task-attachments/[attachmentId]; /api/boards/[slug]/export; /api/boards/[slug]/export/[exportId]; /api/boards/[slug]/import; /api/boards/[slug]/import/[operationId]/confirm; /api/boards/[slug]/import/[operationId]/labels; /api/boards/[slug]/import/recoveries; /api/boards/[slug]/import/recoveries/[operationId]/confirm; /api/boards/[slug]/task-attachments; /api/boards/[slug]/tasks/[taskId]/attachments; /api/boards/[slug]/tasks/[taskId]/attachments/[attachmentId]; /api/cron/task-attachment-cleanup; /api/search; /api/task-attachment-capacity-notices. También se inspeccionaron src/app/auth/callback/route.ts y los módulos "use server" src/lib/auth-actions.ts, board-departure-actions.ts, board-member-removal-actions.ts, invitation-actions.ts, saved-view-actions.ts, theme-preference-actions.ts y view-preference-actions.ts. Los endpoints privados de tablero/adjuntos/import/export/admin/capacidad pasan por getTaskAttachmentSession(), que llama auth.getUser() y requiere acceso de aplicación activo; /api/search verifica auth.getUser() explícitamente. El cron valida Authorization: Bearer con secreto configurado, comparación de bytes de longitud constante y 404 si no coincide. El callback es una entrada pública al intercambio de código de Auth, no devuelve contenido del tablero y marca éxito/error private, no-store. /invite/[token] requiere sesión antes de obtener la vista previa de invitación dirigida por token.
 
 Todos los módulos Server Actions localizados verifican usuario con auth.getUser() antes de la RPC. Las respuestas JSON/descargas privadas inspeccionadas tienen Cache-Control: private, no-store, max-age=0; no se hallaron directivas use cache en src/app o src/lib. Next.js 16.4.2 documenta que Route Handlers no se cachean por defecto. Es revisión de fuente/configuración del repositorio, no observación de reverse proxy, CDN ni cliente desplegado.
 
@@ -57,14 +57,19 @@ Se corrige en supabase/migrations/073_revoke_public_helper_execute.sql, después
 - pnpm exec next typegen — PASS.
 - pnpm typecheck — PASS (tsc --noEmit).
 - pnpm build — PASS con Next.js 16.4.2.
-- pnpm test:db — pendiente de la corrida completa final solicitada tras revisión.
-- git diff --check y bash -n scripts/test-db.sh scripts/test-db-issue-49.sh — pendientes de registrar junto a la corrida final.
+- pnpm test:db — FAIL (exit 3) en tests/db/repetition_series_recovery.sql:419. Primer error: “Finite recovery created intermediate or extended dates”; el resultado fue {"status":"confirmed","task_id":"e57f8819-50f5-4e54-b829-61315828e17b","series_id":"fbaede1e-2875-4f2c-8b59-f75a6bd94b66","next_due_on":null,"series_state":"finished","occurrence_on":"2026-11-02","consumed_count":3}. La suite completa se detuvo ahí, antes de terminar la matriz completa; el archivo/funcionalidad no se modifica en este cambio. La matriz focal issue-49 sí terminó PASS.
+- git diff --cached --check — PASS.
+- bash -n scripts/test-db.sh scripts/test-db-issue-49.sh — PASS.
 
 El harness no lee .env.local, DATABASE_URL o PGHOST; no se usaron credenciales, cuentas, datos, Auth/PostgREST/Realtime/Storage remotos, main, producción ni deploy. Docker Desktop no pudo inicializar su listener dockerInference; no se modificó Docker/configuración de usuario ni se intentó servicio remoto.
 
 ## Revisiones finales
 
-Pendiente de completar en el SHA final de esta rama.
+Read-only sobre el primer commit de código/evidencia 3eb9d920cca3af4c28e84ddd466ab48fb13a2114, contra la base fija indicada arriba:
+
+- Normas: PASS, sin hallazgos accionables. Se revisaron AGENTS.md, docs/agents/domain.md, docs/agents/implementation-loop.md y el diff completo; no hay CONTRIBUTING/CODING_STANDARDS adicionales.
+- Spec/Privacy: PASS, sin hallazgos accionables; confirmó la distinción entre PostgreSQL sintético, inspección estática y gates externos, además de preservar los nueve blockers.
+- Se solicita una segunda revisión read-only sobre el HEAD final porque este artefacto añade el resultado de la suite completa después de la primera revisión. El código productivo y SQL no cambian en esa actualización documental.
 
 ## Gates que siguen pendientes
 

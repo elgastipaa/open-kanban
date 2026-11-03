@@ -19,19 +19,7 @@ FROM issue52_rehearsal.inventory AS inventory
 WHERE inventory.board_id = board.id;
 ALTER TABLE public.boards ENABLE TRIGGER boards_require_owner;
 
-DO $$
-BEGIN
-  IF (SELECT count(*) FROM issue52_rehearsal.inventory) <> 2
-    OR EXISTS (
-      SELECT 1
-      FROM issue52_rehearsal.inventory AS inventory
-      JOIN public.boards AS board ON board.id = inventory.board_id
-      WHERE board.owner_id IS DISTINCT FROM inventory.explicit_owner_id
-    ) THEN
-    RAISE EXCEPTION 'La asignación de owners no coincide con el inventario explícito';
-  END IF;
-END;
-$$;
+\ir issue52_owner_map_assert.sql
 COMMIT;
 
 \echo 'PASS: el mapa de owners y el bootstrap admin quedaron explícitos antes de 017.'

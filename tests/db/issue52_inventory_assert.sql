@@ -1,5 +1,6 @@
 \set ON_ERROR_STOP on
 \echo 'Comprobando inventario, identidades y owners explícitos del fixture #52'
+\ir issue52_owner_map_assert.sql
 
 DO $$
 DECLARE
@@ -8,10 +9,6 @@ DECLARE
   v_admin issue52_rehearsal.bootstrap%ROWTYPE;
   v_count integer;
 BEGIN
-  IF (SELECT count(*) FROM issue52_rehearsal.inventory) <> 2 THEN
-    RAISE EXCEPTION 'El ensayo no conserva el inventario ficticio completo';
-  END IF;
-
   SELECT * INTO STRICT v_admin FROM issue52_rehearsal.bootstrap WHERE singleton;
   IF NOT EXISTS (
     SELECT 1 FROM public.application_access AS access
@@ -26,9 +23,8 @@ BEGIN
 
   FOR v_inventory IN SELECT * FROM issue52_rehearsal.inventory ORDER BY slug LOOP
     SELECT * INTO STRICT v_board FROM public.boards WHERE id = v_inventory.board_id;
-    IF v_board.slug IS DISTINCT FROM v_inventory.slug
-      OR v_board.owner_id IS DISTINCT FROM v_inventory.explicit_owner_id THEN
-      RAISE EXCEPTION 'El tablero % no conserva el owner explícito del inventario', v_inventory.slug;
+    IF v_board.slug IS DISTINCT FROM v_inventory.slug THEN
+      RAISE EXCEPTION 'El tablero % no conserva su slug de inventario', v_inventory.slug;
     END IF;
 
     IF NOT EXISTS (

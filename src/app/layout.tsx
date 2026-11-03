@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Bricolage_Grotesque, Inter } from "next/font/google";
+import { PwaProvider } from "@/components/pwa/pwa-provider";
 import { GlobalSearchLauncher } from "@/components/search/global-search-launcher";
 import { ThemePreferenceProvider } from "@/components/theme/theme-preference-provider";
 import { OfflineBanner } from "@/components/ui/offline-banner";
@@ -163,10 +164,12 @@ export default async function RootLayout({
           initialPreference={themeBootstrap.preference}
           loadFailed={themeBootstrap.loadFailed}
         >
-          <OfflineBanner />
-          <GlobalSearchLauncher enabled={themeBootstrap.searchEnabled} />
-          {children}
-          <ThemeAwareToaster />
+          <PwaProvider>
+            <OfflineBanner />
+            <GlobalSearchLauncher enabled={themeBootstrap.searchEnabled} />
+            {children}
+            <ThemeAwareToaster />
+          </PwaProvider>
         </ThemePreferenceProvider>
       </body>
     </html>

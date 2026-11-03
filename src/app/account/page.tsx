@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { SignOutButton } from "@/components/auth/sign-out-button";
+import { PwaInstallControl } from "@/components/pwa/pwa-install-control";
 import { ThemePreferenceControl } from "@/components/theme/theme-preference-provider";
 import { resolveApplicationAccess } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
@@ -43,6 +44,7 @@ export default async function AccountPage() {
         <div className="mt-8 max-w-xs">
           <ThemePreferenceControl />
         </div>
+        <PwaInstallControl />
       </section>
     </main>
   );

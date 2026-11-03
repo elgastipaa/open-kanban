@@ -248,6 +248,40 @@ for migration in "$repo_dir"/supabase/migrations/*.sql; do
   fi
 done
 "${psql[@]}" -f "$repo_dir/tests/fixtures/google-access.sql"
+if [[ "${TEST_DB_FOCUS:-}" == 'issue49' ]]; then
+  "${psql[@]}" -f "$repo_dir/tests/db/anonymous_surface.sql"
+  "${psql[@]}" -f "$repo_dir/tests/db/closed_access.sql"
+  "${psql[@]}" -f "$repo_dir/tests/db/authentication.sql"
+  "${psql[@]}" -f "$repo_dir/tests/db/realtime_epoch.sql"
+  "${psql[@]}" -f "$repo_dir/tests/db/admin_authorization.sql"
+  "${psql[@]}" -f "$repo_dir/tests/db/private_boards.sql"
+  "${psql[@]}" -q -f "$repo_dir/tests/db/my_tasks.sql"
+  "${psql[@]}" -q -f "$repo_dir/tests/db/task_comment_recovery_window.sql"
+  "${psql[@]}" -q -f "$repo_dir/tests/db/task_comment_operation.sql"
+  "${psql[@]}" -q -f "$repo_dir/tests/db/board_membership_departure.sql"
+  "${psql[@]}" -f "$repo_dir/tests/realtime/prepare.sql"
+  "${psql[@]}" -f "$repo_dir/tests/realtime/late-revocation.sql"
+  "${psql[@]}" -q -f "$repo_dir/tests/db/board_member_removal.sql"
+  "${psql[@]}" -q -f "$repo_dir/tests/db/access_suspension.sql"
+  "${psql[@]}" -q -f "$repo_dir/tests/db/board_favorites.sql"
+  "${psql[@]}" -q -f "$repo_dir/tests/db/context_preferences.sql"
+  "${psql[@]}" -f "$repo_dir/tests/db/saved_views.sql"
+  "${psql[@]}" -f "$repo_dir/tests/db/labels.sql"
+  "${psql[@]}" -f "$repo_dir/tests/db/unified_search.sql"
+  "${psql[@]}" -f "$repo_dir/tests/db/task_activity.sql"
+  "${psql[@]}" -f "$repo_dir/tests/db/task_notifications.sql" \
+    -f "$repo_dir/tests/db/task_notification_batches.sql"
+  "${psql[@]}" -f "$repo_dir/tests/db/task_attachment_contract.sql"
+  "${psql[@]}" -f "$repo_dir/tests/db/board_export_snapshot.sql"
+  bash "$repo_dir/scripts/test-db-issue-42-race.sh" \
+    "$pg_bin/psql" "$test_dir" 55439 "$test_dir/issue49-export-edit-race"
+  "${psql[@]}" -q -c 'DROP TABLE public.issue42_export_fixture'
+  # These suites exercise global ledgers and need a clean disposable database.
+  TEST_DB_FOCUS=issue41 bash "$repo_dir/scripts/test-db.sh"
+  TEST_DB_FOCUS=issue45 bash "$repo_dir/scripts/test-db.sh"
+  printf 'Issue #49 cross-surface regressions passed (disposable PostgreSQL; Storage bytes/Realtime transport are not running).\n'
+  exit 0
+fi
 if [[ "${TEST_DB_FOCUS:-}" == 'issue23' ]]; then
   "${psql[@]}" -f "$repo_dir/tests/db/daily_repetition.sql"
   printf 'Issue #23 database regression tests passed (disposable PostgreSQL).\n'

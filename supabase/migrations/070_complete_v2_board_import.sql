@@ -12,6 +12,18 @@ ALTER TABLE public.board_import_operations
     OR (source_version = 2 AND pg_catalog.jsonb_typeof(source_manifest) = 'object')
   );
 
+-- Imported system history has no local actor; keep it explicitly imported
+-- without inventing a user name for the activity snapshot.
+ALTER TABLE public.task_activity_events
+  DROP CONSTRAINT task_activity_actor_snapshot_shape,
+  ADD CONSTRAINT task_activity_actor_snapshot_shape CHECK (
+    (actor_type = 'system' AND actor_name IS NULL)
+    OR (actor_type = 'user'
+      AND actor_name IS NOT NULL AND pg_catalog.btrim(actor_name) <> '')
+    OR (actor_type = 'imported'
+      AND (actor_name IS NULL OR pg_catalog.btrim(actor_name) <> ''))
+  );
+
 -- Imported conversations retain their visible author snapshot without
 -- assigning an old comment to the current owner.
 ALTER TABLE public.task_comments ALTER COLUMN author_id DROP NOT NULL;
@@ -434,6 +446,25 @@ AS $$
     'current', public.board_import_generation_summary_p(
       p_operation.board_id, p_operation.base_generation_id
     ),
+    'current_board', (
+      SELECT pg_catalog.jsonb_build_object(
+        'name', board.name,
+        'time_zone', board.time_zone
+      )
+      FROM public.boards AS board
+      WHERE board.id = p_operation.board_id
+    ),
+    'proposed_board', CASE WHEN p_operation.source_version = 2 THEN (
+      SELECT pg_catalog.jsonb_build_object(
+        'name', record.record->>'name',
+        'time_zone', record.record->>'time_zone'
+      )
+      FROM public.board_import_v2_records AS record
+      WHERE record.actor_id = p_operation.actor_id
+        AND record.operation_id = p_operation.operation_id
+        AND record.entity = 'board'
+      LIMIT 1
+    ) ELSE NULL END,
     'imported', CASE WHEN p_operation.source_version = 2
         AND NOT p_operation.v2_labels_materialized THEN pg_catalog.jsonb_set(
           public.board_import_generation_summary_p(
@@ -1562,7 +1593,7 @@ BEGIN
   )
   SELECT public.board_import_v2_target_id_p(v_actor_id, p_operation_id, record->>'id', 'activity'),
     v_board.id, public.board_import_v2_target_id_p(v_actor_id, p_operation_id, record->>'task_id', 'task'),
-    record->>'category', CASE WHEN record->>'actor_type' = 'system' THEN 'system' ELSE 'imported' END,
+    record->>'category', 'imported',
     CASE WHEN record->>'actor_type' = 'system' THEN NULL ELSE record->>'actor_name' END,
     (record->>'occurred_at')::timestamptz, record->'before_value', record->'after_value'
   FROM public.board_import_v2_records

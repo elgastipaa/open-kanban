@@ -42,7 +42,7 @@
     "test:unit:issue-41": "node --experimental-strip-types --test tests/unit/task-attachment-board-cleanup.test.mjs tests/unit/task-attachment-capacity-notice.test.mjs tests/unit/task-attachment-admin-summary.test.mjs",
     "test:unit:issue-42": "node --experimental-strip-types --test tests/unit/portable-export-zip.test.mjs tests/unit/portable-export-contract.test.mjs",
     "test:unit:issue-43": "node --experimental-strip-types --test tests/unit/legacy-board-import.test.mjs tests/unit/board-import-contract.test.mjs",
-    "test:unit:issue-44": "node --experimental-strip-types --test tests/unit/portable-board-import-zip.test.mjs tests/unit/portable-board-import.test.mjs tests/unit/portable-board-import-adapter.test.mjs",
+    "test:unit:issue-44": "node --experimental-strip-types --test tests/unit/portable-board-import-auth.test.mjs tests/unit/portable-board-import-preview.test.mjs tests/unit/portable-board-import-zip.test.mjs tests/unit/portable-board-import.test.mjs tests/unit/portable-board-import-adapter.test.mjs",
     "test:db:issue-26": "bash scripts/test-db-issue-26.sh",
     "test:db": "bash scripts/test-db.sh",
     "test:db:issue-23": "bash scripts/test-db-issue-23.sh",

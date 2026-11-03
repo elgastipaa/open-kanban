@@ -28,6 +28,14 @@ test("import and confirm routes authenticate the actor and call atomic owner RPC
   assert.match(prepareRoute, /no cumple el formato permitido/u);
   assert.match(prepareRoute, /MAX_PORTABLE_BOARD_IMPORT_BYTES/u);
   assert.match(prepareRoute, /preparePortableBoardImport\(/u);
+  assert.match(
+    prepareRoute,
+    /runAfterCurrentBoardOwnerCheck\([\s\S]*?\(\) => spoolPortableBoardImportRequest\(request\)/u,
+  );
+  assert.match(
+    prepareRoute,
+    /runAfterCurrentBoardOwnerCheck\([\s\S]*?\(\) => readBoundedRequestBody\(request\)/u,
+  );
   assert.match(confirmRoute, /getTaskAttachmentSession\(\)/u);
   assert.match(confirmRoute, /confirm_board_import_p/u);
   assert.match(confirmRoute, /p_expected_content_revision/u);
@@ -70,6 +78,9 @@ test("the owner-facing UI shows the version and requires explicit replacement co
   assert.match(dialog, /role="alert"/u);
   assert.match(dialog, /<output aria-live="polite"/u);
   assert.match(dialog, /Persona importada/u);
+  assert.match(dialog, /compareBoardImportHeaders/u);
+  assert.match(dialog, /current_board/u);
+  assert.match(dialog, /proposed_board/u);
   assert.match(dialog, /sin asignar/iu);
   assert.match(dialog, /assigneeMappings/u);
   assert.match(dialog, /labelConflicts/u);
@@ -92,6 +103,19 @@ test("the owner-facing UI shows the version and requires explicit replacement co
     ),
     { code: "ENOENT" },
   );
+});
+
+test("v2 preview returns and compares destination and proposed board headers", async () => {
+  const migration = await source(
+    "supabase/migrations/070_complete_v2_board_import.sql",
+  );
+  const dialog = await source("src/components/board/board-import-dialog.tsx");
+
+  assert.match(migration, /'current_board'[\s\S]*?'proposed_board'/u);
+  assert.match(migration, /'name', board\.name/u);
+  assert.match(migration, /'time_zone', board\.time_zone/u);
+  assert.match(dialog, /Nombre y zona horaria propuestos/u);
+  assert.match(dialog, /actual «\s*\{change\.current\}\s*»;\s*respaldo/u);
 });
 
 test("the database stages invisible generations and revalidates publication under the board lock", async () => {

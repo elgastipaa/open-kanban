@@ -132,7 +132,7 @@ BEGIN
     (9,'data/repetitions.ndjson','application/x-ndjson',2),
     (10,'data/repetition-labels.ndjson','application/x-ndjson',1),
     (11,'data/repetition-occurrences.ndjson','application/x-ndjson',3),
-    (12,'data/activity.ndjson','application/x-ndjson',1),
+    (12,'data/activity.ndjson','application/x-ndjson',2),
     (13,'data/attachments.ndjson','application/x-ndjson',1),
     (14,'objects/attachment_' || repeat('e', 64) || '.txt','text/plain; charset=utf-8',NULL)
   ) AS file(ordinal, path, content_type, records);
@@ -275,11 +275,18 @@ BEGIN
       'due_on_override','2025-01-04','transferred_to_series_id',NULL,'created_at','2025-01-02T00:00:00Z'
     )
   );
-  v_activity := pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
-    'id','activity_' || repeat('d',64),'task_id','task_' || repeat('3',64),
-    'actor_type','user','category','due_date','actor_name','Ana importada',
-    'occurred_at',v_recent_at::text,'before_value','2025-02-02','after_value','2025-02-03'
-  ));
+  v_activity := pg_catalog.jsonb_build_array(
+    pg_catalog.jsonb_build_object(
+      'id','activity_' || repeat('d',64),'task_id','task_' || repeat('3',64),
+      'actor_type','user','category','due_date','actor_name','Ana importada',
+      'occurred_at',v_recent_at::text,'before_value','2025-02-02','after_value','2025-02-03'
+    ),
+    pg_catalog.jsonb_build_object(
+      'id','activity_' || repeat('f',64),'task_id','task_' || repeat('3',64),
+      'actor_type','system','category','completion','actor_name',NULL,
+      'occurred_at',v_recent_at::text,'before_value',false,'after_value',true
+    )
+  );
   v_attachments := pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
     'id','attachment_' || repeat('e',64),'task_id','task_' || repeat('3',64),
     'file_name','nota.txt','size_bytes',4,'sha256',v_attachment_sha,
@@ -508,6 +515,10 @@ BEGIN
   v_result := public.finalize_board_import_v2_p(v_fixture.slug, v_operation);
   IF v_result->>'status' <> 'prepared' OR v_result->>'source_version' <> '2'
     OR v_result->>'time_zone' <> 'America/Argentina/Buenos_Aires'
+    OR v_result->'current_board'->>'name' <> 'Destino previo'
+    OR v_result->'current_board'->>'time_zone' <> 'UTC'
+    OR v_result->'proposed_board'->>'name' <> 'Respaldo completo'
+    OR v_result->'proposed_board'->>'time_zone' <> 'America/Argentina/Buenos_Aires'
     OR v_result->'imported'->>'tasks' <> '2'
     OR v_result->'imported'->>'comments' <> '1'
     OR v_result->'imported'->>'labels' <> '1'
@@ -894,6 +905,12 @@ BEGIN
       JOIN public.columns AS column_row ON column_row.id = task.column_id
       WHERE column_row.generation_id = imported_generation
         AND event.actor_type = 'imported' AND event.actor_name = 'Ana importada') <> 1
+    OR (SELECT count(*) FROM public.task_activity_events AS event
+      JOIN public.tasks AS task ON task.id = event.task_id
+      JOIN public.columns AS column_row ON column_row.id = task.column_id
+      WHERE column_row.generation_id = imported_generation
+        AND event.actor_type = 'imported' AND event.actor_name IS NULL
+        AND event.category = 'completion') <> 1
     OR EXISTS (
       SELECT 1 FROM public.task_notifications AS notice
       JOIN public.tasks AS task ON task.id = notice.task_id

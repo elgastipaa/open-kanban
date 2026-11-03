@@ -8,6 +8,7 @@ import {
   MAX_PORTABLE_BOARD_IMPORT_BYTES,
   MAX_PORTABLE_BOARD_IMPORT_DECISION_BYTES,
 } from "@/lib/portable-board-import-limits";
+import { compareBoardImportHeaders } from "@/lib/portable-board-import-preview";
 
 interface GenerationSummary {
   columns: number;
@@ -33,6 +34,8 @@ interface ImportPreview {
   content_revision: number;
   source_sha256?: string;
   expires_at: string;
+  current_board?: { name: string; time_zone: string };
+  proposed_board?: { name: string; time_zone: string };
   source_version: 1 | 2;
   current: GenerationSummary;
   imported?: GenerationSummary;
@@ -133,6 +136,22 @@ function parseCapacity(value: unknown): CapacitySnapshot | null {
   };
 }
 
+function parseBoardHeader(
+  value: unknown,
+): { name: string; time_zone: string } | null {
+  const row = asRecord(value);
+  if (
+    !row ||
+    typeof row.name !== "string" ||
+    row.name.trim().length === 0 ||
+    typeof row.time_zone !== "string" ||
+    row.time_zone.trim().length === 0
+  ) {
+    return null;
+  }
+  return { name: row.name, time_zone: row.time_zone };
+}
+
 function parsePreview(value: unknown): ImportPreview | null {
   const row = asRecord(value);
   if (
@@ -164,11 +183,14 @@ function parsePreview(value: unknown): ImportPreview | null {
       : [];
   const sourceVersion =
     row.source_version === undefined ? 1 : row.source_version;
+  const currentBoard = parseBoardHeader(row.current_board);
+  const proposedBoard = parseBoardHeader(row.proposed_board);
   if (
     revision === null ||
     !current ||
     !capacity ||
     (sourceVersion !== 1 && sourceVersion !== 2) ||
+    (sourceVersion === 2 && (!currentBoard || !proposedBoard)) ||
     (row.imported !== undefined && !imported) ||
     !memberRefs.every(
       (reference) =>
@@ -217,6 +239,8 @@ function parsePreview(value: unknown): ImportPreview | null {
     source_sha256:
       typeof row.source_sha256 === "string" ? row.source_sha256 : undefined,
     expires_at: row.expires_at,
+    current_board: currentBoard ?? undefined,
+    proposed_board: proposedBoard ?? undefined,
     source_version: sourceVersion,
     current,
     imported: imported ?? undefined,
@@ -892,6 +916,24 @@ export function BoardImportDialog({
           </div>
           {importPreview?.imported ? (
             <div className="space-y-2 rounded-md border border-border bg-surface-raised p-3">
+              {importPreview.source_version === 2 &&
+              importPreview.current_board &&
+              importPreview.proposed_board ? (
+                <div className="space-y-1">
+                  <p className="font-medium text-text-primary">
+                    Nombre y zona horaria propuestos:
+                  </p>
+                  {compareBoardImportHeaders(
+                    importPreview.current_board,
+                    importPreview.proposed_board,
+                  ).map((change) => (
+                    <p key={change.label}>
+                      <strong>{change.label}:</strong> actual «{change.current}
+                      »; respaldo «{change.proposed}».
+                    </p>
+                  ))}
+                </div>
+              ) : null}
               <p>
                 <strong className="text-text-primary">Contenido actual:</strong>{" "}
                 {describeGeneration(importPreview.current)}

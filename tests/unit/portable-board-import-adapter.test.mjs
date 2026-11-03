@@ -213,7 +213,13 @@ async function openFixture() {
   return { folder, zip: await openPortableBoardImportZip(path) };
 }
 
-function setupAdapter({ failUpload = false, failRemove = false } = {}) {
+function setupAdapter({
+  failUpload = false,
+  failRemove = false,
+  failFinalize = false,
+  leaveObjectAfterRemove = false,
+  listUnavailable = false,
+} = {}) {
   const events = [];
   const stored = new Map();
   const target = {
@@ -256,8 +262,23 @@ function setupAdapter({ failUpload = false, failRemove = false } = {}) {
             events.push(["remove", ...paths]);
             if (failRemove)
               return { error: new Error("synthetic delete uncertainty") };
-            for (const path of paths) stored.delete(path);
+            if (!leaveObjectAfterRemove) {
+              for (const path of paths) stored.delete(path);
+            }
             return { error: null };
+          },
+          async list(prefix, options) {
+            events.push(["list", prefix, options]);
+            if (listUnavailable) {
+              return {
+                data: null,
+                error: new Error("synthetic inventory failure"),
+              };
+            }
+            return {
+              data: stored.has(objectKey) ? [{ name: attachmentId }] : [],
+              error: null,
+            };
           },
         };
       },
@@ -274,6 +295,9 @@ function setupAdapter({ failUpload = false, failRemove = false } = {}) {
         return { data: { status: "reserved", targets: [target] }, error: null };
       }
       if (name === "finalize_board_import_v2_p") {
+        if (failFinalize) {
+          return { data: null, error: new Error("synthetic finalize failure") };
+        }
         return {
           data: { status: "prepared", operation_id: "operation" },
           error: null,
@@ -310,7 +334,7 @@ function setupAdapter({ failUpload = false, failRemove = false } = {}) {
   };
 }
 
-test("v2 objects are reserved before idempotent upload, re-read and finalize", async () => {
+test("populated v2 ZIP exports, parses, stages every entity relation, then reserves and uploads objects", async () => {
   const fixture = await openFixture();
   const { adapter, events, stored } = setupAdapter();
   try {
@@ -335,14 +359,15 @@ test("v2 objects are reserved before idempotent upload, re-read and finalize", a
       names.indexOf("mark_board_import_v2_object_uploaded_p") <
         names.indexOf("finalize_board_import_v2_p"),
     );
+    const stagedBatches = events
+      .filter(
+        (event) =>
+          event[0] === "client-rpc" &&
+          event[1] === "stage_board_import_v2_batch_p",
+      )
+      .map((event) => event[2]);
     assert.deepEqual(
-      events
-        .filter(
-          (event) =>
-            event[0] === "client-rpc" &&
-            event[1] === "stage_board_import_v2_batch_p",
-        )
-        .map((event) => event[2].p_entity),
+      stagedBatches.map((batch) => batch.p_entity),
       [
         "board",
         "columns",
@@ -359,6 +384,37 @@ test("v2 objects are reserved before idempotent upload, re-read and finalize", a
         "attachments",
       ],
     );
+    assert.ok(
+      stagedBatches.every(
+        (batch) => Array.isArray(batch.p_records) && batch.p_records.length > 0,
+      ),
+    );
+    const recordsByEntity = new Map(
+      stagedBatches.map((batch) => [batch.p_entity, batch.p_records]),
+    );
+    const task = recordsByEntity.get("tasks")[0];
+    const column = recordsByEntity.get("columns")[0];
+    const label = recordsByEntity.get("labels")[0];
+    const repetition = recordsByEntity.get("repetitions")[0];
+    const occurrence = recordsByEntity.get("repetition_occurrences")[0];
+    assert.equal(task.column_id, column.id);
+    assert.equal(recordsByEntity.get("comments")[0].task_id, task.id);
+    assert.deepEqual(recordsByEntity.get("task_labels")[0], {
+      task_id: task.id,
+      label_id: label.id,
+    });
+    assert.equal(recordsByEntity.get("birthday_labels")[0].label_id, label.id);
+    assert.equal(
+      recordsByEntity.get("repetition_labels")[0].series_id,
+      repetition.id,
+    );
+    assert.equal(occurrence.series_id, repetition.id);
+    assert.equal(occurrence.state, "excluded");
+    assert.equal(
+      recordsByEntity.get("activity")[0].actor_name,
+      "Ana histórica",
+    );
+    assert.equal(recordsByEntity.get("attachments")[0].id, sourceRef);
     assert.deepEqual(stored.get(objectKey), objectBytes);
     const upload = events.find(([kind]) => kind === "upload");
     assert.equal(upload[1], objectKey);
@@ -425,6 +481,68 @@ test("Storage failure cancels preparation and retains quota metadata without del
     assert.ok(names.includes("remove"));
     assert.ok(!names.includes("complete_board_import_v2_object_cleanup_p"));
     assert.ok(!names.includes("finalize_board_import_v2_p"));
+  } finally {
+    await fixture.zip.close();
+    await rm(fixture.folder, { recursive: true, force: true });
+  }
+});
+
+test("a successful remove response does not release metadata while inventory still lists the object", async () => {
+  const fixture = await openFixture();
+  const { adapter, events, stored } = setupAdapter({
+    failFinalize: true,
+    leaveObjectAfterRemove: true,
+  });
+  try {
+    await assert.rejects(
+      preparePortableBoardImport(
+        fixture.zip,
+        "f".repeat(64),
+        "operation",
+        adapter,
+      ),
+      /No se pudo finalizar/u,
+    );
+    assert.equal(stored.has(objectKey), true);
+    assert.ok(events.some(([kind]) => kind === "remove"));
+    assert.ok(events.some(([kind]) => kind === "list"));
+    assert.ok(
+      !events.some(
+        ([kind, name]) =>
+          kind === "storage-rpc" &&
+          name === "complete_board_import_v2_object_cleanup_p",
+      ),
+    );
+  } finally {
+    await fixture.zip.close();
+    await rm(fixture.folder, { recursive: true, force: true });
+  }
+});
+
+test("an incomplete Storage inventory cannot acknowledge cleanup", async () => {
+  const fixture = await openFixture();
+  const { adapter, events } = setupAdapter({
+    failFinalize: true,
+    listUnavailable: true,
+  });
+  try {
+    await assert.rejects(
+      preparePortableBoardImport(
+        fixture.zip,
+        "f".repeat(64),
+        "operation",
+        adapter,
+      ),
+      /No se pudo finalizar/u,
+    );
+    assert.ok(events.some(([kind]) => kind === "list"));
+    assert.ok(
+      !events.some(
+        ([kind, name]) =>
+          kind === "storage-rpc" &&
+          name === "complete_board_import_v2_object_cleanup_p",
+      ),
+    );
   } finally {
     await fixture.zip.close();
     await rm(fixture.folder, { recursive: true, force: true });

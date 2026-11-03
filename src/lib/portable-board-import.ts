@@ -412,7 +412,7 @@ export function validatePortableBoardImportRecord(
     const activity = parsed as z.infer<typeof recordSchemas.activity>;
     if (
       (activity.actor_type === "system" && activity.actor_name !== null) ||
-      (activity.actor_type !== "system" && activity.actor_name === null) ||
+      (activity.actor_type === "user" && activity.actor_name === null) ||
       (activity.category === "recovery" &&
         (activity.before_value !== null || activity.after_value !== null)) ||
       (activity.category !== "recovery" &&

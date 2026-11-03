@@ -10,6 +10,7 @@ import {
   createPortableBoardImportAdapter,
   PortableBoardImportAdapterError,
 } from "@/lib/portable-board-import-adapter";
+import { runAfterCurrentBoardOwnerCheck } from "@/lib/portable-board-import-auth";
 import {
   PortableBoardImportUploadError,
   spoolPortableBoardImportRequest,
@@ -110,7 +111,17 @@ export async function POST(
     let zip: Awaited<ReturnType<typeof openPortableBoardImportZip>> | null =
       null;
     try {
-      spool = await spoolPortableBoardImportRequest(request);
+      const authorization = await runAfterCurrentBoardOwnerCheck(
+        { client: session.client, actorId: session.actorId, slug },
+        () => spoolPortableBoardImportRequest(request),
+      );
+      if (authorization.status === "not_owner") {
+        return json({ status: "unavailable" }, 404);
+      }
+      if (authorization.status === "unavailable") {
+        return json({ status: "unavailable" }, 503);
+      }
+      spool = authorization.value;
       zip = await openPortableBoardImportZip(spool.path);
       const adapter = createPortableBoardImportAdapter({
         client: session.client,
@@ -147,7 +158,17 @@ export async function POST(
   }
 
   try {
-    const requestBody = await readBoundedRequestBody(request);
+    const authorization = await runAfterCurrentBoardOwnerCheck(
+      { client: session.client, actorId: session.actorId, slug },
+      () => readBoundedRequestBody(request),
+    );
+    if (authorization.status === "not_owner") {
+      return json({ status: "unavailable" }, 404);
+    }
+    if (authorization.status === "unavailable") {
+      return json({ status: "unavailable" }, 503);
+    }
+    const requestBody = authorization.value;
     if (!requestBody) {
       return json(
         {

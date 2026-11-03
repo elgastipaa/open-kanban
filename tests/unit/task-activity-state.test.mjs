@@ -12,6 +12,11 @@ test("activity labels distinguish local actors, system, and imported history", (
     taskActivityActorLabel("imported", "Ana"),
     "Actividad importada · Ana",
   );
+  assert.equal(
+    taskActivityActorLabel("imported", "Importado"),
+    "Actividad importada · Importado",
+  );
+  assert.equal(taskActivityActorLabel("imported", null), "Actividad importada");
 });
 
 test("activity descriptions stay within E05 fields and show before/after", () => {

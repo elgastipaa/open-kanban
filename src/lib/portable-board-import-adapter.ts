@@ -5,6 +5,7 @@ import type {
   PortableBoardImportObjectTarget,
   PortableBoardImportPreview,
 } from "./portable-board-import";
+import { removeTaskAttachmentObjectAndConfirmAbsent } from "./task-attachment-download.ts";
 
 const STORAGE_BUCKET = "task-attachments";
 const UUID =
@@ -30,6 +31,10 @@ interface StorageBucket {
   ): Promise<{ error: unknown }>;
   download(path: string): Promise<{ data: Blob | null; error: unknown }>;
   remove(paths: string[]): Promise<{ error: unknown }>;
+  list(
+    prefix: string,
+    options: { limit: number; search: string },
+  ): Promise<{ data: unknown; error: unknown }>;
 }
 
 interface StorageClient extends RpcClient {
@@ -363,10 +368,12 @@ export function createPortableBoardImportAdapter(input: {
       for (const target of cleanTargets) {
         try {
           const storage = getStorage();
-          const result = await storage.storage
-            .from(STORAGE_BUCKET)
-            .remove([target.objectKey]);
-          if (result.error) continue;
+          const objectAbsent = await removeTaskAttachmentObjectAndConfirmAbsent(
+            storage,
+            target.attachmentId,
+            target.objectKey,
+          );
+          if (!objectAbsent) continue;
           await callRpc(
             storage,
             "complete_board_import_v2_object_cleanup_p",

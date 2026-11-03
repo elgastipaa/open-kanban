@@ -4,7 +4,10 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { preparePortableBoardImport } from "../../src/lib/portable-board-import.ts";
+import {
+  preparePortableBoardImport,
+  validatePortableBoardImportRecord,
+} from "../../src/lib/portable-board-import.ts";
 import { openPortableBoardImportZip } from "../../src/lib/portable-board-import-zip.ts";
 import { createPortableZipStream } from "../../src/lib/portable-export-zip.ts";
 
@@ -102,6 +105,20 @@ function fakeAdapter(overrides = {}) {
   };
   return { adapter, calls };
 }
+
+test("imported activity without a verified actor remains valid for a later export", () => {
+  const event = {
+    id: `activity_${"8".repeat(64)}`,
+    task_id: `task_${"c".repeat(64)}`,
+    actor_type: "imported",
+    category: "completion",
+    actor_name: null,
+    occurred_at: timestamp,
+    before_value: false,
+    after_value: true,
+  };
+  assert.deepEqual(validatePortableBoardImportRecord("activity", event), event);
+});
 
 test("v2 preparation stages the board and populated entities before reserving objects", async () => {
   const populated = {

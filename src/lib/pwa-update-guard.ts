@@ -5,12 +5,22 @@ export interface PwaUpdateGuardRegistry {
 }
 
 export type PwaUpdateChoice = "save" | "discard" | "continue";
+export type PwaUpdateTarget = "waiting" | "active" | "unavailable";
 export type PwaUpdateSaveOutcome =
   | "confirmed"
   | "error"
   | "conflict"
   | "reconciliation";
 export type PwaUpdateResolution = "activate" | "wait" | "cancel";
+
+/** Choose the update path again after a local editor has resolved. */
+export function getPwaUpdateTarget(
+  hasWaitingWorker: boolean,
+  activatedElsewhere: boolean,
+): PwaUpdateTarget {
+  if (hasWaitingWorker) return "waiting";
+  return activatedElsewhere ? "active" : "unavailable";
+}
 
 /** Keep the active editor's update guard in its component-local lifetime. */
 export function createPwaUpdateGuardRegistry(): PwaUpdateGuardRegistry {

@@ -12,6 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import {
   createPwaUpdateGuardRegistry,
+  getPwaUpdateTarget,
   type PwaUpdateGuard,
   registerPwaUpdateGuard,
   requestPwaUpdate,
@@ -50,7 +51,8 @@ export function PwaProvider({ children }: { children: ReactNode }) {
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
   const [updateGuardRegistry] = useState(createPwaUpdateGuardRegistry);
   const registrationRef = useRef<ServiceWorkerRegistration | null>(null);
-  const waitingWorkerRef = useRef<ServiceWorker | null>(null);
+  const updateWasWaitingRef = useRef(false);
+  const updateActivatedElsewhereRef = useRef(false);
   const updateApplyingRef = useRef(false);
 
   const registerUpdateGuard = useCallback(
@@ -96,8 +98,12 @@ export function PwaProvider({ children }: { children: ReactNode }) {
 
     const checkWaitingWorker = () => {
       const waiting = registration?.waiting;
-      if (!waiting || !navigator.serviceWorker.controller) return;
-      waitingWorkerRef.current = waiting;
+      if (!waiting) {
+        return;
+      }
+      if (!navigator.serviceWorker.controller) return;
+      updateWasWaitingRef.current = true;
+      updateActivatedElsewhereRef.current = false;
       setUpdateAvailable(true);
       setUpdateStatus(null);
     };
@@ -148,10 +154,18 @@ export function PwaProvider({ children }: { children: ReactNode }) {
     const reloadAfterActivation = () => {
       if (!updateApplyingRef.current) return;
       updateApplyingRef.current = false;
+      updateWasWaitingRef.current = false;
+      updateActivatedElsewhereRef.current = false;
       window.location.reload();
     };
     const onControllerChange = () => {
+      const updateWasWaiting = updateWasWaitingRef.current;
       checkWaitingWorker();
+      if (updateWasWaiting && !registration?.waiting) {
+        updateActivatedElsewhereRef.current = true;
+        setUpdateAvailable(true);
+        setUpdateStatus(null);
+      }
       reloadAfterActivation();
     };
     const onVisibilityChange = () => {
@@ -184,25 +198,33 @@ export function PwaProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const requestUpdate = useCallback(() => {
-    const waitingWorker =
-      waitingWorkerRef.current ?? registrationRef.current?.waiting ?? null;
-    if (!waitingWorker) {
-      setUpdateStatus(
-        "No se pudo preparar la actualización. Volvé a intentarlo cuando tengas conexión.",
-      );
-      const registration = registrationRef.current;
-      if (registration) void registration.update().catch(() => undefined);
-      return;
-    }
-
     const activate = () => {
       if (updateApplyingRef.current) return;
+      const waitingWorker = registrationRef.current?.waiting ?? null;
+      const updateTarget = getPwaUpdateTarget(
+        waitingWorker !== null,
+        updateActivatedElsewhereRef.current,
+      );
+      if (updateTarget === "unavailable") {
+        setUpdateStatus(
+          "No se pudo preparar la actualización. Volvé a intentarlo cuando tengas conexión.",
+        );
+        const registration = registrationRef.current;
+        if (registration) void registration.update().catch(() => undefined);
+        return;
+      }
+
       updateApplyingRef.current = true;
       setUpdateApplying(true);
       setUpdateAvailable(false);
       setUpdateStatus("La actualización se está preparando…");
+      if (updateTarget === "active") {
+        window.location.reload();
+        return;
+      }
+
       try {
-        waitingWorker.postMessage({ type: "ACTIVATE_UPDATE" });
+        waitingWorker?.postMessage({ type: "ACTIVATE_UPDATE" });
       } catch {
         updateApplyingRef.current = false;
         setUpdateApplying(false);

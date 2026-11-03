@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   createPwaUpdateGuardRegistry,
+  getPwaUpdateTarget,
   registerPwaUpdateGuard,
   requestPwaUpdate,
   resolvePwaUpdateChoice,
@@ -68,4 +69,53 @@ test("a save without a server response leaves update activation deferred", () =>
   assert.equal(resolvePwaUpdateChoice("save"), "wait");
   assert.equal(activationCount, 0);
   assert.equal(typeof continueUpdate, "function");
+});
+
+test("an update activated in another tab still follows this tab's clean or dirty decision", () => {
+  assert.equal(getPwaUpdateTarget(true, false), "waiting");
+  assert.equal(getPwaUpdateTarget(false, true), "active");
+  assert.equal(getPwaUpdateTarget(false, false), "unavailable");
+
+  const cleanRegistry = createPwaUpdateGuardRegistry();
+  let cleanReloads = 0;
+  assert.equal(
+    requestPwaUpdate(cleanRegistry, () => cleanReloads++),
+    "activated",
+  );
+  assert.equal(cleanReloads, 1);
+
+  const dirtyRegistry = createPwaUpdateGuardRegistry();
+  let continueUpdate = null;
+  let dirtyReloads = 0;
+  registerPwaUpdateGuard(dirtyRegistry, (resume) => {
+    continueUpdate = resume;
+    return true;
+  });
+  assert.equal(
+    requestPwaUpdate(dirtyRegistry, () => dirtyReloads++),
+    "deferred",
+  );
+  assert.equal(dirtyReloads, 0);
+  assert.equal(resolvePwaUpdateChoice("save", "error"), "wait");
+  assert.equal(dirtyReloads, 0);
+  assert.equal(resolvePwaUpdateChoice("continue"), "cancel");
+  assert.equal(dirtyReloads, 0);
+  assert.equal(resolvePwaUpdateChoice("save", "confirmed"), "activate");
+  continueUpdate();
+  assert.equal(dirtyReloads, 1);
+
+  const discardRegistry = createPwaUpdateGuardRegistry();
+  let continueAfterDiscard = null;
+  let discardReloads = 0;
+  registerPwaUpdateGuard(discardRegistry, (resume) => {
+    continueAfterDiscard = resume;
+    return true;
+  });
+  assert.equal(
+    requestPwaUpdate(discardRegistry, () => discardReloads++),
+    "deferred",
+  );
+  assert.equal(resolvePwaUpdateChoice("discard"), "activate");
+  continueAfterDiscard();
+  assert.equal(discardReloads, 1);
 });

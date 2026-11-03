@@ -2316,5 +2316,3 @@ GRANT EXECUTE ON FUNCTION public.confirm_board_import_v2_p(text, uuid, bigint, t
 
 NOTIFY pgrst, 'reload schema';
 COMMIT;
-
-

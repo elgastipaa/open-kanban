@@ -1,5 +1,6 @@
 const CACHE_PREFIX = "openkanban-public-";
-const CACHE_NAME = `${CACHE_PREFIX}v1`;
+// Give each worker release a separate cache so a failed install cannot delete the active worker's shell.
+const CACHE_NAME = `${CACHE_PREFIX}v2`;
 const OFFLINE_URL = "/offline.v1.html";
 // Bump the cache and asset versions together when this public shell changes.
 const PUBLIC_ASSETS = [
@@ -11,8 +12,20 @@ const PUBLIC_ASSET_PATHS = new Set(PUBLIC_ASSETS);
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(PUBLIC_ASSETS)),
+    caches
+      .open(CACHE_NAME)
+      .then((cache) => cache.addAll(PUBLIC_ASSETS))
+      .catch(async (error) => {
+        await caches.delete(CACHE_NAME);
+        throw error;
+      }),
   );
+});
+
+self.addEventListener("message", (event) => {
+  if (event.data?.type === "ACTIVATE_UPDATE") {
+    event.waitUntil(self.skipWaiting());
+  }
 });
 
 self.addEventListener("activate", (event) => {

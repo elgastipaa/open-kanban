@@ -17,6 +17,7 @@ import { TaskCopyAction } from "@/components/board/task-copy-action";
 import { TaskDueDate } from "@/components/board/task-due-date";
 import { TaskRepetition } from "@/components/board/task-repetition";
 import { BoardLabelPicker } from "@/components/labels/board-label-picker";
+import { usePwa } from "@/components/pwa/pwa-provider";
 import { ThemePreferenceControl } from "@/components/theme/theme-preference-provider";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -43,6 +44,11 @@ import type {
   RepetitionTemplateLabelsResult,
 } from "@/lib/db/daily-repetition";
 import { TaskChecklistError, TaskEditError } from "@/lib/db/tasks";
+import {
+  type PwaUpdateChoice,
+  type PwaUpdateSaveOutcome,
+  resolvePwaUpdateChoice,
+} from "@/lib/pwa-update-guard";
 import { resolveTaskChecklistCompletionReview } from "@/lib/task-checklist-completion";
 import {
   getOrCreateTaskChecklistAddCommand,
@@ -417,6 +423,11 @@ export function TaskModal({
   const [reconciliationError, setReconciliationError] = useState("");
   const [isReconciling, setIsReconciling] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
+  const pendingUpdateActivationRef = useRef<(() => void) | null>(null);
+  const updateResolutionSaveFocusRef = useRef<HTMLButtonElement | null>(null);
+  const [isUpdateResolutionPending, setIsUpdateResolutionPending] =
+    useState(false);
+  const { registerUpdateGuard } = usePwa();
 
   // A board refresh for this task must not replace an in-session draft.
   // Reset only when the editor opens for a new task identity.
@@ -509,6 +520,61 @@ export function TaskModal({
     isAssigning ||
     isChecklistWorking;
 
+  useEffect(() => {
+    if (!open) return;
+    return registerUpdateGuard((continueUpdate) => {
+      if (!dirty && !labelsDirty) return false;
+      pendingUpdateActivationRef.current = continueUpdate;
+      setIsUpdateResolutionPending(true);
+      setCloseAction("close");
+      setCloseNotice("");
+      setShowCloseChoices(!labelsDirty);
+      setShowLabelCloseChoices(labelsDirty);
+      return true;
+    });
+  }, [dirty, labelsDirty, open, registerUpdateGuard]);
+
+  function resolvePendingUpdate(
+    choice: PwaUpdateChoice,
+    saveOutcome?: PwaUpdateSaveOutcome,
+  ) {
+    const resolution = resolvePwaUpdateChoice(choice, saveOutcome);
+    if (resolution === "wait") return;
+
+    const continueUpdate = pendingUpdateActivationRef.current;
+    pendingUpdateActivationRef.current = null;
+    updateResolutionSaveFocusRef.current = null;
+    setIsUpdateResolutionPending(false);
+    if (resolution === "activate" && continueUpdate) {
+      window.requestAnimationFrame(() => continueUpdate());
+    }
+  }
+
+  function rememberUpdateResolutionSaveFocus(target: HTMLButtonElement) {
+    if (pendingUpdateActivationRef.current) {
+      updateResolutionSaveFocusRef.current = target;
+    }
+  }
+
+  function restoreUpdateResolutionSaveFocus() {
+    const target = updateResolutionSaveFocusRef.current;
+    updateResolutionSaveFocusRef.current = null;
+    if (!target?.isConnected) return;
+    window.requestAnimationFrame(() => {
+      if (!target.isConnected) return;
+      if (!target.disabled) {
+        target.focus({ preventScroll: true });
+        return;
+      }
+      const continueButton = Array.from(
+        target.closest("section")?.querySelectorAll<HTMLButtonElement>(
+          "button:not(:disabled)",
+        ) ?? [],
+      ).find((button) => button.textContent?.trim() === "Seguir editando");
+      continueButton?.focus({ preventScroll: true });
+    });
+  }
+
   async function saveLabels() {
     if (!task || isSavingLabels) return false;
     setIsSavingLabels(true);
@@ -562,10 +628,23 @@ export function TaskModal({
     );
   }
 
-  function continueAfterLabelResolution() {
+  function continueAfterLabelResolution(
+    updateChoice?: Extract<PwaUpdateChoice, "save" | "discard">,
+  ) {
     setShowLabelCloseChoices(false);
     if (dirty) {
       setShowCloseChoices(true);
+      return;
+    }
+    if (updateChoice && pendingUpdateActivationRef.current) {
+      requestTaskAction("close", {
+        afterSave: true,
+        labelsResolved: true,
+      });
+      resolvePendingUpdate(
+        updateChoice,
+        updateChoice === "save" ? "confirmed" : undefined,
+      );
       return;
     }
     requestTaskAction(closeAction, {
@@ -577,17 +656,22 @@ export function TaskModal({
   }
 
   async function saveLabelsAndContinue() {
-    if (await saveLabels()) continueAfterLabelResolution();
+    if (await saveLabels()) {
+      continueAfterLabelResolution("save");
+      return;
+    }
+    restoreUpdateResolutionSaveFocus();
   }
 
   function discardLabelsAndContinue() {
     setSelectedLabelIds(savedLabelIds);
     setLatestLabelConflict(null);
     setLabelsError("");
-    continueAfterLabelResolution();
+    continueAfterLabelResolution("discard");
   }
 
   function cancelLabelActionAndKeepEditing() {
+    resolvePendingUpdate("continue");
     setShowLabelCloseChoices(false);
     setCloseAction("close");
     setPendingMoveTargetId(null);
@@ -807,7 +891,9 @@ export function TaskModal({
       }
       return;
     }
+    const updateWasPending = pendingUpdateActivationRef.current !== null;
     requestTaskAction("close", { afterSave: true });
+    if (updateWasPending) resolvePendingUpdate("discard");
   }
 
   async function performCompletion(
@@ -1192,6 +1278,9 @@ export function TaskModal({
     if (!operation) {
       if (taskEditSaveFollowUp(intent, "confirmed") === "close") {
         requestTaskAction("close", { afterSave: true });
+        if (pendingUpdateActivationRef.current) {
+          resolvePendingUpdate("save", "confirmed");
+        }
       }
       if (
         completeAfterSave &&
@@ -1222,7 +1311,8 @@ export function TaskModal({
         setExpiredOperation(null);
         setReconciliationRequired(false);
         setReconciliationError("");
-        setShowCloseChoices(false);
+        setShowCloseChoices(pendingUpdateActivationRef.current !== null);
+        restoreUpdateResolutionSaveFocus();
         return;
       }
 
@@ -1244,6 +1334,9 @@ export function TaskModal({
       const followUp = taskEditSaveFollowUp(intent, "confirmed");
       if (followUp === "close") {
         requestTaskAction("close", { afterSave: true });
+        if (pendingUpdateActivationRef.current) {
+          resolvePendingUpdate("save", "confirmed");
+        }
       }
       if (followUp === "confirm-delete") {
         requestTaskAction("delete", { afterSave: true });
@@ -1297,7 +1390,8 @@ export function TaskModal({
       } else {
         setWorkflow(failTaskEditSave(savingState, saveErrorMessage(error)));
       }
-      setShowCloseChoices(false);
+      setShowCloseChoices(pendingUpdateActivationRef.current !== null);
+      restoreUpdateResolutionSaveFocus();
     }
   }
 
@@ -1367,6 +1461,7 @@ export function TaskModal({
   }
 
   function continueEditing() {
+    resolvePendingUpdate("continue");
     setShowCloseChoices(false);
     setCloseAction("close");
     setPendingMoveTargetId(null);
@@ -2305,16 +2400,22 @@ export function TaskModal({
                 id="task-label-close-heading"
                 className="font-semibold text-sm text-text-primary"
               >
-                Hay etiquetas sin guardar
+                {isUpdateResolutionPending
+                  ? "Resuelve los cambios antes de actualizar"
+                  : "Hay etiquetas sin guardar"}
               </h3>
               <p className="mt-1 text-sm text-text-secondary">
-                Puedes guardar o descartar este selector antes de continuar. Los
-                campos de la tarea se resuelven por separado.
+                {isUpdateResolutionPending
+                  ? "Guarda o descarta las etiquetas antes de recargar. Los campos de la tarea se resuelven por separado."
+                  : "Puedes guardar o descartar este selector antes de continuar. Los campos de la tarea se resuelven por separado."}
               </p>
               <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
                 <Button
                   variant="primary"
-                  onClick={() => void saveLabelsAndContinue()}
+                  onClick={(event) => {
+                    rememberUpdateResolutionSaveFocus(event.currentTarget);
+                    void saveLabelsAndContinue();
+                  }}
                   disabled={
                     !labelsDirty ||
                     !isOnline ||
@@ -2322,14 +2423,18 @@ export function TaskModal({
                     latestLabelConflict !== null
                   }
                 >
-                  Guardar etiquetas y continuar
+                  {isUpdateResolutionPending
+                    ? "Guardar etiquetas y actualizar"
+                    : "Guardar etiquetas y continuar"}
                 </Button>
                 <Button
                   variant="danger"
                   onClick={discardLabelsAndContinue}
                   disabled={isWorking}
                 >
-                  Descartar etiquetas y continuar
+                  {isUpdateResolutionPending
+                    ? "Descartar etiquetas y actualizar"
+                    : "Descartar etiquetas y continuar"}
                 </Button>
                 <Button
                   variant="ghost"
@@ -2351,13 +2456,16 @@ export function TaskModal({
                 id="task-close-heading"
                 className="font-semibold text-sm text-text-primary"
               >
-                {closeAction === "close"
+                {isUpdateResolutionPending
+                  ? "Hay cambios sin guardar antes de actualizar"
+                  : closeAction === "close"
                   ? "¿Qué quieres hacer con los cambios?"
                   : "Hay cambios sin guardar"}
               </h3>
               <p className="mt-1 text-sm text-text-secondary">
-                El borrador vive solo en esta sesión y no se recupera si
-                recargas o cierras la página.
+                {isUpdateResolutionPending
+                  ? "Guardar espera la confirmación del servidor antes de recargar. Descartar elimina los cambios de campos. Seguir editando deja la actualización disponible."
+                  : "El borrador vive solo en esta sesión y no se recupera si recargas o cierras la página."}
               </p>
               {closeAction === "delete" && (
                 <p className="mt-1 text-sm text-text-secondary">
@@ -2392,9 +2500,18 @@ export function TaskModal({
                 {closeAction === "close" && (
                   <Button
                     variant="primary"
-                    onClick={() => void save("close")}
+                    onClick={(event) => {
+                      rememberUpdateResolutionSaveFocus(event.currentTarget);
+                      if (isUpdateResolutionPending && !dirty && !labelsDirty) {
+                        requestTaskAction("close", { afterSave: true });
+                        resolvePendingUpdate("save", "confirmed");
+                        return;
+                      }
+                      void save("close");
+                    }}
                     disabled={
-                      !dirty ||
+                      (!dirty &&
+                        !(isUpdateResolutionPending && !labelsDirty)) ||
                       !normalizedTitle ||
                       !isOnline ||
                       hasConflict ||
@@ -2402,7 +2519,11 @@ export function TaskModal({
                       reconciliationRequired
                     }
                   >
-                    Guardar y cerrar
+                    {isUpdateResolutionPending
+                      ? dirty || labelsDirty
+                        ? "Guardar y actualizar"
+                        : "Recargar para actualizar"
+                      : "Guardar y cerrar"}
                   </Button>
                 )}
                 {closeAction === "delete" && (
@@ -2456,12 +2577,15 @@ export function TaskModal({
                       : "Guardar y reabrir"}
                   </Button>
                 )}
-                <Button
-                  variant="danger"
-                  onClick={discardAndContinue}
-                  disabled={isWorking}
-                >
-                  {closeAction === "delete"
+                {(!isUpdateResolutionPending || dirty || labelsDirty) && (
+                  <Button
+                    variant="danger"
+                    onClick={discardAndContinue}
+                    disabled={isWorking}
+                  >
+                    {isUpdateResolutionPending
+                      ? "Descartar cambios y actualizar"
+                      : closeAction === "delete"
                     ? "Descartar y continuar con la eliminación"
                     : closeAction === "move"
                       ? "Descartar cambios y mover"
@@ -2470,7 +2594,8 @@ export function TaskModal({
                           ? "Descartar cambios y completar"
                           : "Descartar cambios y reabrir"
                         : "Descartar cambios"}
-                </Button>
+                  </Button>
+                )}
                 <Button
                   variant="ghost"
                   onClick={continueEditing}

@@ -6,8 +6,16 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
 } from "react";
+import { Button } from "@/components/ui/button";
+import {
+  createPwaUpdateGuardRegistry,
+  type PwaUpdateGuard,
+  registerPwaUpdateGuard,
+  requestPwaUpdate,
+} from "@/lib/pwa-update-guard";
 
 type InstallPromptEvent = Event & {
   prompt: () => Promise<void>;
@@ -19,6 +27,7 @@ type PwaContextValue = {
   isStandalone: boolean;
   installStatus: string | null;
   promptInstall: () => Promise<void>;
+  registerUpdateGuard: (guard: PwaUpdateGuard) => () => void;
 };
 
 const PwaContext = createContext<PwaContextValue | null>(null);
@@ -36,6 +45,19 @@ export function PwaProvider({ children }: { children: ReactNode }) {
   );
   const [installStatus, setInstallStatus] = useState<string | null>(null);
   const [isStandalone, setIsStandalone] = useState(false);
+  const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [updateApplying, setUpdateApplying] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState<string | null>(null);
+  const [updateGuardRegistry] = useState(createPwaUpdateGuardRegistry);
+  const registrationRef = useRef<ServiceWorkerRegistration | null>(null);
+  const waitingWorkerRef = useRef<ServiceWorker | null>(null);
+  const updateApplyingRef = useRef(false);
+
+  const registerUpdateGuard = useCallback(
+    (guard: PwaUpdateGuard) =>
+      registerPwaUpdateGuard(updateGuardRegistry, guard),
+    [updateGuardRegistry],
+  );
 
   useEffect(() => {
     const syncDisplayMode = () => setIsStandalone(getIsStandalone());
@@ -66,13 +88,133 @@ export function PwaProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!("serviceWorker" in navigator)) return;
-    void navigator.serviceWorker
-      .register("/sw.js", {
-        scope: "/",
-        updateViaCache: "none",
-      })
-      .catch(() => undefined);
+    let disposed = false;
+    let registration: ServiceWorkerRegistration | null = null;
+    let registrationPromise: Promise<ServiceWorkerRegistration | null> | null =
+      null;
+    let onUpdateFound: (() => void) | null = null;
+
+    const checkWaitingWorker = () => {
+      const waiting = registration?.waiting;
+      if (!waiting || !navigator.serviceWorker.controller) return;
+      waitingWorkerRef.current = waiting;
+      setUpdateAvailable(true);
+      setUpdateStatus(null);
+    };
+
+    const registerWorker = () => {
+      if (registration) return Promise.resolve(registration);
+      if (registrationPromise) return registrationPromise;
+
+      registrationPromise = navigator.serviceWorker
+        .register("/sw.js", {
+          scope: "/",
+          updateViaCache: "none",
+        })
+        .then((nextRegistration) => {
+          if (disposed) return null;
+          registration = nextRegistration;
+          registrationRef.current = nextRegistration;
+          checkWaitingWorker();
+          onUpdateFound = () => {
+            const installing = nextRegistration.installing;
+            if (!installing) return;
+            const onStateChange = () => {
+              if (installing.state !== "installed") return;
+              checkWaitingWorker();
+              installing.removeEventListener("statechange", onStateChange);
+            };
+            installing.addEventListener("statechange", onStateChange);
+          };
+          nextRegistration.addEventListener("updatefound", onUpdateFound);
+          return nextRegistration;
+        })
+        .catch(() => null)
+        .finally(() => {
+          registrationPromise = null;
+        });
+      return registrationPromise;
+    };
+
+    const checkForUpdate = () => {
+      void registerWorker().then((currentRegistration) => {
+        if (!currentRegistration || disposed) return;
+        void currentRegistration.update().then(checkWaitingWorker).catch(() => {
+          // Keep the current application available while the connection returns.
+        });
+      });
+    };
+
+    const reloadAfterActivation = () => {
+      if (!updateApplyingRef.current) return;
+      updateApplyingRef.current = false;
+      window.location.reload();
+    };
+    const onControllerChange = () => {
+      checkWaitingWorker();
+      reloadAfterActivation();
+    };
+    const onVisibilityChange = () => {
+      if (!document.hidden) checkForUpdate();
+    };
+
+    navigator.serviceWorker.addEventListener(
+      "controllerchange",
+      onControllerChange,
+    );
+    window.addEventListener("online", checkForUpdate);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    checkForUpdate();
+
+    return () => {
+      disposed = true;
+      navigator.serviceWorker.removeEventListener(
+        "controllerchange",
+        onControllerChange,
+      );
+      window.removeEventListener("online", checkForUpdate);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      if (registration && onUpdateFound) {
+        registration.removeEventListener("updatefound", onUpdateFound);
+      }
+      if (registrationRef.current === registration) {
+        registrationRef.current = null;
+      }
+    };
   }, []);
+
+  const requestUpdate = useCallback(() => {
+    const waitingWorker =
+      waitingWorkerRef.current ?? registrationRef.current?.waiting ?? null;
+    if (!waitingWorker) {
+      setUpdateStatus(
+        "No se pudo preparar la actualización. Volvé a intentarlo cuando tengas conexión.",
+      );
+      const registration = registrationRef.current;
+      if (registration) void registration.update().catch(() => undefined);
+      return;
+    }
+
+    const activate = () => {
+      if (updateApplyingRef.current) return;
+      updateApplyingRef.current = true;
+      setUpdateApplying(true);
+      setUpdateAvailable(false);
+      setUpdateStatus("La actualización se está preparando…");
+      try {
+        waitingWorker.postMessage({ type: "ACTIVATE_UPDATE" });
+      } catch {
+        updateApplyingRef.current = false;
+        setUpdateApplying(false);
+        setUpdateAvailable(true);
+        setUpdateStatus(
+          "No se pudo preparar la actualización. Tu edición sigue en esta versión.",
+        );
+      }
+    };
+
+    requestPwaUpdate(updateGuardRegistry, activate);
+  }, [updateGuardRegistry]);
 
   const promptInstall = useCallback(async () => {
     const prompt = installPrompt;
@@ -102,8 +244,36 @@ export function PwaProvider({ children }: { children: ReactNode }) {
         isStandalone,
         installStatus,
         promptInstall,
+        registerUpdateGuard,
       }}
     >
+      {updateAvailable && (
+        <section
+          aria-label="Actualización disponible"
+          className="flex flex-wrap items-center justify-center gap-3 border-border border-b bg-surface-raised px-4 py-2"
+          aria-live="polite"
+        >
+          <p className="text-sm text-text-primary">
+            Hay una actualización disponible.
+          </p>
+          <Button
+            size="sm"
+            variant="primary"
+            onClick={requestUpdate}
+            disabled={updateApplying}
+          >
+            Recargar para actualizar
+          </Button>
+        </section>
+      )}
+      {updateStatus && (
+        <p
+          aria-live="polite"
+          className="sr-only"
+        >
+          {updateStatus}
+        </p>
+      )}
       {children}
     </PwaContext.Provider>
   );

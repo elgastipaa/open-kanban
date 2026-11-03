@@ -18,7 +18,11 @@ function requestUrl(request) {
   return typeof request === "string" ? request : request.url;
 }
 
-function createWorker({ fetchFails = false } = {}) {
+function createWorker({
+  fetchFails = false,
+  cacheInstallFails = false,
+  cacheVersion = "v2",
+} = {}) {
   const listeners = new Map();
   const openedCaches = [];
   const deletedCaches = [];
@@ -26,7 +30,13 @@ function createWorker({ fetchFails = false } = {}) {
   const cacheMatches = [];
   const cacheWrites = [];
   const fetchCalls = [];
-  const oldCaches = ["openkanban-public-v0", "unrelated-cache"];
+  let currentCacheName = null;
+  const oldCaches = [
+    "openkanban-public-v1",
+    "auth-session-cache",
+    "unrelated-cache",
+  ];
+  const cacheNames = new Set(oldCaches);
   let didClaimClients = false;
   let didSkipWaiting = false;
   let networkIsAvailable = !fetchFails;
@@ -41,6 +51,7 @@ function createWorker({ fetchFails = false } = {}) {
           path === "/offline.v1.html" ? offlineDocument : `static:${path}`;
         cacheEntries.set(new URL(path, origin).href, new Response(body));
       }
+      if (cacheInstallFails) throw new Error("intermittent network fixture");
     },
     async match(request) {
       const url = new URL(requestUrl(request), origin);
@@ -56,14 +67,18 @@ function createWorker({ fetchFails = false } = {}) {
   const caches = {
     async open(name) {
       openedCaches.push(name);
+      cacheNames.add(name);
+      currentCacheName = name;
       return cache;
     },
     async keys() {
-      return [...oldCaches, ...new Set(openedCaches)];
+      return [...cacheNames];
     },
     async delete(name) {
       deletedCaches.push(name);
-      return true;
+      const deleted = cacheNames.delete(name);
+      if (deleted && name === currentCacheName) cacheEntries.clear();
+      return deleted;
     },
   };
 
@@ -84,7 +99,11 @@ function createWorker({ fetchFails = false } = {}) {
     },
   };
 
-  runInNewContext(workerSource, {
+  const source = workerSource.replace(
+    /const CACHE_NAME = .+;/,
+    `const CACHE_NAME = "openkanban-public-${cacheVersion}";`,
+  );
+  runInNewContext(source, {
     caches,
     fetch: async (request) => {
       const url = new URL(requestUrl(request), origin);
@@ -130,14 +149,27 @@ function createWorker({ fetchFails = false } = {}) {
     return { intercepted: responsePromise !== null, responsePromise };
   }
 
+  async function dispatchMessage(data) {
+    const pending = [];
+    listeners.get("message")?.({
+      data,
+      waitUntil(promise) {
+        pending.push(Promise.resolve(promise));
+      },
+    });
+    await Promise.all(pending);
+  }
+
   return {
     cache,
     cacheEntries,
+    cacheNames,
     cacheMatches,
     cacheWrites,
     deletedCaches,
     dispatchFetch,
     dispatchLifecycle,
+    dispatchMessage,
     fetchCalls,
     get didClaimClients() {
       return didClaimClients;
@@ -162,7 +194,7 @@ test("install caches only explicitly versioned public PWA resources", async () =
   const worker = createWorker();
   await worker.dispatchLifecycle("install");
 
-  assert.deepEqual(worker.openedCaches, ["openkanban-public-v1"]);
+  assert.deepEqual(worker.openedCaches, ["openkanban-public-v2"]);
   assert.deepEqual(worker.cache.added, [
     "/offline.v1.html",
     "/icons/open-kanban-192.v1.svg",
@@ -286,14 +318,61 @@ test("API requests and unversioned assets are not intercepted or queued", async 
   assert.deepEqual(worker.cacheWrites, []);
 });
 
-test("service worker never forces activation when a new version is installed", async () => {
+test("a new service worker waits for an explicit update choice", async () => {
   const worker = createWorker();
   await worker.dispatchLifecycle("install");
   assert.equal(worker.didSkipWaiting, false);
+  assert.equal(worker.hasMessageHandler, true);
 
+  await worker.dispatchMessage({ type: "UNRELATED" });
+  assert.equal(worker.didSkipWaiting, false);
+
+  await worker.dispatchMessage({ type: "ACTIVATE_UPDATE" });
+  assert.equal(worker.didSkipWaiting, true);
+
+  const installed = createWorker();
+  await installed.dispatchLifecycle("install");
+  assert.equal(installed.didSkipWaiting, false);
+});
+
+test("activation removes stale public caches and preserves Auth or unrelated caches", async () => {
+  const worker = createWorker();
+  await worker.dispatchLifecycle("install");
   await worker.dispatchLifecycle("activate");
   assert.equal(worker.didClaimClients, true);
-  assert.deepEqual(worker.deletedCaches, ["openkanban-public-v0"]);
-  assert.equal(worker.hasMessageHandler, false);
-  assert.equal(worker.didSkipWaiting, false);
+  assert.deepEqual(worker.deletedCaches, ["openkanban-public-v1"]);
+  assert.ok(!worker.cacheNames.has("openkanban-public-v1"));
+  assert.ok(worker.cacheNames.has("auth-session-cache"));
+  assert.ok(worker.cacheNames.has("unrelated-cache"));
+  assert.ok(!worker.deletedCaches.includes("auth-session-cache"));
+  assert.ok(!worker.deletedCaches.includes("unrelated-cache"));
+});
+
+test("intermittent network leaves the current installed and web versions usable", async () => {
+  for (const launchMode of ["web", "installed"]) {
+    const currentVersion = createWorker({ cacheVersion: "v1" });
+    await currentVersion.dispatchLifecycle("install");
+    await currentVersion.dispatchLifecycle("activate");
+
+    const update = createWorker({ cacheInstallFails: true, cacheVersion: "v2" });
+
+    await assert.rejects(update.dispatchLifecycle("install"));
+    assert.equal(update.didSkipWaiting, false, `${launchMode} skipped waiting`);
+    assert.deepEqual(update.deletedCaches, ["openkanban-public-v2"]);
+    assert.ok(!update.cacheNames.has("openkanban-public-v2"));
+    assert.ok(
+      currentVersion.cacheNames.has("openkanban-public-v1"),
+      `${launchMode} removed its active public cache`,
+    );
+
+    currentVersion.networkIsAvailable = false;
+    const navigation = currentVersion.dispatchFetch({
+      method: "GET",
+      mode: "navigate",
+      url: `${origin}/private-board?mode=${launchMode}`,
+    });
+    const response = await navigation.responsePromise;
+    assert.match(await response.text(), /Sin conexión/);
+    assert.deepEqual(currentVersion.cacheWrites, []);
+  }
 });

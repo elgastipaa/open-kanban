@@ -3,7 +3,7 @@
 **Estado:** ensayo local sintético, parcial por criterio. #52 permanece OPEN y sus seis criterios compuestos siguen desmarcados.
 **Base fija:** `1ee3142dc101f48a55ffeddd6006a78dc66b42f8` (`codex/openkanban-1-0`).
 **Rama:** `codex/issue-52`.
-**HEAD final del código ensayado:** `091d268e30d47ac622f4d50ce657b839a940ec48`. Este es el commit incluido en el manifiesto y revisado contra la base fija; el SHA del commit de cierre documental se informa también en el comentario de #52.
+**HEAD final del código ensayado:** `1408c5b15f1483f25fab89f26c1a9bdd91163495`. Este es el commit incluido en el manifiesto y revisado contra la base fija; el SHA del commit de cierre documental se informa también en el comentario de #52.
 **Contratos:** P24/P25/P26; C-93/C-98; CF-20; DT-0.1 §10 y G08.
 **Skills aplicadas:** `implement`, `tdd`, `code-review`; leídas y seguidas manualmente porque esta sesión no expone Skill tool.
 
@@ -28,6 +28,8 @@ Actores elegidos por la fixture (no son personas ni cuentas reales):
 | Admin bootstrap | `52100000-0000-4000-8000-000000000003` | `issue52-bootstrap-admin@example.test` | Ninguno; no obtiene lectura global |
 
 El inventario conserva dos IDs de tablero sintéticos (`52000000-0000-4000-8000-000000000001/2`) y dos tareas ficticias con IDs `52300000-0000-4000-8000-000000000001/2`. Todos los actores tienen sujetos Google y emails `@example.test` inventados. La elección de propietario se guarda en la tabla de fixture antes de simular el corte; no se infiere de la primera sesión.
+
+El rol local `authenticated` tiene `SELECT` solo sobre las dos tablas sintéticas `issue52_rehearsal.inventory` y `.bootstrap` para que el assert table-driven pruebe el RPC público con cada owner. `anon` no recibe acceso al esquema; esos permisos y tablas existen únicamente en el clúster descartable.
 
 El recorrido de #50 añade un archivo local sintético de 30 bytes. Su SHA-256 restaurado esperado es `3809ddda411bb00f1716d380bc095848b006bf43c459fcee801ca4bfe6fe7e73`. El harness conserva metadata/cuota en PostgreSQL, restaura dos veces y mantiene un job `queued` y ninguno `leased`; los bytes son de un archivo sintético de filesystem, no del servicio Storage alojado.
 
@@ -91,7 +93,7 @@ Este checklist prepara la operación; no la autoriza ni afirma que su configurac
 
 | Comando | Resultado |
 | --- | --- |
-| `bash scripts/test-db-issue-52.sh` en Ubuntu 24.04 / PostgreSQL 16.15 | **PASS** sobre el commit ensayado `091d268e30d47ac622f4d50ce657b839a940ec48`, en clúster descartable. RPO local `552 ms`, RTO local `2212 ms`, bundle SHA-256 `67798b110c95d3400aebaf75f58b36cacbaba9701a1c0fb3554dcf72c2bd8373`; el manifiesto registra ese mismo commit. El objeto sintético restaurado coincide con SHA-256 `3809ddda411bb00f1716d380bc095848b006bf43c459fcee801ca4bfe6fe7e73`. La privacidad completa se comprobó sobre el target inicial, tras rollback de la migración fallida y en el retry limpio. |
+| `bash scripts/test-db-issue-52.sh` en Ubuntu 24.04 / PostgreSQL 16.15 | **PASS** sobre el commit ensayado `1408c5b15f1483f25fab89f26c1a9bdd91163495`, en clúster descartable. RPO local `474 ms`, RTO local `1917 ms`, bundle SHA-256 `3bd6ed02e4ebc8f740d8d11d2f39a549c0e0a9921ee5454ffc1e896d0a9ea89c`; el manifiesto registra ese mismo commit. El objeto sintético restaurado coincide con SHA-256 `3809ddda411bb00f1716d380bc095848b006bf43c459fcee801ca4bfe6fe7e73`. La privacidad completa se comprobó sobre el target inicial, tras rollback de la migración fallida y en el retry limpio. |
 | `pnpm test:unit` | **PASS**, todas las suites unitarias. |
 | `pnpm exec next typegen` | **PASS**, tipos de rutas generados. |
 | `pnpm typecheck` | **PASS**. |
@@ -100,8 +102,8 @@ Este checklist prepara la operación; no la autoriza ni afirma que su configurac
 | `pnpm exec biome check --formatter-enabled=false package.json` | **PASS**, 1 archivo, sin cambios automáticos. |
 | `git diff --check` | **PASS** en los cambios versionados hasta este borrador; se repetirá antes de commit. |
 | `bash scripts/test-db.sh` completa | **Falla en baseline conocido** en `tests/db/repetition_series_recovery.sql:419`: `Finite recovery created intermediate or extended dates`, ocurrencia `2026-11-02`, `consumed_count=3`. Las demás secciones alcanzadas antes de ese punto pasan; no se modificó esa suite ni el comportamiento de calendario en #52. |
-| Revisión Normas | Primer pase read-only en `d7a05625ec8227055266269b375bfef410ab9525` pidió atar evidencia a SHA y señaló duplicación heurística. En `bd1ce6b2f63e68f616cbbf554aec2277f02a82fc` pidió correr la suite DB completa y compartir el mapa de owners; se corrió en `091d268e30d47ac622f4d50ce657b839a940ec48` con el baseline registrado y el check compartido se extrajo a `issue52_owner_map_assert.sql`. Revisión final de `091d268` pendiente. |
-| Revisión Spec/Privacy | Primer pase read-only en `d7a05625ec8227055266269b375bfef410ab9525` pidió hacer inequívoco el assert completo tras el retry limpio y atar resultados a SHA. Se ejecuta ese assert contiguo al restore limpio y el resultado focal/manifiesto queda ligado a `091d268e30d47ac622f4d50ce657b839a940ec48`. Revisión final de `091d268` pendiente. |
+| Revisión Normas | Primer pase read-only en `d7a05625ec8227055266269b375bfef410ab9525` pidió atar evidencia a SHA y señaló duplicación heurística. El follow-up en `bd1ce6b2f63e68f616cbbf554aec2277f02a82fc` pidió correr la suite DB completa y compartir el mapa de owners; en `091d268e30d47ac622f4d50ce657b839a940ec48` se ejecutó con el baseline registrado y se extrajo `issue52_owner_map_assert.sql`. La revisión en `6f17421a454a72c242da6a8b83a0ed4e203059b0` pidió un loop simétrico A/B, atendido por el loop table-driven de `1408c5b15f1483f25fab89f26c1a9bdd91163495`; revisión final contra este SHA pendiente. |
+| Revisión Spec/Privacy | Primer pase read-only en `d7a05625ec8227055266269b375bfef410ab9525` pidió hacer inequívoco el assert completo tras el retry limpio y atar resultados a SHA. Se ejecuta ese assert contiguo al restore limpio y el resultado focal/manifiesto queda ligado a `1408c5b15f1483f25fab89f26c1a9bdd91163495`. El follow-up en `6f17421a454a72c242da6a8b83a0ed4e203059b0` confirmó privacidad/especificación y pidió registrar el resultado PASS en la evidencia; revisión final del SHA actualizado pendiente. |
 
 Las medidas RPO/RTO son de un fixture local (porción de tiempo entre checkpoint y pérdida/restauración), dependen de la máquina y solo validan el camino ensayado. No son objetivos operativos, SLO ni evidencia sobre la instancia real.
 
@@ -115,4 +117,4 @@ Las medidas RPO/RTO son de un fixture local (porción de tiempo entre checkpoint
 
 ## Revisiones read-only
 
-Las revisiones y el ensayo no sustituyen aceptación humana ni gates externos. Se añadirán aquí los resultados de las revisiones finales contra `091d268e30d47ac622f4d50ce657b839a940ec48` antes de dejar #52 listo para revisión humana.
+Las revisiones y el ensayo no sustituyen aceptación humana ni gates externos. Se añadirán aquí los resultados de las revisiones finales contra `1408c5b15f1483f25fab89f26c1a9bdd91163495` antes de dejar #52 listo para revisión humana.

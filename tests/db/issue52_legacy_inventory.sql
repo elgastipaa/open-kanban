@@ -25,6 +25,11 @@ CREATE TABLE issue52_rehearsal.bootstrap (
   admin_subject text NOT NULL UNIQUE
 );
 
+-- Read-only access lets the authenticated fixture test iterate the synthetic
+-- owner map while exercising the public board RPC as each mapped principal.
+GRANT USAGE ON SCHEMA issue52_rehearsal TO authenticated;
+GRANT SELECT ON issue52_rehearsal.inventory, issue52_rehearsal.bootstrap TO authenticated;
+
 INSERT INTO issue52_rehearsal.actors (actor_id, email, google_subject, intended_role) VALUES
   ('52100000-0000-4000-8000-000000000001', 'issue52-owner-a@example.test', 'issue52-owner-a', 'board_owner'),
   ('52100000-0000-4000-8000-000000000002', 'issue52-owner-b@example.test', 'issue52-owner-b', 'board_owner'),

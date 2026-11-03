@@ -2,43 +2,51 @@
 
 BEGIN;
 SET LOCAL ROLE authenticated;
-SELECT set_config('request.jwt.claim.sub', '52100000-0000-4000-8000-000000000001', true);
 DO $$
 DECLARE
+  v_inventory issue52_rehearsal.inventory%ROWTYPE;
+  v_other issue52_rehearsal.inventory%ROWTYPE;
   v_payload jsonb;
 BEGIN
-  v_payload := public.get_full_board_p('issue52-legacy-a')::jsonb;
-  IF v_payload->'board'->>'slug' IS DISTINCT FROM 'issue52-legacy-a'
-    OR v_payload->'columns'->0->'tasks'->0->>'title' IS DISTINCT FROM 'Tarea sintética legado A'
-    OR public.get_full_board_p('issue52-legacy-b') IS NOT NULL THEN
-    RAISE EXCEPTION 'El propietario A no ve solo el tablero asignado en el inventario';
-  END IF;
+  FOR v_inventory IN SELECT * FROM issue52_rehearsal.inventory ORDER BY slug LOOP
+    PERFORM set_config('request.jwt.claim.sub', v_inventory.explicit_owner_id::text, true);
+    v_payload := public.get_full_board_p(v_inventory.slug)::jsonb;
+    IF v_payload->'board'->>'slug' IS DISTINCT FROM v_inventory.slug
+      OR v_payload->'columns'->0->'tasks'->0->>'title' IS DISTINCT FROM v_inventory.expected_task_title THEN
+      RAISE EXCEPTION 'El owner explícito no ve el contenido de %', v_inventory.slug;
+    END IF;
+
+    FOR v_other IN
+      SELECT * FROM issue52_rehearsal.inventory AS other_inventory
+      WHERE other_inventory.board_id <> v_inventory.board_id
+      ORDER BY other_inventory.slug
+    LOOP
+      IF public.get_full_board_p(v_other.slug) IS NOT NULL THEN
+        RAISE EXCEPTION 'El owner de % también puede leer el tablero ajeno %',
+          v_inventory.slug, v_other.slug;
+      END IF;
+    END LOOP;
+  END LOOP;
 END;
 $$;
 COMMIT;
 
 BEGIN;
 SET LOCAL ROLE authenticated;
-SELECT set_config('request.jwt.claim.sub', '52100000-0000-4000-8000-000000000002', true);
 DO $$
+DECLARE
+  v_admin_id uuid;
 BEGIN
-  IF public.get_full_board_p('issue52-legacy-b')::jsonb->'columns'->0->'tasks'->0->>'title'
-      IS DISTINCT FROM 'Tarea sintética legado B'
-    OR public.get_full_board_p('issue52-legacy-a') IS NOT NULL THEN
-    RAISE EXCEPTION 'El propietario B no ve solo el tablero asignado en el inventario';
-  END IF;
-END;
-$$;
-COMMIT;
+  SELECT admin_id INTO STRICT v_admin_id
+  FROM issue52_rehearsal.bootstrap
+  WHERE singleton;
+  PERFORM set_config('request.jwt.claim.sub', v_admin_id::text, true);
 
-BEGIN;
-SET LOCAL ROLE authenticated;
-SELECT set_config('request.jwt.claim.sub', '52100000-0000-4000-8000-000000000003', true);
-DO $$
-BEGIN
   IF public.is_application_admin() IS DISTINCT FROM true
-    OR public.get_full_board_p('issue52-legacy-a') IS NOT NULL
-    OR public.get_full_board_p('issue52-legacy-b') IS NOT NULL
+    OR EXISTS (
+      SELECT 1 FROM issue52_rehearsal.inventory AS inventory
+      WHERE public.get_full_board_p(inventory.slug) IS NOT NULL
+    )
     OR EXISTS (SELECT 1 FROM public.list_my_boards()) THEN
     RAISE EXCEPTION 'El admin bootstrap fue convertido en lector global o no quedó habilitado';
   END IF;

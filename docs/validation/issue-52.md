@@ -3,7 +3,7 @@
 **Estado:** ensayo local sintético, parcial por criterio. #52 permanece OPEN y sus seis criterios compuestos siguen desmarcados.
 **Base fija:** `1ee3142dc101f48a55ffeddd6006a78dc66b42f8` (`codex/openkanban-1-0`).
 **Rama:** `codex/issue-52`.
-**HEAD final:** se fija en el commit de entrega que acompaña esta evidencia.
+**HEAD final del código ensayado:** `091d268e30d47ac622f4d50ce657b839a940ec48`. Este es el commit incluido en el manifiesto y revisado contra la base fija; el SHA del commit de cierre documental se informa también en el comentario de #52.
 **Contratos:** P24/P25/P26; C-93/C-98; CF-20; DT-0.1 §10 y G08.
 **Skills aplicadas:** `implement`, `tdd`, `code-review`; leídas y seguidas manualmente porque esta sesión no expone Skill tool.
 
@@ -80,7 +80,7 @@ Este checklist prepara la operación; no la autoriza ni afirma que su configurac
 3. **Bootstrap y credenciales.** Elegir explícitamente el admin bootstrap por canal seguro, confirmar identidad Google estable e independiente de las membresías de tablero, preparar recuperación y rotación de credenciales históricas. La rotación y el canal aún no están definidos/verificados; no escribir correos/token/secretos en GitHub, backups ni este reporte.
 4. **Pausa consistente.** Definir mecanismo real de mantenimiento/bloqueo de escrituras; detener creación/edición, cron, scheduler, workers, purge y cargas; esperar transacciones/uploads/leases en vuelo. Registrar checkpoint y jobs `queued`/`leased`. No asumir que una marca de fixture detuvo procesos.
 5. **Backup verificable.** Capturar snapshot consistente de DB, inventario/checksums de bytes Storage y manifiesto de versiones/configuración no secreta. Cifrado, destino privado, frecuencia, retención, permisos de restore y canal de secretos requieren decisión/infraestructura. Verificar hashes, conteos y ACL en copia aislada antes de tocar el servicio.
-6. **Migración/cierre.** En una copia, ejecutar migraciones en orden. Poblar el mapa de `owner_id` con aprobaciones por tablero después del cierre de acceso anónimo y antes de crear memberships/generaciones. Revisar explícitamente filas todavía sin dueño. Verificar callbacks/redirect allowlist y que el ingreso no crea cuentas o membresías automáticamente.
+6. **Migración/cierre.** En una copia, ejecutar migraciones en orden. Confirmar que el runner real puede detenerse después de 015 y antes de 017 para poblar el mapa de `owner_id` con aprobaciones por tablero. El fixture demuestra ese orden, no que el runner operativo admita la pausa. Si no puede detenerse allí, no iniciar el corte: preparar y revisar, con autorización, un mecanismo de migración de datos que aplique el mapa antes de que 017 cree generaciones/membresías. Revisar explícitamente filas todavía sin dueño. Verificar callbacks/redirect allowlist y que el ingreso no crea cuentas o membresías automáticamente.
 7. **Gate de pantalla y RPC.** Antes de publicar la ruta `/login`, demostrar en Auth/PostgREST real que `anon` y `PUBLIC` no tienen privilegios efectivos sobre rutinas/tablas del producto. Probar solicitud directa anónima, callback faltante/ inválido, cancelación, usuario habilitado/no habilitado, `next` interno, logout y cambio de cuenta. Una pantalla de login no sustituye el cierre en DB.
 8. **Storage y canales.** Verificar bucket privado, bytes, metadata, cuota, ACL, URLs temporales, objetos ausentes/huérfanos y descarga después de revocar. Probar canal nuevo privado, denegación del tópico legado, revocación con conexión abierta, cambio de cuenta y respuestas tardías; el stub SQL no sustituye Storage/Realtime alojados.
 9. **Jobs y reanudación.** Confirmar que ningún trabajo quedó leased en un proceso pausado; preservar cola/operación idempotente. Reanudar workers gradualmente solo después de comprobar ownership, permisos, Storage, calendario, leases y alertas de reconciliación.
@@ -91,7 +91,7 @@ Este checklist prepara la operación; no la autoriza ni afirma que su configurac
 
 | Comando | Resultado |
 | --- | --- |
-| `bash scripts/test-db-issue-52.sh` en Ubuntu 24.04 / PostgreSQL 16.15 | **PASS** en clúster descartable. La última corrida de trabajo observó RPO `603 ms`, RTO `6903 ms`, bundle SHA-256 `3b257cb40965d587a4e346f84912e1f6d2d28d64a5087a872ef7e20cb44041e7` y objeto restaurado `3809ddda411bb00f1716d380bc095848b006bf43c459fcee801ca4bfe6fe7e73`. Repetiré tras fijar el commit para registrar el HEAD exacto del manifiesto. |
+| `bash scripts/test-db-issue-52.sh` en Ubuntu 24.04 / PostgreSQL 16.15 | **PASS** sobre el commit ensayado `091d268e30d47ac622f4d50ce657b839a940ec48`, en clúster descartable. RPO local `552 ms`, RTO local `2212 ms`, bundle SHA-256 `67798b110c95d3400aebaf75f58b36cacbaba9701a1c0fb3554dcf72c2bd8373`; el manifiesto registra ese mismo commit. El objeto sintético restaurado coincide con SHA-256 `3809ddda411bb00f1716d380bc095848b006bf43c459fcee801ca4bfe6fe7e73`. La privacidad completa se comprobó sobre el target inicial, tras rollback de la migración fallida y en el retry limpio. |
 | `pnpm test:unit` | **PASS**, todas las suites unitarias. |
 | `pnpm exec next typegen` | **PASS**, tipos de rutas generados. |
 | `pnpm typecheck` | **PASS**. |
@@ -99,8 +99,9 @@ Este checklist prepara la operación; no la autoriza ni afirma que su configurac
 | `bash -n scripts/test-db.sh scripts/test-db-issue-52.sh scripts/rehearse-instance-backup.sh` | **PASS**. |
 | `pnpm exec biome check --formatter-enabled=false package.json` | **PASS**, 1 archivo, sin cambios automáticos. |
 | `git diff --check` | **PASS** en los cambios versionados hasta este borrador; se repetirá antes de commit. |
-| `pnpm test:db` completa | **Pendiente de corrida final**. El baseline previo del run está en `tests/db/repetition_series_recovery.sql:419`; registrar el resultado sin reparar esa regresión en #52. |
-| Revisiones Normas y Spec/Privacy | **Pendientes**; se ejecutarán read-only contra la base fija indicada arriba con GPT Luna Max si el mecanismo permite seleccionar modelo. |
+| `bash scripts/test-db.sh` completa | **Falla en baseline conocido** en `tests/db/repetition_series_recovery.sql:419`: `Finite recovery created intermediate or extended dates`, ocurrencia `2026-11-02`, `consumed_count=3`. Las demás secciones alcanzadas antes de ese punto pasan; no se modificó esa suite ni el comportamiento de calendario en #52. |
+| Revisión Normas | Primer pase read-only en `d7a05625ec8227055266269b375bfef410ab9525` pidió atar evidencia a SHA y señaló duplicación heurística. En `bd1ce6b2f63e68f616cbbf554aec2277f02a82fc` pidió correr la suite DB completa y compartir el mapa de owners; se corrió en `091d268e30d47ac622f4d50ce657b839a940ec48` con el baseline registrado y el check compartido se extrajo a `issue52_owner_map_assert.sql`. Revisión final de `091d268` pendiente. |
+| Revisión Spec/Privacy | Primer pase read-only en `d7a05625ec8227055266269b375bfef410ab9525` pidió hacer inequívoco el assert completo tras el retry limpio y atar resultados a SHA. Se ejecuta ese assert contiguo al restore limpio y el resultado focal/manifiesto queda ligado a `091d268e30d47ac622f4d50ce657b839a940ec48`. Revisión final de `091d268` pendiente. |
 
 Las medidas RPO/RTO son de un fixture local (porción de tiempo entre checkpoint y pérdida/restauración), dependen de la máquina y solo validan el camino ensayado. No son objetivos operativos, SLO ni evidencia sobre la instancia real.
 
@@ -114,4 +115,4 @@ Las medidas RPO/RTO son de un fixture local (porción de tiempo entre checkpoint
 
 ## Revisiones read-only
 
-Pendientes al preparar el borrador. Después de revisar el candidato se registrará aquí el SHA revisado, la base fija, resultados por eje y cualquier ajuste material. El cierre final seguirá siendo documental; las revisiones no sustituyen aceptación humana ni gates externos.
+Las revisiones y el ensayo no sustituyen aceptación humana ni gates externos. Se añadirán aquí los resultados de las revisiones finales contra `091d268e30d47ac622f4d50ce657b839a940ec48` antes de dejar #52 listo para revisión humana.

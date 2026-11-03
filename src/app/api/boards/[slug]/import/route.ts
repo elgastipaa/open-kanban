@@ -124,7 +124,10 @@ export async function POST(
         operationId,
         adapter,
       );
-      return json(preview as unknown as Record<string, unknown>);
+      return json(
+        preview as unknown as Record<string, unknown>,
+        preview.status === "label_conflict" ? 409 : 200,
+      );
     } catch (error) {
       return portableImportError(error);
     } finally {

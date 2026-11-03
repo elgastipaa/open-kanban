@@ -32,6 +32,16 @@ test("import and confirm routes authenticate the actor and call atomic owner RPC
   assert.match(confirmRoute, /confirm_board_import_p/u);
   assert.match(confirmRoute, /p_expected_content_revision/u);
   assert.match(confirmRoute, /p_source_sha256/u);
+  assert.match(confirmRoute, /confirm_board_import_v2_p/u);
+  assert.match(confirmRoute, /p_member_mappings/u);
+  assert.match(confirmRoute, /member_conflict/u);
+  assert.match(confirmRoute, /MAX_PORTABLE_BOARD_IMPORT_DECISION_BYTES/u);
+  assert.match(confirmRoute, /readBoundedRequestBody/u);
+  const labelsRoute = await source(
+    "src/app/api/boards/[slug]/import/[operationId]/labels/route.ts",
+  );
+  assert.match(labelsRoute, /set_board_import_v2_label_resolutions_p/u);
+  assert.match(labelsRoute, /readBoundedRequestBody/u);
   assert.doesNotMatch(confirmRoute, /createTaskAttachmentServiceClient/u);
   assert.match(prepareRoute, /private, no-store/u);
   assert.match(confirmRoute, /private, no-store/u);
@@ -59,6 +69,16 @@ test("the owner-facing UI shows the version and requires explicit replacement co
   assert.match(dialog, /"storage"/u);
   assert.match(dialog, /role="alert"/u);
   assert.match(dialog, /<output aria-live="polite"/u);
+  assert.match(dialog, /Persona importada/u);
+  assert.match(dialog, /sin asignar/iu);
+  assert.match(dialog, /assigneeMappings/u);
+  assert.match(dialog, /labelConflicts/u);
+  assert.match(dialog, /label_renames/u);
+  assert.match(dialog, /preparación guardada/u);
+  assert.match(
+    dialog,
+    /No tienes\s+que volver a seleccionar ni subir el archivo/u,
+  );
   assert.match(board, /<BoardImportDialog/u);
   assert.doesNotMatch(board, /importBoard\(/u);
   assert.match(toolbar, /canRename \? \(/u);
@@ -128,4 +148,28 @@ test("the database stages invisible generations and revalidates publication unde
   assert.doesNotMatch(migration, /confirm_board_import_restore_p/u);
   assert.match(cleanupRoute, /cleanup_expired_board_import_operations_p/u);
   assert.match(cleanupRoute, /cleanup_expired_board_generation_retention_p/u);
+});
+
+test("v2 requires explicit assignment decisions and explicit collision-free label names", async () => {
+  const migration = await source(
+    "supabase/migrations/070_complete_v2_board_import.sql",
+  );
+  assert.match(
+    migration,
+    /CREATE TABLE public\.board_import_v2_member_mappings/u,
+  );
+  assert.match(migration, /CREATE FUNCTION public\.confirm_board_import_v2_p/u);
+  assert.match(
+    migration,
+    /CREATE TABLE public\.board_import_v2_label_resolutions/u,
+  );
+  assert.match(
+    migration,
+    /CREATE FUNCTION public\.set_board_import_v2_label_resolutions_p/u,
+  );
+  assert.match(migration, /board_label_name_ci_ai/u);
+  assert.match(migration, /member_conflict/u);
+  assert.match(migration, /label_conflict/u);
+  assert.match(migration, /assignee_id = mapping\.target_user_id/u);
+  assert.match(migration, /resolution\.name/u);
 });

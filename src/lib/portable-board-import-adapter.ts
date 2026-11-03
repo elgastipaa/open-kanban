@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type {
   PortableBoardImportAdapter,
+  PortableBoardImportLabelConflict,
   PortableBoardImportObjectTarget,
   PortableBoardImportPreview,
 } from "./portable-board-import";
@@ -9,6 +10,7 @@ const STORAGE_BUCKET = "task-attachments";
 const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const SOURCE_REF = /^attachment_[0-9a-f]{64}$/u;
+const LABEL_REF = /^label_[0-9a-f]{64}$/u;
 const SHA256 = /^[0-9a-f]{64}$/u;
 
 interface RpcResult {
@@ -107,6 +109,27 @@ function parseObjectTarget(value: unknown): PortableBoardImportObjectTarget {
     );
   }
   return row as unknown as PortableBoardImportObjectTarget;
+}
+
+function parseLabelConflict(value: unknown): PortableBoardImportLabelConflict {
+  const row = asRecord(value);
+  if (
+    !row ||
+    typeof row.source_ref !== "string" ||
+    !LABEL_REF.test(row.source_ref) ||
+    typeof row.name !== "string" ||
+    row.name.length < 1 ||
+    row.name.length > 40 ||
+    typeof row.conflict_name !== "string" ||
+    row.conflict_name.length < 1 ||
+    row.conflict_name.length > 40
+  ) {
+    throw new PortableBoardImportAdapterError(
+      "La resolución de una etiqueta no coincide con el respaldo.",
+      "invalid",
+    );
+  }
+  return row as unknown as PortableBoardImportLabelConflict;
 }
 
 function importStatus(value: unknown): string | null {
@@ -295,7 +318,16 @@ export function createPortableBoardImportAdapter(input: {
         { p_slug: input.slug, p_operation_id: operationId },
         "No se pudo finalizar la preparación del respaldo.",
       );
-      if (importStatus(data) !== "prepared") {
+      const status = importStatus(data);
+      const row = asRecord(data);
+      if (status === "label_conflict" && Array.isArray(row?.label_conflicts)) {
+        return {
+          ...(row as unknown as PortableBoardImportPreview),
+          status,
+          label_conflicts: row.label_conflicts.map(parseLabelConflict),
+        };
+      }
+      if (status !== "prepared") {
         throw new PortableBoardImportAdapterError(
           "No se pudo finalizar la preparación del respaldo.",
           "unavailable",

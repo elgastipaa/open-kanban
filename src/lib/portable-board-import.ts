@@ -305,7 +305,7 @@ export interface PortableBoardImportObjectTarget {
 }
 
 export interface PortableBoardImportPreview {
-  status: "prepared";
+  status: "prepared" | "label_conflict";
   operation_id: string;
   content_revision: number;
   source_sha256: string;
@@ -320,7 +320,20 @@ export interface PortableBoardImportPreview {
     can_replace: boolean;
   };
   member_refs: string[];
+  member_mappings: Array<{ source_ref: string; target_user_id: string | null }>;
   members: Array<{ user_id: string; name: string }>;
+  label_renames: Array<{
+    source_ref: string;
+    name: string;
+    imported_name: string;
+  }>;
+  label_conflicts?: PortableBoardImportLabelConflict[];
+}
+
+export interface PortableBoardImportLabelConflict {
+  source_ref: string;
+  name: string;
+  conflict_name: string;
 }
 
 export interface PortableBoardImportAdapter {

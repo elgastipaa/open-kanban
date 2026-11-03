@@ -22,10 +22,12 @@ CREATE TABLE public.issue44_import_fixture (
   owner_id uuid NOT NULL,
   collaborator_id uuid NOT NULL,
   old_generation_id uuid NOT NULL,
+  published_generation_id uuid,
   old_task_id uuid NOT NULL,
   old_attachment_id uuid NOT NULL,
   new_attachment_id uuid,
   cancel_attachment_id uuid,
+  content_revision bigint,
   source_manifest jsonb,
   board_record jsonb,
   column_records jsonb,
@@ -74,6 +76,12 @@ SELECT old_attachment_id, board_id, old_task_id, owner_id,
   'a4460000-0000-4000-8000-000000000001', 'previo.txt', 5,
   extensions.digest(convert_to('prior', 'UTF8'), 'sha256'),
   'attachments/issue44-synthetic-prior', 'active'
+FROM public.issue44_import_fixture;
+INSERT INTO public.board_labels(
+  id, board_id, generation_id, name, color, created_by
+)
+SELECT 'a4470000-0000-4000-8000-000000000001', board_id,
+  old_generation_id, 'operación', 'red', owner_id
 FROM public.issue44_import_fixture;
 
 BEGIN;
@@ -324,6 +332,44 @@ END;
 $$;
 COMMIT;
 
+CREATE FUNCTION public.issue44_try_unsafe_update(p_operation_id uuid, p_source_ref text)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public, pg_temp
+AS $$
+DECLARE
+  v_task_id uuid;
+BEGIN
+  SELECT reference.destination_id INTO STRICT v_task_id
+  FROM public.board_import_v2_refs AS reference
+  WHERE reference.operation_id = p_operation_id
+    AND reference.source_ref = p_source_ref
+    AND reference.ref_kind = 'task';
+  UPDATE public.tasks
+  SET assignee_version = assignee_version + 1
+  WHERE id = v_task_id;
+END;
+$$;
+GRANT EXECUTE ON FUNCTION public.issue44_try_unsafe_update(uuid, text) TO authenticated;
+
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', 'a4400000-0000-4000-8000-000000000001', true);
+DO $$
+BEGIN
+  BEGIN
+    PERFORM public.issue44_try_unsafe_update(
+      'a4440000-0000-4000-8000-000000000001', 'task_' || repeat('3', 64)
+    );
+    RAISE EXCEPTION 'direct task update changed a preparing v2 generation';
+  EXCEPTION WHEN insufficient_privilege THEN
+    NULL;
+  END;
+END;
+$$;
+COMMIT;
+
 UPDATE public.application_access
 SET state = 'suspended'
 WHERE auth_user_id = 'a4400000-0000-4000-8000-000000000001';
@@ -393,11 +439,72 @@ DO $$
 DECLARE
   v_fixture public.issue44_import_fixture%ROWTYPE;
   v_result jsonb;
+  v_decisions jsonb := pg_catalog.jsonb_build_array(
+    pg_catalog.jsonb_build_object(
+      'source_ref', 'member_' || repeat('9', 64),
+      'target_user_id', 'a4400000-0000-4000-8000-000000000002'
+    ),
+    pg_catalog.jsonb_build_object(
+      'source_ref', 'member_' || repeat('f', 64),
+      'target_user_id', NULL
+    )
+  );
+  v_label_decisions jsonb := pg_catalog.jsonb_build_array(
+    pg_catalog.jsonb_build_object(
+      'source_ref', 'label_' || repeat('6', 64), 'name', 'Operación importada'
+    )
+  );
+  v_label_decisions_after jsonb := pg_catalog.jsonb_build_array(
+    pg_catalog.jsonb_build_object(
+      'source_ref', 'label_' || repeat('6', 64), 'name', 'Operación reimportada'
+    )
+  );
   v_operation uuid := 'a4440000-0000-4000-8000-000000000001';
   v_digest text := repeat('a', 64);
   v_revision bigint;
 BEGIN
   SELECT * INTO STRICT v_fixture FROM public.issue44_import_fixture;
+  v_result := public.finalize_board_import_v2_p(v_fixture.slug, v_operation);
+  IF v_result->>'status' <> 'label_conflict'
+    OR jsonb_array_length(v_result->'label_conflicts') <> 1
+    OR jsonb_array_length(v_result->'member_refs') <> 2
+    OR jsonb_array_length(v_result->'members') <> 2
+    OR v_result->'imported'->>'labels' <> '1' THEN
+    RAISE EXCEPTION 'label collision did not hold publication with member decisions visible: %', v_result;
+  END IF;
+  v_result := public.set_board_import_v2_label_resolutions_p(
+    v_fixture.slug, v_operation, v_label_decisions,
+    pg_catalog.jsonb_set(
+      v_decisions, '{0,target_user_id}',
+      to_jsonb('a4400000-0000-4000-8000-000000000003'::text)
+    )
+  );
+  IF v_result->>'status' <> 'member_conflict' THEN
+    RAISE EXCEPTION 'a non-member was accepted as a destination assignee: %', v_result;
+  END IF;
+  v_result := public.set_board_import_v2_label_resolutions_p(
+    v_fixture.slug, v_operation,
+    pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+      'source_ref', 'label_' || repeat('6', 64), 'name', 'operación'
+    )),
+    v_decisions
+  );
+  IF v_result->>'status' <> 'label_conflict'
+    OR jsonb_array_length(v_result->'label_conflicts') <> 1 THEN
+    RAISE EXCEPTION 'a normalized duplicate label name was silently accepted: %', v_result;
+  END IF;
+  v_result := public.set_board_import_v2_label_resolutions_p(
+    v_fixture.slug, v_operation, v_label_decisions, v_decisions
+  );
+  IF v_result->>'status' <> 'saved' THEN
+    RAISE EXCEPTION 'explicit member and label decisions were not saved: %', v_result;
+  END IF;
+  v_result := public.set_board_import_v2_label_resolutions_p(
+    v_fixture.slug, v_operation, v_label_decisions, v_decisions
+  );
+  IF v_result->>'status' <> 'saved' THEN
+    RAISE EXCEPTION 'retry of saved member and label decisions was not idempotent: %', v_result;
+  END IF;
   v_result := public.finalize_board_import_v2_p(v_fixture.slug, v_operation);
   IF v_result->>'status' <> 'prepared' OR v_result->>'source_version' <> '2'
     OR v_result->>'time_zone' <> 'America/Argentina/Buenos_Aires'
@@ -408,26 +515,295 @@ BEGIN
     OR v_result->'imported'->>'series' <> '2'
     OR v_result->'imported'->>'attachments' <> '1'
     OR v_result->'capacity'->>'used_bytes' <> '9'
+    OR v_result->'member_mappings'->0->>'target_user_id' <> 'a4400000-0000-4000-8000-000000000002'
     OR (SELECT active_generation_id FROM public.boards WHERE id = v_fixture.board_id) <> v_fixture.old_generation_id THEN
     RAISE EXCEPTION 'v2 preview changed visible content, lost package data or miscounted quota: %', v_result;
   END IF;
   v_revision := (v_result->>'content_revision')::bigint;
-  v_result := public.confirm_board_import_p(v_fixture.slug, v_operation, v_revision, v_digest);
-  IF v_result->>'status' <> 'confirmed'
-    OR (SELECT name FROM public.boards WHERE id = v_fixture.board_id) <> 'Respaldo completo'
-    OR (SELECT time_zone FROM public.boards WHERE id = v_fixture.board_id) <> 'America/Argentina/Buenos_Aires'
-    OR (SELECT count(*) FROM public.get_tasks_by_board_p(v_fixture.board_id)) <> 2
-    OR (SELECT count(*) FROM public.get_tasks_by_board_p(v_fixture.board_id) WHERE title IN ('Tarea importada', 'Tarea de serie B')) <> 2
-    OR (SELECT count(*) FROM public.list_board_members_p(v_fixture.slug)) <> 2
-    OR (SELECT owner_id FROM public.boards WHERE id = v_fixture.board_id) <> v_fixture.owner_id THEN
-    RAISE EXCEPTION 'v2 confirmation did not atomically publish package content and metadata: %', v_result;
+  UPDATE public.issue44_import_fixture
+  SET content_revision = v_revision;
+  IF public.confirm_board_import_v2_p(
+    v_fixture.slug, v_operation, v_revision, v_digest, '[]'::jsonb
+  )->>'status' <> 'member_mapping_required'
+    OR (SELECT active_generation_id FROM public.boards WHERE id = v_fixture.board_id)
+      <> v_fixture.old_generation_id THEN
+    RAISE EXCEPTION 'v2 publication accepted a missing assignment decision or changed the pointer';
   END IF;
-  IF public.confirm_board_import_p(v_fixture.slug, v_operation, v_revision, v_digest)->>'status' <> 'confirmed' THEN
+END;
+$$;
+COMMIT;
+
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', 'a4400000-0000-4000-8000-000000000001', true);
+DO $$
+DECLARE
+  fixture public.issue44_import_fixture%ROWTYPE;
+  result jsonb;
+  v_revision bigint;
+  decisions jsonb := pg_catalog.jsonb_build_array(
+    pg_catalog.jsonb_build_object(
+      'source_ref', 'member_' || repeat('9', 64),
+      'target_user_id', 'a4400000-0000-4000-8000-000000000002'
+    ),
+    pg_catalog.jsonb_build_object(
+      'source_ref', 'member_' || repeat('f', 64), 'target_user_id', NULL
+    )
+  );
+BEGIN
+  SELECT * INTO STRICT fixture FROM public.issue44_import_fixture;
+  v_revision := fixture.content_revision;
+  result := public.finalize_board_import_v2_p(
+    fixture.slug, 'a4440000-0000-4000-8000-000000000001'
+  );
+  IF result->>'status' <> 'prepared' THEN
+    RAISE EXCEPTION 'a current prepared preview could not be refreshed: %', result;
+  END IF;
+  v_revision := (result->>'content_revision')::bigint;
+  UPDATE public.issue44_import_fixture
+  SET content_revision = v_revision;
+  result := public.confirm_board_import_v2_p(
+    fixture.slug, 'a4440000-0000-4000-8000-000000000001', v_revision,
+    repeat('a', 64), decisions
+  );
+  IF result->>'status' <> 'confirmed'
+    OR (SELECT name FROM public.boards WHERE id = fixture.board_id) <> 'Respaldo completo'
+    OR (SELECT time_zone FROM public.boards WHERE id = fixture.board_id) <> 'America/Argentina/Buenos_Aires'
+    OR (SELECT count(*) FROM public.get_tasks_by_board_p(fixture.board_id)) <> 2
+    OR (SELECT count(*) FROM public.get_tasks_by_board_p(fixture.board_id) WHERE title IN ('Tarea importada', 'Tarea de serie B')) <> 2
+    OR (SELECT count(*) FROM public.list_board_members_p(fixture.slug)) <> 2
+    OR (SELECT owner_id FROM public.boards WHERE id = fixture.board_id) <> fixture.owner_id THEN
+    RAISE EXCEPTION 'v2 confirmation did not atomically publish package content and metadata: %', result;
+  END IF;
+  UPDATE public.issue44_import_fixture
+  SET published_generation_id = (
+    SELECT board.active_generation_id FROM public.boards AS board WHERE board.id = fixture.board_id
+  );
+  IF public.confirm_board_import_v2_p(
+    fixture.slug, 'a4440000-0000-4000-8000-000000000001', v_revision,
+    repeat('a', 64), decisions
+  )->>'status' <> 'confirmed' THEN
     RAISE EXCEPTION 'v2 confirmation retry was not idempotent';
   END IF;
 END;
 $$;
 COMMIT;
+
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', 'a4400000-0000-4000-8000-000000000001', true);
+DO $$
+DECLARE
+  fixture public.issue44_import_fixture%ROWTYPE;
+  operation_id uuid := 'a4440000-0000-4000-8000-000000000003';
+  source_sha text := repeat('b', 64);
+  empty_sha text := 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+  files jsonb;
+  manifest jsonb;
+  board_record jsonb := pg_catalog.jsonb_build_object(
+    'id', 'board_' || repeat('a', 64), 'name', 'Edición posterior',
+    'time_zone', 'UTC', 'created_at', '2025-01-01T00:00:00Z',
+    'updated_at', '2025-01-02T00:00:00Z'
+  );
+  column_records jsonb := pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+    'id', 'column_' || repeat('c', 64), 'title', 'Columna de control',
+    'position', 0, 'created_at', '2025-01-01T00:00:00Z'
+  ));
+  result jsonb;
+  labels jsonb;
+  label_id uuid;
+  label_version bigint;
+  revision bigint;
+  active_generation uuid;
+BEGIN
+  SELECT * INTO STRICT fixture FROM public.issue44_import_fixture;
+  SELECT board.active_generation_id INTO active_generation
+  FROM public.boards AS board WHERE board.id = fixture.board_id;
+  files := pg_catalog.jsonb_build_array(
+    pg_catalog.jsonb_build_object('path','data/board.json','size_bytes',1,'sha256',source_sha,'content_type','application/json','records',1),
+    pg_catalog.jsonb_build_object('path','data/columns.ndjson','size_bytes',1,'sha256',source_sha,'content_type','application/x-ndjson','records',1),
+    pg_catalog.jsonb_build_object('path','data/tasks.ndjson','size_bytes',0,'sha256',empty_sha,'content_type','application/x-ndjson','records',0),
+    pg_catalog.jsonb_build_object('path','data/comments.ndjson','size_bytes',0,'sha256',empty_sha,'content_type','application/x-ndjson','records',0),
+    pg_catalog.jsonb_build_object('path','data/labels.ndjson','size_bytes',0,'sha256',empty_sha,'content_type','application/x-ndjson','records',0),
+    pg_catalog.jsonb_build_object('path','data/task-labels.ndjson','size_bytes',0,'sha256',empty_sha,'content_type','application/x-ndjson','records',0),
+    pg_catalog.jsonb_build_object('path','data/birthdays.ndjson','size_bytes',0,'sha256',empty_sha,'content_type','application/x-ndjson','records',0),
+    pg_catalog.jsonb_build_object('path','data/birthday-labels.ndjson','size_bytes',0,'sha256',empty_sha,'content_type','application/x-ndjson','records',0),
+    pg_catalog.jsonb_build_object('path','data/repetitions.ndjson','size_bytes',0,'sha256',empty_sha,'content_type','application/x-ndjson','records',0),
+    pg_catalog.jsonb_build_object('path','data/repetition-labels.ndjson','size_bytes',0,'sha256',empty_sha,'content_type','application/x-ndjson','records',0),
+    pg_catalog.jsonb_build_object('path','data/repetition-occurrences.ndjson','size_bytes',0,'sha256',empty_sha,'content_type','application/x-ndjson','records',0),
+    pg_catalog.jsonb_build_object('path','data/activity.ndjson','size_bytes',0,'sha256',empty_sha,'content_type','application/x-ndjson','records',0),
+    pg_catalog.jsonb_build_object('path','data/attachments.ndjson','size_bytes',0,'sha256',empty_sha,'content_type','application/x-ndjson','records',0)
+  );
+  manifest := pg_catalog.jsonb_build_object(
+    'format','openkanban-board','version',2,'exported_at','2025-01-02T00:00:00Z',
+    'schema_version',1,'normalization_version',1,'compression','store','integrity','sha256',
+    'calendar',pg_catalog.jsonb_build_object('time_zone','UTC'),
+    'identifiers',pg_catalog.jsonb_build_object('scope','package','grant_access',false),
+    'files',files
+  );
+  result := public.prepare_board_import_v2_p(fixture.slug, operation_id, source_sha, manifest);
+  IF result->>'status' <> 'staging' THEN
+    RAISE EXCEPTION 'second synthetic import did not stage for stale-preview check: %', result;
+  END IF;
+  IF public.stage_board_import_v2_batch_p(fixture.slug, operation_id, 'board', 0,
+      pg_catalog.jsonb_build_array(board_record))->>'status' <> 'staging'
+    OR public.stage_board_import_v2_batch_p(fixture.slug, operation_id, 'columns', 0,
+      column_records)->>'status' <> 'staging' THEN
+    RAISE EXCEPTION 'second synthetic import records did not stage';
+  END IF;
+  result := public.reserve_board_import_v2_p(fixture.slug, operation_id);
+  IF result->>'status' <> 'reserved' OR pg_catalog.jsonb_array_length(result->'targets') <> 0 THEN
+    RAISE EXCEPTION 'empty-object control import did not reserve cleanly: %', result;
+  END IF;
+  result := public.finalize_board_import_v2_p(fixture.slug, operation_id);
+  IF result->>'status' <> 'prepared' THEN
+    RAISE EXCEPTION 'second synthetic import did not prepare for stale-preview check: %', result;
+  END IF;
+  revision := (result->>'content_revision')::bigint;
+  labels := public.list_board_labels_p(fixture.slug)->'labels';
+  label_id := (labels->0->>'id')::uuid;
+  label_version := (labels->0->>'version')::bigint;
+  result := public.update_board_label_p(
+    fixture.slug, label_id, label_version, 'Operación reimportada', 'red'
+  );
+  IF result->>'status' <> 'confirmed' THEN
+    RAISE EXCEPTION 'synthetic active-board edit failed after second preview: %', result;
+  END IF;
+  result := public.confirm_board_import_v2_p(
+    fixture.slug, operation_id, revision, source_sha, '[]'::jsonb
+  );
+  IF result->>'status' <> 'conflict'
+    OR (SELECT board.active_generation_id FROM public.boards AS board WHERE board.id = fixture.board_id)
+      <> active_generation THEN
+    RAISE EXCEPTION 'confirmation did not reject a stale preview after a real edit: %', result;
+  END IF;
+END;
+$$;
+COMMIT;
+
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', 'a4400000-0000-4000-8000-000000000001', true);
+DO $$
+DECLARE
+  fixture public.issue44_import_fixture%ROWTYPE;
+  operation_id uuid := 'a4440000-0000-4000-8000-000000000004';
+  source_sha text := repeat('c', 64);
+  empty_sha text := 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+  manifest jsonb;
+  files jsonb;
+  board_record jsonb := pg_catalog.jsonb_build_object(
+    'id', 'board_' || repeat('d', 64), 'name', 'Revalidación de miembros',
+    'time_zone', 'UTC', 'created_at', '2025-01-01T00:00:00Z',
+    'updated_at', '2025-01-02T00:00:00Z'
+  );
+  column_records jsonb := pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+    'id', 'column_' || repeat('e', 64), 'title', 'Columna de mapeo',
+    'position', 0, 'created_at', '2025-01-01T00:00:00Z'
+  ));
+  task_records jsonb := pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+    'id', 'task_' || repeat('f', 64), 'column_id', 'column_' || repeat('e', 64),
+    'title', 'Tarea asignada de control', 'description', NULL, 'priority', 'medium',
+    'position', 0, 'due_on', NULL, 'is_completed', false, 'completed_at', NULL,
+    'steps', '[]'::jsonb, 'created_at', '2025-01-01T00:00:00Z',
+    'updated_at', '2025-01-02T00:00:00Z', 'assignee_ref', 'member_' || repeat('9', 64)
+  ));
+  result jsonb;
+  revision bigint;
+BEGIN
+  SELECT * INTO STRICT fixture FROM public.issue44_import_fixture;
+  SELECT pg_catalog.jsonb_agg(
+    pg_catalog.jsonb_build_object(
+      'path', file.value->>'path',
+      'size_bytes', CASE WHEN file.value->>'path' IN (
+        'data/board.json', 'data/columns.ndjson', 'data/tasks.ndjson'
+      ) THEN 1 ELSE 0 END,
+      'sha256', CASE WHEN file.value->>'path' IN (
+        'data/board.json', 'data/columns.ndjson', 'data/tasks.ndjson'
+      ) THEN source_sha ELSE empty_sha END,
+      'content_type', file.value->>'content_type',
+      'records', CASE file.value->>'path'
+        WHEN 'data/board.json' THEN 1
+        WHEN 'data/columns.ndjson' THEN 1
+        WHEN 'data/tasks.ndjson' THEN 1
+        ELSE 0 END
+    ) ORDER BY file.ordinality
+  ) INTO files
+  FROM pg_catalog.jsonb_array_elements(fixture.source_manifest->'files')
+    WITH ORDINALITY AS file(value, ordinality)
+  WHERE file.value->>'path' NOT LIKE 'objects/%';
+  manifest := pg_catalog.jsonb_build_object(
+    'format','openkanban-board','version',2,'exported_at','2025-01-02T00:00:00Z',
+    'schema_version',1,'normalization_version',1,'compression','store','integrity','sha256',
+    'calendar',pg_catalog.jsonb_build_object('time_zone','UTC'),
+    'identifiers',pg_catalog.jsonb_build_object('scope','package','grant_access',false),
+    'files',files
+  );
+  result := public.prepare_board_import_v2_p(fixture.slug, operation_id, source_sha, manifest);
+  IF result->>'status' <> 'staging'
+    OR public.stage_board_import_v2_batch_p(fixture.slug, operation_id, 'board', 0,
+      pg_catalog.jsonb_build_array(board_record))->>'status' <> 'staging'
+    OR public.stage_board_import_v2_batch_p(fixture.slug, operation_id, 'columns', 0,
+      column_records)->>'status' <> 'staging'
+    OR public.stage_board_import_v2_batch_p(fixture.slug, operation_id, 'tasks', 0,
+      task_records)->>'status' <> 'staging' THEN
+    RAISE EXCEPTION 'member-revalidation operation did not stage: %', result;
+  END IF;
+  result := public.reserve_board_import_v2_p(fixture.slug, operation_id);
+  IF result->>'status' <> 'reserved' THEN
+    RAISE EXCEPTION 'member-revalidation operation did not reserve: %', result;
+  END IF;
+  result := public.finalize_board_import_v2_p(fixture.slug, operation_id);
+  IF result->>'status' <> 'prepared' OR jsonb_array_length(result->'member_refs') <> 1 THEN
+    RAISE EXCEPTION 'member-revalidation operation did not prepare the assignee ref: %', result;
+  END IF;
+  revision := (result->>'content_revision')::bigint;
+  UPDATE public.issue44_import_fixture SET content_revision = revision;
+END;
+$$;
+COMMIT;
+
+UPDATE public.board_memberships AS membership
+SET revoked_at = pg_catalog.clock_timestamp()
+FROM public.issue44_import_fixture AS fixture
+WHERE membership.board_id = fixture.board_id
+  AND membership.user_id = fixture.collaborator_id;
+
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', 'a4400000-0000-4000-8000-000000000001', true);
+DO $$
+DECLARE
+  fixture public.issue44_import_fixture%ROWTYPE;
+  result jsonb;
+BEGIN
+  SELECT * INTO STRICT fixture FROM public.issue44_import_fixture;
+  result := public.confirm_board_import_v2_p(
+    fixture.slug, 'a4440000-0000-4000-8000-000000000004', fixture.content_revision,
+    repeat('c', 64), pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+      'source_ref', 'member_' || repeat('9', 64), 'target_user_id', fixture.collaborator_id
+    ))
+  );
+  IF result->>'status' <> 'member_conflict'
+    OR (SELECT board.active_generation_id FROM public.boards AS board WHERE board.id = fixture.board_id)
+      <> fixture.published_generation_id THEN
+    RAISE EXCEPTION 'confirmation accepted an assignee whose board membership was revoked: %', result;
+  END IF;
+  result := public.cancel_board_import_v2_p(
+    fixture.slug, 'a4440000-0000-4000-8000-000000000004'
+  );
+  IF result->>'status' <> 'cancelled' THEN
+    RAISE EXCEPTION 'member-revalidation staging did not clean up: %', result;
+  END IF;
+END;
+$$;
+COMMIT;
+
+UPDATE public.board_memberships AS membership
+SET revoked_at = NULL
+FROM public.issue44_import_fixture AS fixture
+WHERE membership.board_id = fixture.board_id
+  AND membership.user_id = fixture.collaborator_id;
 
 DO $$
 DECLARE
@@ -472,6 +848,26 @@ BEGIN
     OR (SELECT count(*) FROM public.board_label_birthday_assignments WHERE generation_id = imported_generation) <> 1
     OR (SELECT count(*) FROM public.board_label_repetition_assignments WHERE generation_id = imported_generation) <> 1 THEN
     RAISE EXCEPTION 'v2 label, birthday, or series-label relationships were not preserved';
+  END IF;
+  IF NOT EXISTS (
+      SELECT 1 FROM public.board_labels AS imported
+      WHERE imported.generation_id = imported_generation
+        AND imported.name = 'Operación reimportada'
+        AND imported.id <> 'a4470000-0000-4000-8000-000000000001'
+    ) OR (SELECT name FROM public.board_labels
+        WHERE id = 'a4470000-0000-4000-8000-000000000001') <> 'operación'
+    OR (SELECT task.assignee_id FROM public.tasks AS task
+        WHERE task.title = 'Tarea importada') <> fixture.collaborator_id
+    OR (SELECT task.assignee_id FROM public.tasks AS task
+        WHERE task.title = 'Tarea de serie B') IS NOT NULL
+    OR (SELECT series.template_snapshot->>'assignee_id'
+        FROM public.daily_repetition_series AS series
+        WHERE series.generation_id = imported_generation AND series.state = 'stopped')
+        <> fixture.collaborator_id::text
+    OR (SELECT series.template_snapshot->>'assignee_id'
+        FROM public.daily_repetition_series AS series
+        WHERE series.generation_id = imported_generation AND series.state = 'active') IS NOT NULL THEN
+    RAISE EXCEPTION 'explicit label rename or member assignment mapping was not preserved';
   END IF;
   IF NOT EXISTS (
       SELECT 1 FROM public.daily_repetition_series AS series

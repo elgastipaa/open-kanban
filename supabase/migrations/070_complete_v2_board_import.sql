@@ -6,6 +6,7 @@ ALTER TABLE public.board_import_operations
     CHECK (source_version IN (1, 2)),
   ADD COLUMN source_manifest jsonb,
   ADD COLUMN v2_materialized boolean NOT NULL DEFAULT false,
+  ADD COLUMN v2_labels_materialized boolean NOT NULL DEFAULT false,
   ADD CONSTRAINT board_import_operations_manifest_shape CHECK (
     (source_version = 1 AND source_manifest IS NULL AND NOT v2_materialized)
     OR (source_version = 2 AND pg_catalog.jsonb_typeof(source_manifest) = 'object')
@@ -90,13 +91,284 @@ CREATE TABLE public.board_import_v2_objects (
     REFERENCES public.board_import_operations(actor_id, operation_id) ON DELETE CASCADE
 );
 
+CREATE TABLE public.board_import_v2_member_mappings (
+  actor_id uuid NOT NULL,
+  operation_id uuid NOT NULL,
+  source_ref text NOT NULL CHECK (source_ref ~ '^member_[0-9a-f]{64}$'),
+  target_user_id uuid,
+  updated_at timestamptz NOT NULL DEFAULT pg_catalog.clock_timestamp(),
+  PRIMARY KEY (actor_id, operation_id, source_ref),
+  FOREIGN KEY (actor_id, operation_id)
+    REFERENCES public.board_import_operations(actor_id, operation_id) ON DELETE CASCADE
+);
+
+CREATE TABLE public.board_import_v2_label_resolutions (
+  actor_id uuid NOT NULL,
+  operation_id uuid NOT NULL,
+  source_ref text NOT NULL CHECK (source_ref ~ '^label_[0-9a-f]{64}$'),
+  name text NOT NULL CHECK (
+    name = pg_catalog.btrim(name) AND name <> '' AND pg_catalog.char_length(name) <= 40
+  ),
+  updated_at timestamptz NOT NULL DEFAULT pg_catalog.clock_timestamp(),
+  PRIMARY KEY (actor_id, operation_id, source_ref),
+  FOREIGN KEY (actor_id, operation_id)
+    REFERENCES public.board_import_operations(actor_id, operation_id) ON DELETE CASCADE
+);
+
+CREATE TABLE public.board_import_v2_assignment_contexts (
+  transaction_id bigint NOT NULL,
+  actor_id uuid NOT NULL,
+  board_id uuid NOT NULL,
+  generation_id uuid NOT NULL,
+  operation_id uuid NOT NULL,
+  task_ids uuid[] NOT NULL,
+  PRIMARY KEY (transaction_id, operation_id),
+  FOREIGN KEY (actor_id, operation_id)
+    REFERENCES public.board_import_operations(actor_id, operation_id) ON DELETE CASCADE
+);
+
 ALTER TABLE public.board_import_v2_batches ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.board_import_v2_records ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.board_import_v2_refs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.board_import_v2_objects ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.board_import_v2_member_mappings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.board_import_v2_label_resolutions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.board_import_v2_assignment_contexts ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE public.board_import_v2_batches,
   public.board_import_v2_records, public.board_import_v2_refs,
-  public.board_import_v2_objects FROM PUBLIC, anon, authenticated, service_role;
+  public.board_import_v2_objects, public.board_import_v2_member_mappings,
+  public.board_import_v2_label_resolutions,
+  public.board_import_v2_assignment_contexts FROM PUBLIC, anon, authenticated, service_role;
+
+CREATE OR REPLACE FUNCTION public.guard_board_child_owner()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public, auth, pg_temp
+AS $$
+DECLARE
+  v_old_board_id uuid;
+  v_new_board_id uuid;
+  v_old_generation_id uuid;
+  v_new_generation_id uuid;
+  v_active_generation_id uuid;
+  v_stage_actor_id uuid;
+BEGIN
+  IF TG_OP <> 'INSERT' THEN
+    IF TG_TABLE_NAME = 'columns' THEN
+      v_old_board_id := OLD.board_id;
+      v_old_generation_id := OLD.generation_id;
+    ELSE
+      SELECT column_row.board_id, column_row.generation_id
+        INTO v_old_board_id, v_old_generation_id
+      FROM public.columns AS column_row WHERE column_row.id = OLD.column_id;
+    END IF;
+  END IF;
+  IF TG_OP <> 'DELETE' THEN
+    IF TG_TABLE_NAME = 'columns' THEN
+      v_new_board_id := NEW.board_id;
+      v_new_generation_id := NEW.generation_id;
+    ELSE
+      SELECT column_row.board_id, column_row.generation_id
+        INTO v_new_board_id, v_new_generation_id
+      FROM public.columns AS column_row WHERE column_row.id = NEW.column_id;
+    END IF;
+  END IF;
+
+  IF TG_OP = 'DELETE' AND EXISTS (
+    SELECT 1 FROM public.board_import_cleanup_contexts AS context
+    WHERE context.transaction_id = pg_catalog.txid_current()
+  ) THEN
+    RETURN OLD;
+  END IF;
+  IF TG_OP = 'UPDATE' AND v_old_board_id IS DISTINCT FROM v_new_board_id THEN
+    RAISE EXCEPTION 'Content cannot move between boards' USING ERRCODE = '42501';
+  END IF;
+  IF TG_OP <> 'INSERT' AND v_old_board_id IS NOT NULL THEN
+    SELECT board.active_generation_id INTO v_active_generation_id
+    FROM public.boards AS board WHERE board.id = v_old_board_id;
+    IF NOT FOUND AND TG_OP = 'DELETE' AND pg_trigger_depth() > 1 THEN
+      RETURN OLD;
+    END IF;
+    IF TG_OP = 'DELETE' AND EXISTS (
+      SELECT 1 FROM public.board_import_cleanup_contexts AS context
+      WHERE context.transaction_id = pg_catalog.txid_current()
+        AND context.board_id = v_old_board_id
+        AND context.generation_id = v_old_generation_id
+    ) THEN
+      RETURN OLD;
+    END IF;
+    IF v_active_generation_id IS DISTINCT FROM v_old_generation_id
+      AND NOT (
+        TG_OP = 'UPDATE'
+        AND TG_TABLE_NAME = 'columns'
+        AND (pg_catalog.to_jsonb(NEW)->>'task_order_version')::bigint
+          = (pg_catalog.to_jsonb(OLD)->>'task_order_version')::bigint + 1
+        AND (pg_catalog.to_jsonb(NEW) - 'task_order_version')
+          IS NOT DISTINCT FROM (pg_catalog.to_jsonb(OLD) - 'task_order_version')
+        AND EXISTS (
+          SELECT 1 FROM public.board_import_stage_contexts AS context
+          JOIN public.board_generations AS generation
+            ON generation.board_id = context.board_id
+            AND generation.id = context.generation_id
+            AND generation.status = 'preparing'
+          WHERE context.transaction_id = pg_catalog.txid_current()
+            AND context.actor_id = auth.uid()
+            AND context.board_id = v_old_board_id
+            AND context.generation_id = v_old_generation_id
+        )
+        AND public.is_application_user()
+        AND public.is_board_owner(v_old_board_id)
+        OR TG_OP = 'UPDATE'
+        AND TG_TABLE_NAME = 'tasks'
+        AND (pg_catalog.to_jsonb(NEW)->>'assignee_version')::bigint
+          = (pg_catalog.to_jsonb(OLD)->>'assignee_version')::bigint + 1
+        AND (pg_catalog.to_jsonb(NEW) - 'assignee_id' - 'assignee_version')
+          IS NOT DISTINCT FROM
+          (pg_catalog.to_jsonb(OLD) - 'assignee_id' - 'assignee_version')
+        AND EXISTS (
+          SELECT 1
+          FROM public.board_import_v2_assignment_contexts AS context
+          JOIN public.board_generations AS generation
+            ON generation.board_id = context.board_id
+            AND generation.id = context.generation_id
+            AND generation.status = 'preparing'
+          JOIN public.board_import_operations AS operation
+            ON operation.actor_id = context.actor_id
+            AND operation.operation_id = context.operation_id
+            AND operation.board_id = context.board_id
+            AND operation.generation_id = context.generation_id
+            AND operation.status = 'prepared'
+            AND operation.source_version = 2
+          WHERE context.transaction_id = pg_catalog.txid_current()
+            AND context.actor_id = auth.uid()
+            AND context.board_id = v_old_board_id
+            AND context.generation_id = v_old_generation_id
+            AND OLD.id = ANY(context.task_ids)
+        )
+        AND public.is_application_user()
+        AND public.is_board_owner(v_old_board_id)
+      ) THEN
+      RAISE EXCEPTION 'Archived board content cannot be changed' USING ERRCODE = '42501';
+    END IF;
+  END IF;
+  IF TG_OP = 'DELETE' AND pg_trigger_depth() > 1
+    AND NOT public.is_board_member(v_old_board_id) THEN
+    RETURN OLD;
+  END IF;
+  IF TG_OP <> 'DELETE' THEN
+    SELECT board.active_generation_id INTO v_active_generation_id
+    FROM public.boards AS board WHERE board.id = v_new_board_id;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'Board access is required' USING ERRCODE = '42501';
+    END IF;
+    IF TG_TABLE_NAME = 'columns' AND v_new_generation_id IS NULL THEN
+      NEW.generation_id := v_active_generation_id;
+      v_new_generation_id := v_active_generation_id;
+    END IF;
+    IF v_new_generation_id IS DISTINCT FROM v_active_generation_id THEN
+      SELECT context.actor_id INTO v_stage_actor_id
+      FROM public.board_import_stage_contexts AS context
+      JOIN public.board_generations AS generation
+        ON generation.board_id = context.board_id
+        AND generation.id = context.generation_id
+        AND generation.status = 'preparing'
+      WHERE context.transaction_id = pg_catalog.txid_current()
+        AND context.actor_id = auth.uid()
+        AND context.board_id = v_new_board_id
+        AND context.generation_id = v_new_generation_id;
+      IF NOT FOUND AND TG_OP = 'UPDATE' AND TG_TABLE_NAME = 'tasks' THEN
+        SELECT context.actor_id INTO v_stage_actor_id
+        FROM public.board_import_v2_assignment_contexts AS context
+        JOIN public.board_generations AS generation
+          ON generation.board_id = context.board_id
+          AND generation.id = context.generation_id
+          AND generation.status = 'preparing'
+        JOIN public.board_import_operations AS operation
+          ON operation.actor_id = context.actor_id
+          AND operation.operation_id = context.operation_id
+          AND operation.board_id = context.board_id
+          AND operation.generation_id = context.generation_id
+          AND operation.status = 'prepared'
+          AND operation.source_version = 2
+        WHERE context.transaction_id = pg_catalog.txid_current()
+          AND context.actor_id = auth.uid()
+          AND context.board_id = v_new_board_id
+          AND context.generation_id = v_new_generation_id
+          AND OLD.id = ANY(context.task_ids);
+      END IF;
+      IF NOT FOUND
+        OR NOT (
+          TG_OP = 'INSERT'
+          OR (TG_OP = 'UPDATE'
+            AND TG_TABLE_NAME = 'columns'
+            AND (pg_catalog.to_jsonb(NEW)->>'task_order_version')::bigint
+              = (pg_catalog.to_jsonb(OLD)->>'task_order_version')::bigint + 1
+            AND (pg_catalog.to_jsonb(NEW) - 'task_order_version')
+              IS NOT DISTINCT FROM (pg_catalog.to_jsonb(OLD) - 'task_order_version'))
+          OR (TG_OP = 'UPDATE'
+            AND TG_TABLE_NAME = 'tasks'
+            AND (pg_catalog.to_jsonb(NEW)->>'assignee_version')::bigint
+              = (pg_catalog.to_jsonb(OLD)->>'assignee_version')::bigint + 1
+            AND (pg_catalog.to_jsonb(NEW) - 'assignee_id' - 'assignee_version')
+              IS NOT DISTINCT FROM
+              (pg_catalog.to_jsonb(OLD) - 'assignee_id' - 'assignee_version')
+            AND EXISTS (
+              SELECT 1
+              FROM public.board_import_v2_assignment_contexts AS context
+              JOIN public.board_generations AS generation
+                ON generation.board_id = context.board_id
+                AND generation.id = context.generation_id
+                AND generation.status = 'preparing'
+              JOIN public.board_import_operations AS operation
+                ON operation.actor_id = context.actor_id
+                AND operation.operation_id = context.operation_id
+                AND operation.board_id = context.board_id
+                AND operation.generation_id = context.generation_id
+                AND operation.status = 'prepared'
+                AND operation.source_version = 2
+              WHERE context.transaction_id = pg_catalog.txid_current()
+                AND context.actor_id = auth.uid()
+                AND context.board_id = v_new_board_id
+                AND context.generation_id = v_new_generation_id
+                AND OLD.id = ANY(context.task_ids)))
+        )
+        OR NOT public.is_application_user()
+        OR NOT public.is_board_owner(v_new_board_id) THEN
+        RAISE EXCEPTION 'Archived board content cannot be changed' USING ERRCODE = '42501';
+      END IF;
+      RETURN NEW;
+    END IF;
+  END IF;
+  IF TG_TABLE_NAME = 'tasks' AND TG_OP = 'UPDATE' THEN
+    IF OLD.assignee_id IS NOT NULL
+      AND NEW.assignee_id IS NULL
+      AND NEW.assignee_version = OLD.assignee_version + 1
+      AND (pg_catalog.to_jsonb(NEW) - 'assignee_id' - 'assignee_version')
+        IS NOT DISTINCT FROM
+        (pg_catalog.to_jsonb(OLD) - 'assignee_id' - 'assignee_version')
+      AND public.is_application_admin()
+      AND EXISTS (
+        SELECT 1 FROM public.account_suspension_write_contexts AS context
+        WHERE context.transaction_id = pg_catalog.txid_current()
+          AND context.actor_id = auth.uid()
+          AND context.target_id = OLD.assignee_id
+          AND v_old_board_id = ANY(context.board_ids)
+      ) THEN
+      RETURN NEW;
+    END IF;
+  END IF;
+  IF NOT public.is_application_user()
+    OR (TG_OP <> 'INSERT' AND NOT public.is_board_member(v_old_board_id))
+    OR (TG_OP <> 'DELETE' AND NOT public.is_board_member(v_new_board_id)) THEN
+    RAISE EXCEPTION 'Board access is required' USING ERRCODE = '42501';
+  END IF;
+  IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+  RETURN NEW;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.guard_board_child_owner()
+  FROM PUBLIC, anon, authenticated, service_role;
 
 CREATE FUNCTION public.board_import_v2_target_id_p(
   p_actor_id uuid, p_operation_id uuid, p_source_ref text, p_ref_kind text
@@ -162,15 +434,84 @@ AS $$
     'current', public.board_import_generation_summary_p(
       p_operation.board_id, p_operation.base_generation_id
     ),
-    'imported', public.board_import_generation_summary_p(
-      p_operation.board_id, p_operation.generation_id
-    ),
+    'imported', CASE WHEN p_operation.source_version = 2
+        AND NOT p_operation.v2_labels_materialized THEN pg_catalog.jsonb_set(
+          public.board_import_generation_summary_p(
+            p_operation.board_id, p_operation.generation_id
+          ), '{labels}', to_jsonb((
+            SELECT pg_catalog.count(*)
+            FROM public.board_import_v2_records AS label
+            WHERE label.actor_id = p_operation.actor_id
+              AND label.operation_id = p_operation.operation_id
+              AND label.entity = 'labels'
+          )), true
+        )
+        ELSE public.board_import_generation_summary_p(
+          p_operation.board_id, p_operation.generation_id
+        )
+      END,
     'capacity', public.board_import_capacity_snapshot_p(),
     'retains_current_members', true,
     'source_version', p_operation.source_version,
     'time_zone', COALESCE(p_operation.source_manifest #>> '{calendar,time_zone}', 'UTC'),
-    'member_refs', '[]'::jsonb,
-    'members', '[]'::jsonb
+    'member_refs', COALESCE((
+      SELECT pg_catalog.jsonb_agg(reference.member_ref ORDER BY reference.member_ref)
+      FROM (
+        SELECT DISTINCT member_ref
+        FROM (
+          SELECT record->>'assignee_ref' AS member_ref
+          FROM public.board_import_v2_records AS record
+          WHERE record.actor_id = p_operation.actor_id
+            AND record.operation_id = p_operation.operation_id
+            AND record.entity = 'tasks'
+          UNION ALL
+          SELECT record #>> '{template_snapshot,assignee_ref}' AS member_ref
+          FROM public.board_import_v2_records AS record
+          WHERE record.actor_id = p_operation.actor_id
+            AND record.operation_id = p_operation.operation_id
+            AND record.entity = 'repetitions'
+        ) AS refs
+        WHERE member_ref IS NOT NULL
+      ) AS reference
+    ), '[]'::jsonb),
+    'member_mappings', COALESCE((
+      SELECT pg_catalog.jsonb_agg(
+        pg_catalog.jsonb_build_object(
+          'source_ref', mapping.source_ref,
+          'target_user_id', mapping.target_user_id
+        ) ORDER BY mapping.source_ref
+      )
+      FROM public.board_import_v2_member_mappings AS mapping
+      WHERE mapping.actor_id = p_operation.actor_id
+        AND mapping.operation_id = p_operation.operation_id
+    ), '[]'::jsonb),
+    'members', COALESCE((
+      SELECT pg_catalog.jsonb_agg(
+        pg_catalog.jsonb_build_object('user_id', member.user_id, 'name', member.name)
+        ORDER BY pg_catalog.lower(member.name), member.user_id
+      )
+      FROM public.boards AS board
+      CROSS JOIN LATERAL public.list_assignable_board_members_p(board.slug) AS member
+      WHERE board.id = p_operation.board_id
+    ), '[]'::jsonb),
+    'label_renames', COALESCE((
+      SELECT pg_catalog.jsonb_agg(
+        pg_catalog.jsonb_build_object(
+          'source_ref', resolution.source_ref,
+          'name', label_record.record->>'name',
+          'imported_name', resolution.name
+        ) ORDER BY resolution.source_ref
+      )
+      FROM public.board_import_v2_label_resolutions AS resolution
+      JOIN public.board_import_v2_records AS label_record
+        ON label_record.actor_id = resolution.actor_id
+        AND label_record.operation_id = resolution.operation_id
+        AND label_record.entity = 'labels'
+        AND label_record.record->>'id' = resolution.source_ref
+      WHERE resolution.actor_id = p_operation.actor_id
+        AND resolution.operation_id = p_operation.operation_id
+        AND resolution.name IS DISTINCT FROM label_record.record->>'name'
+    ), '[]'::jsonb)
   );
 $$;
 REVOKE ALL ON FUNCTION public.board_import_preview_result_p(
@@ -439,6 +780,387 @@ $$;
 REVOKE ALL ON FUNCTION public.stage_board_import_v2_batch_p(text, uuid, text, integer, jsonb)
   FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.stage_board_import_v2_batch_p(text, uuid, text, integer, jsonb)
+  TO authenticated;
+
+CREATE FUNCTION public.board_import_v2_label_conflicts_p(
+  p_actor_id uuid, p_operation_id uuid, p_board_id uuid,
+  p_generation_id uuid DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, public, pg_temp
+AS $$
+  WITH imported AS (
+    SELECT
+      record.record->>'id' AS source_ref,
+      record.record->>'name' AS source_name,
+      COALESCE(resolution.name, record.record->>'name') AS target_name
+    FROM public.board_import_v2_records AS record
+    LEFT JOIN public.board_import_v2_label_resolutions AS resolution
+      ON resolution.actor_id = record.actor_id
+      AND resolution.operation_id = record.operation_id
+      AND resolution.source_ref = record.record->>'id'
+    WHERE record.actor_id = p_actor_id
+      AND record.operation_id = p_operation_id
+      AND record.entity = 'labels'
+  ), conflicts AS (
+    SELECT
+      imported.source_ref,
+      imported.source_name,
+      imported.target_name,
+      COALESCE(existing.name, duplicate.source_name) AS conflict_name
+    FROM imported
+    LEFT JOIN LATERAL (
+      SELECT label.name
+      FROM public.board_labels AS label
+      WHERE label.board_id = p_board_id
+        AND label.deleted_at IS NULL
+        AND (p_generation_id IS NULL OR label.generation_id <> p_generation_id)
+        AND pg_catalog.btrim(label.name) COLLATE public.board_label_name_ci_ai
+          = pg_catalog.btrim(imported.target_name) COLLATE public.board_label_name_ci_ai
+      ORDER BY label.id
+      LIMIT 1
+    ) AS existing ON true
+    LEFT JOIN LATERAL (
+      SELECT other.source_name
+      FROM imported AS other
+      WHERE other.source_ref < imported.source_ref
+        AND pg_catalog.btrim(other.target_name) COLLATE public.board_label_name_ci_ai
+          = pg_catalog.btrim(imported.target_name) COLLATE public.board_label_name_ci_ai
+      ORDER BY other.source_ref
+      LIMIT 1
+    ) AS duplicate ON true
+    WHERE existing.name IS NOT NULL OR duplicate.source_name IS NOT NULL
+  )
+  SELECT COALESCE(pg_catalog.jsonb_agg(
+    pg_catalog.jsonb_build_object(
+      'source_ref', conflicts.source_ref,
+      'name', conflicts.source_name,
+      'conflict_name', conflicts.conflict_name
+    ) ORDER BY conflicts.source_ref
+  ), '[]'::jsonb)
+  FROM conflicts;
+$$;
+REVOKE ALL ON FUNCTION public.board_import_v2_label_conflicts_p(uuid, uuid, uuid, uuid)
+  FROM PUBLIC, anon, authenticated, service_role;
+
+CREATE FUNCTION public.board_import_v2_materialize_labels_p(
+  p_actor_id uuid, p_operation_id uuid
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public, pg_temp
+AS $$
+DECLARE
+  v_operation public.board_import_operations%ROWTYPE;
+  v_conflicts jsonb;
+BEGIN
+  SELECT operation.* INTO v_operation
+  FROM public.board_import_operations AS operation
+  WHERE operation.actor_id = p_actor_id AND operation.operation_id = p_operation_id
+    AND operation.source_version = 2
+  FOR UPDATE;
+  IF NOT FOUND OR NOT v_operation.v2_materialized THEN
+    RETURN pg_catalog.jsonb_build_object('status', 'unavailable');
+  END IF;
+  IF v_operation.v2_labels_materialized THEN
+    RETURN pg_catalog.jsonb_build_object('status', 'materialized');
+  END IF;
+  v_conflicts := public.board_import_v2_label_conflicts_p(
+    p_actor_id, p_operation_id, v_operation.board_id, v_operation.generation_id
+  );
+  IF pg_catalog.jsonb_array_length(v_conflicts) > 0 THEN
+    RETURN pg_catalog.jsonb_build_object(
+      'status', 'label_conflict', 'label_conflicts', v_conflicts
+    );
+  END IF;
+  INSERT INTO public.board_labels(
+    id, board_id, generation_id, name, color, created_by, created_at, updated_at
+  )
+  SELECT reference.destination_id, v_operation.board_id, v_operation.generation_id,
+    COALESCE(resolution.name, record.record->>'name'), record.record->>'color', NULL,
+    (record.record->>'created_at')::timestamptz,
+    (record.record->>'updated_at')::timestamptz
+  FROM public.board_import_v2_records AS record
+  JOIN public.board_import_v2_refs AS reference
+    ON reference.actor_id = record.actor_id AND reference.operation_id = record.operation_id
+    AND reference.ref_kind = 'label' AND reference.source_ref = record.record->>'id'
+  LEFT JOIN public.board_import_v2_label_resolutions AS resolution
+    ON resolution.actor_id = record.actor_id AND resolution.operation_id = record.operation_id
+    AND resolution.source_ref = reference.source_ref
+  WHERE record.actor_id = p_actor_id AND record.operation_id = p_operation_id
+    AND record.entity = 'labels';
+
+  INSERT INTO public.board_label_task_assignments(board_id, generation_id, label_id, task_id)
+  SELECT v_operation.board_id, v_operation.generation_id,
+    public.board_import_v2_target_id_p(p_actor_id, p_operation_id, record.record->>'label_id', 'label'),
+    public.board_import_v2_target_id_p(p_actor_id, p_operation_id, record.record->>'task_id', 'task')
+  FROM public.board_import_v2_records AS record
+  WHERE record.actor_id = p_actor_id AND record.operation_id = p_operation_id
+    AND record.entity = 'task_labels';
+  INSERT INTO public.board_label_birthday_assignments(board_id, generation_id, label_id, birthday_id)
+  SELECT v_operation.board_id, v_operation.generation_id,
+    public.board_import_v2_target_id_p(p_actor_id, p_operation_id, record.record->>'label_id', 'label'),
+    public.board_import_v2_target_id_p(p_actor_id, p_operation_id, record.record->>'birthday_id', 'birthday')
+  FROM public.board_import_v2_records AS record
+  WHERE record.actor_id = p_actor_id AND record.operation_id = p_operation_id
+    AND record.entity = 'birthday_labels';
+  INSERT INTO public.board_label_repetition_assignments(board_id, generation_id, label_id, series_id)
+  SELECT v_operation.board_id, v_operation.generation_id,
+    public.board_import_v2_target_id_p(p_actor_id, p_operation_id, record.record->>'label_id', 'label'),
+    public.board_import_v2_target_id_p(p_actor_id, p_operation_id, record.record->>'series_id', 'repetition')
+  FROM public.board_import_v2_records AS record
+  WHERE record.actor_id = p_actor_id AND record.operation_id = p_operation_id
+    AND record.entity = 'repetition_labels';
+
+  UPDATE public.board_import_operations AS operation
+  SET v2_labels_materialized = true
+  WHERE operation.actor_id = p_actor_id AND operation.operation_id = p_operation_id;
+  RETURN pg_catalog.jsonb_build_object('status', 'materialized');
+END;
+$$;
+REVOKE ALL ON FUNCTION public.board_import_v2_materialize_labels_p(uuid, uuid)
+  FROM PUBLIC, anon, authenticated, service_role;
+
+CREATE FUNCTION public.set_board_import_v2_label_resolutions_p(
+  p_slug text, p_operation_id uuid, p_resolutions jsonb,
+  p_member_mappings jsonb
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public, auth, extensions, pg_temp
+AS $$
+DECLARE
+  v_actor_id uuid := auth.uid();
+  v_board public.boards%ROWTYPE;
+  v_operation public.board_import_operations%ROWTYPE;
+  v_conflicts jsonb;
+  v_revision bigint;
+  v_materialized jsonb;
+BEGIN
+  IF v_actor_id IS NULL OR NOT public.is_application_user()
+    OR p_slug IS NULL OR p_operation_id IS NULL
+    OR pg_catalog.jsonb_typeof(p_resolutions) IS DISTINCT FROM 'array'
+    OR pg_catalog.jsonb_typeof(p_member_mappings) IS DISTINCT FROM 'array' THEN
+    RETURN pg_catalog.jsonb_build_object('status', 'invalid');
+  END IF;
+  IF pg_catalog.jsonb_array_length(p_resolutions) > 100000
+    OR pg_catalog.jsonb_array_length(p_member_mappings) > 100000 THEN
+    RETURN pg_catalog.jsonb_build_object('status', 'invalid');
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_catalog.jsonb_array_elements(p_resolutions) AS item(value)
+    WHERE pg_catalog.jsonb_typeof(item.value) IS DISTINCT FROM 'object'
+      OR (SELECT pg_catalog.count(*) FROM pg_catalog.jsonb_object_keys(item.value)) <> 2
+      OR item.value->>'source_ref' !~ '^label_[0-9a-f]{64}$'
+      OR pg_catalog.jsonb_typeof(item.value->'name') IS DISTINCT FROM 'string'
+      OR item.value->>'name' IS DISTINCT FROM pg_catalog.btrim(item.value->>'name')
+      OR pg_catalog.length(item.value->>'name') NOT BETWEEN 1 AND 40
+  ) OR EXISTS (
+    SELECT item.value->>'source_ref'
+    FROM pg_catalog.jsonb_array_elements(p_resolutions) AS item(value)
+    GROUP BY item.value->>'source_ref'
+    HAVING pg_catalog.count(*) > 1
+  ) OR EXISTS (
+    SELECT 1 FROM pg_catalog.jsonb_array_elements(p_member_mappings) AS item(value)
+    WHERE pg_catalog.jsonb_typeof(item.value) IS DISTINCT FROM 'object'
+      OR (SELECT pg_catalog.count(*) FROM pg_catalog.jsonb_object_keys(item.value)) <> 2
+      OR item.value->>'source_ref' !~ '^member_[0-9a-f]{64}$'
+      OR (pg_catalog.jsonb_typeof(item.value->'target_user_id') IS DISTINCT FROM 'null'
+        AND (pg_catalog.jsonb_typeof(item.value->'target_user_id') IS DISTINCT FROM 'string'
+          OR item.value->>'target_user_id' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'))
+  ) OR EXISTS (
+    SELECT item.value->>'source_ref'
+    FROM pg_catalog.jsonb_array_elements(p_member_mappings) AS item(value)
+    GROUP BY item.value->>'source_ref'
+    HAVING pg_catalog.count(*) > 1
+  ) THEN
+    RETURN pg_catalog.jsonb_build_object('status', 'invalid');
+  END IF;
+  SELECT board.* INTO v_board
+  FROM public.boards AS board
+  JOIN public.board_memberships AS membership
+    ON membership.board_id = board.id AND membership.user_id = v_actor_id
+    AND membership.role = 'owner' AND membership.revoked_at IS NULL
+  WHERE board.slug = p_slug AND board.owner_id = v_actor_id
+    AND public.is_board_owner(board.id)
+  FOR UPDATE OF board, membership;
+  IF NOT FOUND THEN RETURN pg_catalog.jsonb_build_object('status', 'unavailable'); END IF;
+  SELECT operation.* INTO v_operation
+  FROM public.board_import_operations AS operation
+  WHERE operation.actor_id = v_actor_id AND operation.operation_id = p_operation_id
+    AND operation.board_id = v_board.id AND operation.source_version = 2
+  FOR UPDATE;
+  IF NOT FOUND OR v_operation.status NOT IN ('staging', 'prepared')
+    OR NOT v_operation.v2_materialized
+    OR v_operation.expires_at <= pg_catalog.clock_timestamp() THEN
+    RETURN pg_catalog.jsonb_build_object('status', 'unavailable');
+  END IF;
+
+  IF pg_catalog.jsonb_array_length(p_member_mappings) <> (
+    SELECT pg_catalog.count(DISTINCT member_ref)
+    FROM (
+      SELECT record.record->>'assignee_ref' AS member_ref
+      FROM public.board_import_v2_records AS record
+      WHERE record.actor_id = v_actor_id AND record.operation_id = p_operation_id
+        AND record.entity = 'tasks'
+      UNION ALL
+      SELECT record.record #>> '{template_snapshot,assignee_ref}' AS member_ref
+      FROM public.board_import_v2_records AS record
+      WHERE record.actor_id = v_actor_id AND record.operation_id = p_operation_id
+        AND record.entity = 'repetitions'
+    ) AS source_members
+    WHERE member_ref IS NOT NULL
+  ) OR EXISTS (
+    SELECT 1 FROM pg_catalog.jsonb_array_elements(p_member_mappings) AS mapping(value)
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM (
+        SELECT record.record->>'assignee_ref' AS member_ref
+        FROM public.board_import_v2_records AS record
+        WHERE record.actor_id = v_actor_id AND record.operation_id = p_operation_id
+          AND record.entity = 'tasks'
+        UNION
+        SELECT record.record #>> '{template_snapshot,assignee_ref}' AS member_ref
+        FROM public.board_import_v2_records AS record
+        WHERE record.actor_id = v_actor_id AND record.operation_id = p_operation_id
+          AND record.entity = 'repetitions'
+      ) AS source_members
+      WHERE source_members.member_ref = mapping.value->>'source_ref'
+    )
+  ) THEN
+    RETURN pg_catalog.jsonb_build_object('status', 'member_mapping_required');
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_catalog.jsonb_array_elements(p_member_mappings) AS mapping(value)
+    WHERE mapping.value->>'target_user_id' IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM public.board_memberships AS membership
+        WHERE membership.board_id = v_board.id
+          AND membership.user_id = (mapping.value->>'target_user_id')::uuid
+          AND membership.revoked_at IS NULL
+          AND public.is_enabled_application_identity_p(membership.user_id)
+      )
+  ) THEN
+    RETURN pg_catalog.jsonb_build_object(
+      'status', 'member_conflict',
+      'preview', public.board_import_preview_result_p(
+        v_operation,
+        (SELECT revision.revision FROM public.board_content_revisions AS revision
+          WHERE revision.board_id = v_board.id)
+      )
+    );
+  END IF;
+
+  v_conflicts := public.board_import_v2_label_conflicts_p(
+    v_actor_id, p_operation_id, v_board.id, v_operation.generation_id
+  );
+  IF pg_catalog.jsonb_array_length(v_conflicts) > 0 AND (
+    pg_catalog.jsonb_array_length(p_resolutions) <> pg_catalog.jsonb_array_length(v_conflicts)
+    OR EXISTS (
+      SELECT 1 FROM pg_catalog.jsonb_array_elements(v_conflicts) AS conflict(value)
+      WHERE NOT EXISTS (
+        SELECT 1 FROM pg_catalog.jsonb_array_elements(p_resolutions) AS resolution(value)
+        WHERE resolution.value->>'source_ref' = conflict.value->>'source_ref'
+      )
+    )
+  ) OR pg_catalog.jsonb_array_length(v_conflicts) = 0 AND EXISTS (
+    SELECT 1 FROM pg_catalog.jsonb_array_elements(p_resolutions) AS resolution(value)
+    WHERE NOT EXISTS (
+      SELECT 1 FROM public.board_import_v2_label_resolutions AS saved
+      WHERE saved.actor_id = v_actor_id AND saved.operation_id = p_operation_id
+        AND saved.source_ref = resolution.value->>'source_ref'
+        AND saved.name = resolution.value->>'name'
+    )
+  ) THEN
+    RETURN pg_catalog.jsonb_build_object(
+      'status', 'label_conflict', 'label_conflicts', v_conflicts,
+      'preview', public.board_import_preview_result_p(
+        v_operation,
+        (SELECT revision.revision FROM public.board_content_revisions AS revision
+          WHERE revision.board_id = v_board.id)
+      )
+    );
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_catalog.jsonb_array_elements(p_resolutions) AS item(value)
+    WHERE NOT EXISTS (
+      SELECT 1 FROM public.board_import_v2_records AS label
+      WHERE label.actor_id = v_actor_id AND label.operation_id = p_operation_id
+        AND label.entity = 'labels' AND label.record->>'id' = item.value->>'source_ref'
+    )
+  ) THEN
+    RETURN pg_catalog.jsonb_build_object('status', 'invalid');
+  END IF;
+
+  DELETE FROM public.board_import_v2_member_mappings AS mapping
+  WHERE mapping.actor_id = v_actor_id AND mapping.operation_id = p_operation_id;
+  INSERT INTO public.board_import_v2_member_mappings(
+    actor_id, operation_id, source_ref, target_user_id
+  )
+  SELECT v_actor_id, p_operation_id, mapping.value->>'source_ref',
+    NULLIF(mapping.value->>'target_user_id', '')::uuid
+  FROM pg_catalog.jsonb_array_elements(p_member_mappings) AS mapping(value);
+  INSERT INTO public.board_import_v2_label_resolutions(
+    actor_id, operation_id, source_ref, name
+  )
+  SELECT v_actor_id, p_operation_id, item.value->>'source_ref', item.value->>'name'
+  FROM pg_catalog.jsonb_array_elements(p_resolutions) AS item(value)
+  ON CONFLICT (actor_id, operation_id, source_ref) DO UPDATE
+  SET name = EXCLUDED.name, updated_at = pg_catalog.clock_timestamp();
+  v_conflicts := public.board_import_v2_label_conflicts_p(
+    v_actor_id, p_operation_id, v_board.id, v_operation.generation_id
+  );
+  IF pg_catalog.jsonb_array_length(v_conflicts) > 0 THEN
+    RETURN pg_catalog.jsonb_build_object(
+      'status', 'label_conflict', 'label_conflicts', v_conflicts,
+      'preview', public.board_import_preview_result_p(
+        v_operation,
+        (SELECT revision.revision FROM public.board_content_revisions AS revision
+          WHERE revision.board_id = v_board.id)
+      )
+    );
+  END IF;
+
+  IF v_operation.status = 'staging' THEN
+    v_materialized := public.board_import_v2_materialize_labels_p(
+      v_actor_id, p_operation_id
+    );
+    IF v_materialized->>'status' <> 'materialized' THEN
+      RETURN v_materialized;
+    END IF;
+  ELSE
+    UPDATE public.board_labels AS target_label
+    SET name = COALESCE(resolution.name, label_record.record->>'name')
+    FROM public.board_import_v2_refs AS reference
+    JOIN public.board_import_v2_records AS label_record
+      ON label_record.actor_id = reference.actor_id
+      AND label_record.operation_id = reference.operation_id
+      AND label_record.entity = 'labels'
+      AND label_record.record->>'id' = reference.source_ref
+    LEFT JOIN public.board_import_v2_label_resolutions AS resolution
+      ON resolution.actor_id = reference.actor_id
+      AND resolution.operation_id = reference.operation_id
+      AND resolution.source_ref = reference.source_ref
+    WHERE reference.actor_id = v_actor_id AND reference.operation_id = p_operation_id
+      AND reference.ref_kind = 'label' AND target_label.id = reference.destination_id
+      AND target_label.generation_id = v_operation.generation_id;
+    UPDATE public.board_import_operations AS operation
+    SET staged_content_hash = public.board_import_generation_hash_p(
+      v_board.id, v_operation.generation_id
+    )
+    WHERE operation.actor_id = v_actor_id AND operation.operation_id = p_operation_id;
+  END IF;
+  RETURN pg_catalog.jsonb_build_object('status', 'saved');
+END;
+$$;
+REVOKE ALL ON FUNCTION public.set_board_import_v2_label_resolutions_p(text, uuid, jsonb, jsonb)
+  FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.set_board_import_v2_label_resolutions_p(text, uuid, jsonb, jsonb)
   TO authenticated;
 
 CREATE FUNCTION public.reserve_board_import_v2_p(p_slug text, p_operation_id uuid)
@@ -756,14 +1478,6 @@ BEGIN
     (record->>'created_at')::timestamptz, (record->>'updated_at')::timestamptz
   FROM public.board_import_v2_records WHERE actor_id = v_actor_id AND operation_id = p_operation_id AND entity = 'tasks';
 
-  INSERT INTO public.board_labels(
-    id, board_id, generation_id, name, color, created_by, created_at, updated_at
-  )
-  SELECT public.board_import_v2_target_id_p(v_actor_id, p_operation_id, record->>'id', 'label'),
-    v_board.id, v_operation.generation_id, record->>'name', record->>'color', NULL,
-    (record->>'created_at')::timestamptz, (record->>'updated_at')::timestamptz
-  FROM public.board_import_v2_records WHERE actor_id = v_actor_id AND operation_id = p_operation_id AND entity = 'labels';
-
   INSERT INTO public.board_birthdays(
     id, board_id, generation_id, name, birth_month, birth_day, advance_days,
     created_by, created_at, updated_at
@@ -773,17 +1487,6 @@ BEGIN
     (record->>'birth_day')::integer, NULLIF(record->>'advance_days', '')::integer, NULL,
     (record->>'created_at')::timestamptz, (record->>'updated_at')::timestamptz
   FROM public.board_import_v2_records WHERE actor_id = v_actor_id AND operation_id = p_operation_id AND entity = 'birthdays';
-
-  INSERT INTO public.board_label_task_assignments(board_id, generation_id, label_id, task_id)
-  SELECT v_board.id, v_operation.generation_id,
-    public.board_import_v2_target_id_p(v_actor_id, p_operation_id, record->>'label_id', 'label'),
-    public.board_import_v2_target_id_p(v_actor_id, p_operation_id, record->>'task_id', 'task')
-  FROM public.board_import_v2_records WHERE actor_id = v_actor_id AND operation_id = p_operation_id AND entity = 'task_labels';
-  INSERT INTO public.board_label_birthday_assignments(board_id, generation_id, label_id, birthday_id)
-  SELECT v_board.id, v_operation.generation_id,
-    public.board_import_v2_target_id_p(v_actor_id, p_operation_id, record->>'label_id', 'label'),
-    public.board_import_v2_target_id_p(v_actor_id, p_operation_id, record->>'birthday_id', 'birthday')
-  FROM public.board_import_v2_records WHERE actor_id = v_actor_id AND operation_id = p_operation_id AND entity = 'birthday_labels';
 
   INSERT INTO public.task_comments(
     id, board_id, task_id, author_id, author_name, content, created_at, edited_at, version
@@ -827,16 +1530,6 @@ BEGIN
     (record->>'created_at')::timestamptz, (record->>'updated_at')::timestamptz,
     NULLIF(record->>'stopped_at', '')::timestamptz
   FROM public.board_import_v2_records WHERE actor_id = v_actor_id AND operation_id = p_operation_id AND entity = 'repetitions';
-
-  DELETE FROM public.board_label_repetition_assignments AS assignment
-  USING public.daily_repetition_series AS series
-  WHERE series.id = assignment.series_id AND series.board_id = v_board.id
-    AND series.generation_id = v_operation.generation_id;
-  INSERT INTO public.board_label_repetition_assignments(board_id, generation_id, label_id, series_id)
-  SELECT v_board.id, v_operation.generation_id,
-    public.board_import_v2_target_id_p(v_actor_id, p_operation_id, record->>'label_id', 'label'),
-    public.board_import_v2_target_id_p(v_actor_id, p_operation_id, record->>'series_id', 'repetition')
-  FROM public.board_import_v2_records WHERE actor_id = v_actor_id AND operation_id = p_operation_id AND entity = 'repetition_labels';
 
   INSERT INTO public.daily_repetition_occurrences(
     id, series_id, occurrence_on, task_id, state, due_on_override,
@@ -1048,6 +1741,8 @@ DECLARE
   v_board public.boards%ROWTYPE;
   v_operation public.board_import_operations%ROWTYPE;
   v_revision bigint;
+  v_conflicts jsonb;
+  v_labels_result jsonb;
 BEGIN
   IF v_actor_id IS NULL OR NOT public.is_application_user()
     OR p_slug IS NULL OR p_operation_id IS NULL THEN
@@ -1079,6 +1774,15 @@ BEGIN
     SELECT revision.revision INTO v_revision
     FROM public.board_content_revisions AS revision
     WHERE revision.board_id = v_board.id;
+    v_conflicts := public.board_import_v2_label_conflicts_p(
+      v_actor_id, p_operation_id, v_board.id, v_operation.generation_id
+    );
+    IF pg_catalog.jsonb_array_length(v_conflicts) > 0 THEN
+      RETURN public.board_import_preview_result_p(v_operation, v_revision)
+        || pg_catalog.jsonb_build_object(
+          'status', 'label_conflict', 'label_conflicts', v_conflicts
+        );
+    END IF;
     RETURN public.board_import_preview_result_p(v_operation, v_revision);
   END IF;
   IF v_operation.status <> 'staging' OR EXISTS (
@@ -1098,6 +1802,21 @@ BEGIN
   FROM public.board_content_revisions AS revision
   WHERE revision.board_id = v_board.id FOR UPDATE;
   IF NOT FOUND THEN RETURN pg_catalog.jsonb_build_object('status', 'unavailable'); END IF;
+  v_conflicts := public.board_import_v2_label_conflicts_p(
+    v_actor_id, p_operation_id, v_board.id, v_operation.generation_id
+  );
+  IF pg_catalog.jsonb_array_length(v_conflicts) > 0 THEN
+    RETURN public.board_import_preview_result_p(v_operation, v_revision)
+      || pg_catalog.jsonb_build_object(
+        'status', 'label_conflict', 'label_conflicts', v_conflicts
+      );
+  END IF;
+  v_labels_result := public.board_import_v2_materialize_labels_p(
+    v_actor_id, p_operation_id
+  );
+  IF v_labels_result->>'status' <> 'materialized' THEN
+    RETURN v_labels_result;
+  END IF;
   UPDATE public.board_import_operations AS operation
   SET staged_content_hash = public.board_import_generation_hash_p(
         v_board.id, v_operation.generation_id
@@ -1221,15 +1940,19 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, public, pg_temp
 AS $$
+DECLARE
+  v_cleanup_at timestamptz := pg_catalog.clock_timestamp();
 BEGIN
   UPDATE public.task_attachments AS attachment
   SET state = 'cleanup_pending',
       reservation_expires_at = NULL,
-      deleted_at = COALESCE(attachment.deleted_at, pg_catalog.clock_timestamp()),
+      deleted_at = COALESCE(attachment.deleted_at, v_cleanup_at),
       deleted_by = COALESCE(attachment.deleted_by, operation.actor_id),
       deletion_cause = COALESCE(attachment.deletion_cause, 'admin_cleanup'),
-      expires_at = COALESCE(attachment.expires_at,
-        pg_catalog.clock_timestamp() + interval '168 hours')
+      expires_at = COALESCE(
+        attachment.expires_at,
+        COALESCE(attachment.deleted_at, v_cleanup_at) + interval '168 hours'
+      )
   FROM public.board_import_v2_objects AS object
   JOIN public.board_import_operations AS operation
     ON operation.actor_id = object.actor_id AND operation.operation_id = object.operation_id
@@ -1346,6 +2069,249 @@ $$;
 REVOKE ALL ON FUNCTION public.confirm_board_import_p(text, uuid, bigint, text)
   FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.confirm_board_import_p(text, uuid, bigint, text)
+  TO authenticated;
+
+CREATE FUNCTION public.confirm_board_import_v2_p(
+  p_slug text, p_operation_id uuid, p_expected_content_revision bigint,
+  p_source_sha256 text, p_member_mappings jsonb
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public, auth, extensions, pg_temp
+AS $$
+DECLARE
+  v_actor_id uuid := auth.uid();
+  v_board public.boards%ROWTYPE;
+  v_operation public.board_import_operations%ROWTYPE;
+  v_revision bigint;
+  v_result jsonb;
+  v_conflicts jsonb;
+  v_board_name text;
+  v_time_zone text;
+BEGIN
+  IF v_actor_id IS NULL OR NOT public.is_application_user()
+    OR p_slug IS NULL OR p_operation_id IS NULL
+    OR p_expected_content_revision IS NULL OR p_source_sha256 !~ '^[0-9a-f]{64}$'
+    OR pg_catalog.jsonb_typeof(p_member_mappings) IS DISTINCT FROM 'array'
+    OR pg_catalog.jsonb_array_length(p_member_mappings) > 100000 THEN
+    RETURN pg_catalog.jsonb_build_object('status', 'invalid');
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_catalog.jsonb_array_elements(p_member_mappings) AS item(value)
+    WHERE pg_catalog.jsonb_typeof(item.value) IS DISTINCT FROM 'object'
+      OR (SELECT pg_catalog.count(*) FROM pg_catalog.jsonb_object_keys(item.value)) <> 2
+      OR item.value->>'source_ref' !~ '^member_[0-9a-f]{64}$'
+      OR (pg_catalog.jsonb_typeof(item.value->'target_user_id') IS DISTINCT FROM 'null'
+        AND (pg_catalog.jsonb_typeof(item.value->'target_user_id') IS DISTINCT FROM 'string'
+          OR item.value->>'target_user_id' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'))
+  ) OR EXISTS (
+    SELECT item.value->>'source_ref'
+    FROM pg_catalog.jsonb_array_elements(p_member_mappings) AS item(value)
+    GROUP BY item.value->>'source_ref'
+    HAVING pg_catalog.count(*) > 1
+  ) THEN
+    RETURN pg_catalog.jsonb_build_object('status', 'invalid');
+  END IF;
+
+  SELECT board.* INTO v_board
+  FROM public.boards AS board
+  JOIN public.board_memberships AS membership
+    ON membership.board_id = board.id AND membership.user_id = v_actor_id
+    AND membership.role = 'owner' AND membership.revoked_at IS NULL
+  WHERE board.slug = p_slug AND board.owner_id = v_actor_id
+    AND public.is_board_owner(board.id)
+  FOR UPDATE OF board, membership;
+  IF NOT FOUND THEN RETURN pg_catalog.jsonb_build_object('status', 'unavailable'); END IF;
+  PERFORM 1 FROM public.application_access AS access
+  WHERE access.auth_user_id = v_actor_id AND access.state = 'active'
+  FOR SHARE;
+  IF NOT FOUND OR NOT public.is_application_user() THEN
+    RETURN pg_catalog.jsonb_build_object('status', 'unavailable');
+  END IF;
+  SELECT revision.revision INTO v_revision
+  FROM public.board_content_revisions AS revision
+  WHERE revision.board_id = v_board.id FOR UPDATE;
+  IF NOT FOUND THEN RETURN pg_catalog.jsonb_build_object('status', 'unavailable'); END IF;
+  SELECT operation.* INTO v_operation
+  FROM public.board_import_operations AS operation
+  WHERE operation.actor_id = v_actor_id AND operation.operation_id = p_operation_id
+    AND operation.board_id = v_board.id AND operation.source_version = 2
+    AND operation.source_sha256 = p_source_sha256
+  FOR UPDATE;
+  IF NOT FOUND THEN RETURN pg_catalog.jsonb_build_object('status', 'unavailable'); END IF;
+  IF v_operation.status = 'confirmed' THEN
+    IF pg_catalog.jsonb_array_length(p_member_mappings) <> (
+      SELECT pg_catalog.count(*)
+      FROM public.board_import_v2_member_mappings AS saved
+      WHERE saved.actor_id = v_actor_id AND saved.operation_id = p_operation_id
+    ) OR EXISTS (
+      SELECT 1 FROM pg_catalog.jsonb_array_elements(p_member_mappings) AS item(value)
+      WHERE NOT EXISTS (
+        SELECT 1 FROM public.board_import_v2_member_mappings AS saved
+        WHERE saved.actor_id = v_actor_id AND saved.operation_id = p_operation_id
+          AND saved.source_ref = item.value->>'source_ref'
+          AND saved.target_user_id IS NOT DISTINCT FROM
+            NULLIF(item.value->>'target_user_id', '')::uuid
+      )
+    ) THEN
+      RETURN pg_catalog.jsonb_build_object('status', 'conflict');
+    END IF;
+    RETURN COALESCE(v_operation.result,
+      pg_catalog.jsonb_build_object('status', 'confirmed', 'operation_id', p_operation_id));
+  END IF;
+  IF v_operation.status <> 'prepared' OR NOT v_operation.v2_materialized
+    OR NOT v_operation.v2_labels_materialized
+    OR v_operation.expires_at <= pg_catalog.clock_timestamp() THEN
+    RETURN pg_catalog.jsonb_build_object('status', 'unavailable');
+  END IF;
+  IF pg_catalog.jsonb_array_length(p_member_mappings) <> (
+    SELECT pg_catalog.count(DISTINCT member_ref)
+    FROM (
+      SELECT record.record->>'assignee_ref' AS member_ref
+      FROM public.board_import_v2_records AS record
+      WHERE record.actor_id = v_actor_id AND record.operation_id = p_operation_id
+        AND record.entity = 'tasks'
+      UNION ALL
+      SELECT record.record #>> '{template_snapshot,assignee_ref}' AS member_ref
+      FROM public.board_import_v2_records AS record
+      WHERE record.actor_id = v_actor_id AND record.operation_id = p_operation_id
+        AND record.entity = 'repetitions'
+    ) AS refs
+    WHERE member_ref IS NOT NULL
+  ) OR EXISTS (
+    SELECT 1 FROM pg_catalog.jsonb_array_elements(p_member_mappings) AS item(value)
+    WHERE NOT EXISTS (
+      SELECT 1 FROM (
+        SELECT record.record->>'assignee_ref' AS member_ref
+        FROM public.board_import_v2_records AS record
+        WHERE record.actor_id = v_actor_id AND record.operation_id = p_operation_id
+          AND record.entity = 'tasks'
+        UNION
+        SELECT record.record #>> '{template_snapshot,assignee_ref}' AS member_ref
+        FROM public.board_import_v2_records AS record
+        WHERE record.actor_id = v_actor_id AND record.operation_id = p_operation_id
+          AND record.entity = 'repetitions'
+      ) AS refs
+      WHERE refs.member_ref = item.value->>'source_ref'
+    )
+  ) THEN
+    RETURN pg_catalog.jsonb_build_object('status', 'member_mapping_required');
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_catalog.jsonb_array_elements(p_member_mappings) AS item(value)
+    WHERE item.value->>'target_user_id' IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM public.board_memberships AS membership
+        WHERE membership.board_id = v_board.id
+          AND membership.user_id = (item.value->>'target_user_id')::uuid
+          AND membership.revoked_at IS NULL
+          AND public.is_enabled_application_identity_p(membership.user_id)
+      )
+  ) THEN
+    RETURN public.board_import_preview_result_p(v_operation, v_revision)
+      || pg_catalog.jsonb_build_object('status', 'member_conflict');
+  END IF;
+  v_conflicts := public.board_import_v2_label_conflicts_p(
+    v_actor_id, p_operation_id, v_board.id, v_operation.generation_id
+  );
+  IF pg_catalog.jsonb_array_length(v_conflicts) > 0 THEN
+    RETURN public.board_import_preview_result_p(v_operation, v_revision)
+      || pg_catalog.jsonb_build_object(
+        'status', 'label_conflict', 'label_conflicts', v_conflicts
+      );
+  END IF;
+
+  DELETE FROM public.board_import_v2_member_mappings AS mapping
+  WHERE mapping.actor_id = v_actor_id AND mapping.operation_id = p_operation_id;
+  INSERT INTO public.board_import_v2_member_mappings(
+    actor_id, operation_id, source_ref, target_user_id
+  )
+  SELECT v_actor_id, p_operation_id, item.value->>'source_ref',
+    NULLIF(item.value->>'target_user_id', '')::uuid
+  FROM pg_catalog.jsonb_array_elements(p_member_mappings) AS item(value);
+
+  INSERT INTO public.board_import_v2_assignment_contexts(
+    transaction_id, actor_id, board_id, generation_id, operation_id, task_ids
+  )
+  SELECT pg_catalog.txid_current(), v_actor_id, v_board.id,
+    v_operation.generation_id, p_operation_id,
+    COALESCE(pg_catalog.array_agg(reference.destination_id), ARRAY[]::uuid[])
+  FROM public.board_import_v2_refs AS reference
+  JOIN public.board_import_v2_records AS record
+    ON record.actor_id = reference.actor_id AND record.operation_id = reference.operation_id
+    AND record.entity = 'tasks' AND record.record->>'id' = reference.source_ref
+  JOIN public.board_import_v2_member_mappings AS mapping
+    ON mapping.actor_id = reference.actor_id AND mapping.operation_id = reference.operation_id
+    AND mapping.source_ref = record.record->>'assignee_ref'
+    AND mapping.target_user_id IS NOT NULL
+  WHERE reference.actor_id = v_actor_id AND reference.operation_id = p_operation_id
+    AND reference.ref_kind = 'task';
+  UPDATE public.tasks AS target
+  SET assignee_id = mapping.target_user_id,
+    assignee_version = target.assignee_version + 1
+  FROM public.board_import_v2_refs AS reference
+  JOIN public.board_import_v2_records AS record
+    ON record.actor_id = reference.actor_id AND record.operation_id = reference.operation_id
+    AND record.entity = 'tasks' AND record.record->>'id' = reference.source_ref
+  JOIN public.board_import_v2_member_mappings AS mapping
+    ON mapping.actor_id = reference.actor_id AND mapping.operation_id = reference.operation_id
+    AND mapping.source_ref = record.record->>'assignee_ref'
+  WHERE reference.actor_id = v_actor_id AND reference.operation_id = p_operation_id
+    AND reference.ref_kind = 'task' AND target.id = reference.destination_id
+    AND target.assignee_id IS DISTINCT FROM mapping.target_user_id;
+  UPDATE public.daily_repetition_series AS target
+  SET template_snapshot = pg_catalog.jsonb_set(
+    target.template_snapshot, '{assignee_id}',
+    COALESCE(pg_catalog.to_jsonb(mapping.target_user_id), 'null'::jsonb), true
+  )
+  FROM public.board_import_v2_refs AS reference
+  JOIN public.board_import_v2_records AS record
+    ON record.actor_id = reference.actor_id AND record.operation_id = reference.operation_id
+    AND record.entity = 'repetitions' AND record.record->>'id' = reference.source_ref
+  JOIN public.board_import_v2_member_mappings AS mapping
+    ON mapping.actor_id = reference.actor_id AND mapping.operation_id = reference.operation_id
+    AND mapping.source_ref = record.record #>> '{template_snapshot,assignee_ref}'
+  WHERE reference.actor_id = v_actor_id AND reference.operation_id = p_operation_id
+    AND reference.ref_kind = 'repetition' AND target.id = reference.destination_id;
+  DELETE FROM public.board_import_v2_assignment_contexts AS context
+  WHERE context.transaction_id = pg_catalog.txid_current()
+    AND context.operation_id = p_operation_id;
+  UPDATE public.board_import_operations AS operation
+  SET staged_content_hash = public.board_import_generation_hash_p(
+    v_board.id, v_operation.generation_id
+  )
+  WHERE operation.actor_id = v_actor_id AND operation.operation_id = p_operation_id;
+
+  SELECT staged.record->>'name', staged.record->>'time_zone'
+  INTO v_board_name, v_time_zone
+  FROM public.board_import_v2_records AS staged
+  WHERE staged.actor_id = v_actor_id AND staged.operation_id = p_operation_id
+    AND staged.entity = 'board' AND staged.record_index = 0;
+  IF NOT FOUND OR v_board_name IS NULL OR v_time_zone IS NULL THEN
+    RETURN pg_catalog.jsonb_build_object('status', 'invalid');
+  END IF;
+  v_result := public.confirm_board_import_p(
+    p_slug, p_operation_id, p_expected_content_revision, p_source_sha256
+  );
+  IF v_result->>'status' <> 'confirmed' THEN RETURN v_result; END IF;
+  UPDATE public.boards AS board
+  SET name = v_board_name, time_zone = v_time_zone
+  WHERE board.id = v_operation.board_id
+    AND (board.name IS DISTINCT FROM v_board_name OR board.time_zone IS DISTINCT FROM v_time_zone);
+  SELECT revision.revision INTO v_revision
+  FROM public.board_content_revisions AS revision
+  WHERE revision.board_id = v_operation.board_id;
+  v_result := v_result || pg_catalog.jsonb_build_object('content_revision', v_revision);
+  UPDATE public.board_import_operations AS operation
+  SET result = v_result
+  WHERE operation.actor_id = v_actor_id AND operation.operation_id = p_operation_id;
+  RETURN v_result;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.confirm_board_import_v2_p(text, uuid, bigint, text, jsonb)
+  FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.confirm_board_import_v2_p(text, uuid, bigint, text, jsonb)
   TO authenticated;
 
 NOTIFY pgrst, 'reload schema';

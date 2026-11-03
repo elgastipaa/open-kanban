@@ -1,5 +1,19 @@
 \echo 'Testing restore of retained import generations'
 
+DO $$
+BEGIN
+  IF pg_catalog.has_table_privilege(
+      'authenticated', 'public.board_generation_notification_epochs', 'SELECT'
+    ) OR pg_catalog.has_function_privilege(
+      'authenticated',
+      'public.task_notification_matches_active_generation_epoch_p(uuid,uuid,uuid)',
+      'EXECUTE'
+    ) THEN
+    RAISE EXCEPTION 'notification activation epochs are exposed to authenticated clients';
+  END IF;
+END;
+$$;
+
 UPDATE public.application_access AS access
 SET state = 'active'
 FROM public.issue44_import_fixture AS fixture
@@ -48,6 +62,10 @@ CREATE TABLE public.issue45_restore_fixture (
   current_generation_id uuid NOT NULL,
   stale_preview_operation_id uuid NOT NULL,
   current_preview_operation_id uuid NOT NULL,
+  notification_id uuid NOT NULL,
+  notification_snapshot jsonb,
+  notification_epoch uuid,
+  restored_notification_epoch uuid,
   preview_revision bigint,
   capacity_result jsonb,
   confirmed_result jsonb,
@@ -58,6 +76,40 @@ CREATE TABLE public.issue45_restore_fixture (
 );
 GRANT SELECT, INSERT, UPDATE ON public.issue45_restore_fixture
   TO authenticated, service_role;
+
+INSERT INTO public.task_notifications(
+  id, board_id, generation_id, task_id, source_kind, source_id,
+  recipient_user_id, recipient_membership_id, reason_codes, actor_name,
+  occurred_at, state, delivered_at
+)
+SELECT 'a4550000-0000-4000-8000-000000000000', fixture.board_id,
+  fixture.published_generation_id, task.id, 'task_change',
+  'a4550000-0000-4000-8000-00000000000a', fixture.owner_id, membership.id,
+  ARRAY['assignment']::text[], 'Colaborador sintético',
+  pg_catalog.clock_timestamp() - interval '1 minute', 'delivered',
+  pg_catalog.clock_timestamp() - interval '1 minute'
+FROM public.issue44_import_fixture AS fixture
+JOIN public.boards AS board ON board.id = fixture.board_id
+JOIN public.columns AS column_row
+  ON column_row.board_id = fixture.board_id
+  AND column_row.generation_id = fixture.published_generation_id
+JOIN public.tasks AS task
+  ON task.column_id = column_row.id AND task.title = 'Tarea importada'
+JOIN public.board_memberships AS membership
+  ON membership.board_id = fixture.board_id
+  AND membership.user_id = fixture.owner_id
+  AND membership.role = 'owner' AND membership.revoked_at IS NULL
+WHERE board.active_generation_id = fixture.published_generation_id
+LIMIT 1;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM public.task_notifications
+      WHERE id = 'a4550000-0000-4000-8000-000000000000') THEN
+    RAISE EXCEPTION 'the synthetic pre-import notification fixture was not created';
+  END IF;
+END;
+$$;
 
 BEGIN;
 SET LOCAL ROLE authenticated;
@@ -99,13 +151,16 @@ BEGIN
   INSERT INTO public.issue45_restore_fixture(
     board_id, slug, owner_id, collaborator_id, older_generation_id,
     restore_generation_id, current_generation_id, stale_preview_operation_id,
-    current_preview_operation_id, notifications_before
+    current_preview_operation_id, notification_id, notification_snapshot,
+    notification_epoch, notifications_before
   ) VALUES (
     fixture.board_id, fixture.slug, fixture.owner_id, fixture.collaborator_id,
     fixture.old_generation_id, fixture.published_generation_id,
     (SELECT board.active_generation_id FROM public.boards AS board
       WHERE board.id = fixture.board_id),
-    stale_preview_operation, 'a4550000-0000-4000-8000-000000000003', 0
+    stale_preview_operation, 'a4550000-0000-4000-8000-000000000003',
+    'a4550000-0000-4000-8000-000000000000',
+    NULL, NULL, 0
   );
   PERFORM public.rename_board_p(fixture.slug, 'Trabajo posterior');
   PERFORM public.update_board_time_zone_p(
@@ -140,6 +195,16 @@ BEGIN
 END;
 $$;
 COMMIT;
+
+UPDATE public.issue45_restore_fixture AS fixture
+SET notification_snapshot = pg_catalog.to_jsonb(notice),
+    notification_epoch = notice.generation_notification_epoch,
+    notifications_before = (
+      SELECT count(*) FROM public.task_notifications AS board_notice
+      WHERE board_notice.board_id = fixture.board_id
+    )
+FROM public.task_notifications AS notice
+WHERE notice.id = fixture.notification_id;
 
 BEGIN;
 SET LOCAL ROLE authenticated;
@@ -263,6 +328,34 @@ END;
 $$;
 COMMIT;
 
+UPDATE public.issue45_restore_fixture AS fixture
+SET restored_notification_epoch = epoch.notification_epoch
+FROM public.board_generation_notification_epochs AS epoch
+WHERE epoch.board_id = fixture.board_id
+  AND epoch.generation_id = fixture.restore_generation_id;
+
+INSERT INTO public.task_notifications(
+  id, board_id, generation_id, task_id, source_kind, source_id,
+  recipient_user_id, recipient_membership_id, reason_codes, actor_name,
+  occurred_at, state, delivered_at
+)
+SELECT 'a4550000-0000-4000-8000-000000000011', fixture.board_id,
+  fixture.restore_generation_id, task.id, 'task_change',
+  'a4550000-0000-4000-8000-00000000000b', fixture.owner_id, membership.id,
+  ARRAY['assignment']::text[], 'Colaborador actual',
+  pg_catalog.clock_timestamp(), 'delivered', pg_catalog.clock_timestamp()
+FROM public.issue45_restore_fixture AS fixture
+JOIN public.columns AS column_row
+  ON column_row.board_id = fixture.board_id
+  AND column_row.generation_id = fixture.restore_generation_id
+JOIN public.tasks AS task
+  ON task.column_id = column_row.id AND task.title = 'Tarea importada'
+JOIN public.board_memberships AS membership
+  ON membership.board_id = fixture.board_id
+  AND membership.user_id = fixture.owner_id
+  AND membership.role = 'owner' AND membership.revoked_at IS NULL
+LIMIT 1;
+
 DO $$
 DECLARE
   fixture public.issue45_restore_fixture%ROWTYPE;
@@ -296,7 +389,14 @@ BEGIN
       fixture.preview_revision + 1;
   END IF;
   IF fixture.confirmed_result IS DISTINCT FROM fixture.repeated_result
-    OR fixture.wrong_target_result->>'status' <> 'unavailable' THEN
+    OR fixture.wrong_target_result->>'status' <> 'unavailable'
+    OR fixture.restored_notification_epoch IS NULL
+    OR fixture.notification_epoch IS NOT DISTINCT FROM fixture.restored_notification_epoch
+    OR (SELECT epoch.notification_epoch
+      FROM public.board_generation_notification_epochs AS epoch
+      WHERE epoch.board_id = fixture.board_id
+        AND epoch.generation_id = fixture.restore_generation_id)
+      IS DISTINCT FROM fixture.restored_notification_epoch THEN
     RAISE EXCEPTION 'restore operation ID replay accepted a different target';
   END IF;
   IF (SELECT status FROM public.board_generations
@@ -328,8 +428,60 @@ BEGIN
   IF (SELECT count(*) FROM public.board_memberships WHERE board_id = fixture.board_id) <> 2
     OR (SELECT owner_id FROM public.boards WHERE id = fixture.board_id) <> fixture.owner_id
     OR (SELECT count(*) FROM public.task_notifications WHERE board_id = fixture.board_id)
-      <> fixture.notifications_before THEN
-    RAISE EXCEPTION 'restore changed current memberships or recreated notifications';
+      <> fixture.notifications_before + 1
+    OR (SELECT pg_catalog.to_jsonb(notice) FROM public.task_notifications AS notice
+      WHERE notice.id = fixture.notification_id) IS DISTINCT FROM fixture.notification_snapshot THEN
+    RAISE EXCEPTION 'restore changed current memberships or mutated prior notifications';
+  END IF;
+END;
+$$;
+
+BEGIN;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', 'a4400000-0000-4000-8000-000000000001', true);
+DO $$
+DECLARE
+  fixture public.issue45_restore_fixture%ROWTYPE;
+  inbox jsonb;
+  target jsonb;
+  marked jsonb;
+  batch jsonb;
+  batch_replay jsonb;
+BEGIN
+  SELECT * INTO STRICT fixture FROM public.issue45_restore_fixture;
+  inbox := public.list_my_task_notifications_p('all', 30, NULL, NULL);
+  target := public.get_my_task_notification_target_p(fixture.notification_id);
+  marked := public.mark_my_task_notification_read_p(fixture.notification_id);
+  batch := public.mark_my_task_notifications_batch_p(
+    'a4550000-0000-4000-8000-000000000012', ARRAY[fixture.notification_id], false
+  );
+  batch_replay := public.mark_my_task_notifications_batch_p(
+    'a4550000-0000-4000-8000-000000000012', ARRAY[fixture.notification_id], false
+  );
+  IF inbox->>'status' <> 'available'
+    OR inbox->>'unread_count' <> '1'
+    OR EXISTS (SELECT 1 FROM jsonb_array_elements(inbox->'items') AS item
+      WHERE item.value->>'id' = fixture.notification_id::text)
+    OR NOT EXISTS (SELECT 1 FROM jsonb_array_elements(inbox->'items') AS item
+      WHERE item.value->>'id' = 'a4550000-0000-4000-8000-000000000011')
+    OR target->>'status' <> 'unavailable'
+    OR marked->>'status' <> 'unavailable'
+    OR batch->'items'->0->>'result' <> 'unavailable'
+    OR batch_replay IS DISTINCT FROM batch THEN
+    RAISE EXCEPTION 'restoring a generation exposed or changed an old notification; inbox %, target %, mark %, batch %, replay %',
+      inbox, target, marked, batch, batch_replay;
+  END IF;
+END;
+$$;
+COMMIT;
+
+DO $$
+DECLARE fixture public.issue45_restore_fixture%ROWTYPE;
+BEGIN
+  SELECT * INTO STRICT fixture FROM public.issue45_restore_fixture;
+  IF (SELECT pg_catalog.to_jsonb(notice) FROM public.task_notifications AS notice
+      WHERE notice.id = fixture.notification_id) IS DISTINCT FROM fixture.notification_snapshot THEN
+    RAISE EXCEPTION 'restore or inbox replay altered the pre-import notification row';
   END IF;
 END;
 $$;

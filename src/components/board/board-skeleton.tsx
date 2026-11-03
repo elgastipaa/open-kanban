@@ -38,7 +38,7 @@ export function BoardSkeleton() {
                   className="rounded-lg border border-border bg-surface-raised p-3"
                   style={{
                     background:
-                      "linear-gradient(90deg, #0a0a0a 25%, #151515 50%, #0a0a0a 75%)",
+                      "linear-gradient(90deg, var(--color-surface-raised) 25%, var(--color-surface-hover) 50%, var(--color-surface-raised) 75%)",
                     backgroundSize: "200% 100%",
                     animation: `shimmer 1.5s ease-in-out infinite`,
                     animationDelay: `${(colIdx + i) * 200}ms`,

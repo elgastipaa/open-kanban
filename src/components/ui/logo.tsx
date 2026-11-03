@@ -26,7 +26,7 @@ export function Logo({
         />
       </div>
       {showText && (
-        <span className="font-bold font-display text-white text-xl tracking-tight">
+        <span className="font-bold font-display text-text-primary text-xl tracking-tight">
           OpenKanban
         </span>
       )}

@@ -4,20 +4,19 @@ import { Logo } from "@/components/ui/logo";
 
 export const metadata: Metadata = {
   title: "OpenKanban - Terms of Service",
-  description:
-    "Read the terms of service for OpenKanban. Understand our ephemeral data policy and frictionless manifesto.",
+  description: "Terms for using the private OpenKanban application.",
 };
 
 export default function TermsPage() {
   return (
-    <div className="min-h-screen bg-black pb-32 font-sans text-white selection:bg-accent selection:text-black">
+    <div className="min-h-screen bg-surface-base pb-32 font-sans text-text-primary selection:bg-accent selection:text-black">
       {/* Header */}
-      <header className="border-neutral-900 border-b px-6 py-6">
+      <header className="border-border border-b px-6 py-6">
         <div className="mx-auto flex max-w-4xl items-center justify-between">
           <Logo size={24} className="transition-opacity hover:opacity-80" />
           <Link
             href="/"
-            className="text-neutral-400 text-sm transition-colors hover:text-white"
+            className="text-sm text-text-secondary transition-colors hover:text-text-primary"
           >
             Back to Home
           </Link>
@@ -29,13 +28,13 @@ export default function TermsPage() {
         <h1 className="mb-6 font-bold font-display text-5xl tracking-tight md:text-6xl">
           Terms of Service.
         </h1>
-        <p className="mb-16 font-mono text-accent text-sm">
+        <p className="mb-16 font-mono text-accent-text text-sm">
           Last updated: {new Date().toLocaleDateString()}
         </p>
 
-        <div className="space-y-12 text-neutral-300 leading-relaxed">
+        <div className="space-y-12 text-text-secondary leading-relaxed">
           <section>
-            <h2 className="mb-4 font-bold font-display text-2xl text-white">
+            <h2 className="mb-4 font-bold font-display text-2xl text-text-primary">
               1. Acceptance of Terms
             </h2>
             <p className="mb-4">
@@ -46,35 +45,33 @@ export default function TermsPage() {
           </section>
 
           <section>
-            <h2 className="mb-4 font-bold font-display text-2xl text-white">
-              2. The Manifesto of "No Friction"
+            <h2 className="mb-4 font-bold font-display text-2xl text-text-primary">
+              2. Account and Board Access
             </h2>
             <p className="mb-4">
-              OpenKanban operates without traditional user accounts, passwords,
-              or emails. Access to any board is dictated entirely by knowledge
-              of the specific URL slug.
+              OpenKanban uses Google authentication and explicit application
+              admission. A board belongs to its owner account, and its URL alone
+              does not grant access.
             </p>
             <ul className="mt-2 list-disc space-y-2 pl-5">
               <li>
                 <strong>
-                  You are entirely responsible for keeping your board URL
-                  private.
-                </strong>{" "}
-                We cannot recover lost URLs.
+                  You are responsible for using your account only for authorized
+                  purposes.
+                </strong>
               </li>
               <li>
-                Anyone with the URL can read, write, and delete contents on that
-                board.
+                Application administrators can manage admission but cannot read
+                board content solely because of their administrator role.
               </li>
               <li>
-                Security is derived through URL obscurity and your imagination
-                in choosing complex board names.
+                Board access is checked against the authenticated account.
               </li>
             </ul>
           </section>
 
           <section>
-            <h2 className="mb-4 font-bold font-display text-2xl text-white">
+            <h2 className="mb-4 font-bold font-display text-2xl text-text-primary">
               3. Ephemeral Nature of Data
             </h2>
             <p className="mb-4">
@@ -87,7 +84,7 @@ export default function TermsPage() {
           </section>
 
           <section>
-            <h2 className="mb-4 font-bold font-display text-2xl text-white">
+            <h2 className="mb-4 font-bold font-display text-2xl text-text-primary">
               4. Acceptable Use
             </h2>
             <p className="mb-4">You agree not to use the Service:</p>
@@ -108,7 +105,7 @@ export default function TermsPage() {
           </section>
 
           <section>
-            <h2 className="mb-4 font-bold font-display text-2xl text-white">
+            <h2 className="mb-4 font-bold font-display text-2xl text-text-primary">
               5. Disclaimer of Warranties
             </h2>
             <p className="mb-4">

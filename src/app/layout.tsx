@@ -1,8 +1,17 @@
 import type { Metadata } from "next";
 import { Bricolage_Grotesque, Inter } from "next/font/google";
-import { Toaster } from "sonner";
+import { PwaProvider } from "@/components/pwa/pwa-provider";
+import { GlobalSearchLauncher } from "@/components/search/global-search-launcher";
+import { ThemePreferenceProvider } from "@/components/theme/theme-preference-provider";
 import { OfflineBanner } from "@/components/ui/offline-banner";
+import { ThemeAwareToaster } from "@/components/ui/theme-aware-toaster";
+import { resolveApplicationAccess } from "@/lib/auth";
+import {
+  getMyThemePreference,
+  ThemePreferenceError,
+} from "@/lib/db/theme-preferences";
 import { siteUrl } from "@/lib/site";
+import { createClient } from "@/lib/supabase/server";
 import "./globals.css";
 
 const inter = Inter({
@@ -20,11 +29,10 @@ const bricolage = Bricolage_Grotesque({
 export const metadata: Metadata = {
   metadataBase: siteUrl,
   title: {
-    default: "OpenKanban - Your Board, Your URL",
+    default: "OpenKanban - Tableros privados",
     template: "%s | OpenKanban",
   },
-  description:
-    "A sleek, real-time Kanban board with no signup required. Just type a URL and start organizing instantly across devices.",
+  description: "Acceso privado a tus tableros de OpenKanban.",
   alternates: {
     canonical: "/",
   },
@@ -33,49 +41,104 @@ export const metadata: Metadata = {
     "project management",
     "realtime",
     "board",
-    "no signup kanban",
-    "ephemeral boards",
+    "private kanban",
+    "closed kanban",
     "productivity utility",
     "open source kanban",
   ],
   openGraph: {
-    title: "OpenKanban - Realtime Kanban Boards",
-    description:
-      "Instantly create realtime Kanban boards with zero signup. If you know the URL, you have the keys.",
+    title: "OpenKanban - Tableros privados",
+    description: "Acceso privado a tus tableros de OpenKanban.",
     url: "/",
     siteName: "OpenKanban",
-    locale: "en_US",
+    locale: "es",
     type: "website",
     images: [
       {
         url: "/og.png",
         width: 1200,
         height: 630,
-        alt: "OpenKanban - Real-time Ephemeral Kanban Boards",
+        alt: "OpenKanban - tableros privados",
       },
     ],
   },
   twitter: {
     card: "summary_large_image",
-    title: "OpenKanban - Realtime Boards",
-    description: "Instantly create realtime Kanban boards with zero signup.",
+    title: "OpenKanban - Tableros privados",
+    description: "Acceso privado a tus tableros de OpenKanban.",
     images: ["/og.png"],
   },
   robots: {
-    index: true,
-    follow: true,
+    index: false,
+    follow: false,
   },
 };
 
-export default function RootLayout({
+const systemTheme = { theme: "system" as const, version: 0 };
+
+async function loadThemeBootstrap() {
+  try {
+    const supabase = await createClient();
+    const { data: authData, error: authError } = await supabase.auth.getUser();
+    if (authError || !authData.user) {
+      return {
+        accountId: null,
+        preference: systemTheme,
+        loadFailed: false,
+        searchEnabled: false,
+      };
+    }
+    const access = await resolveApplicationAccess(supabase);
+    const searchEnabled = access.status === "active";
+
+    try {
+      const preference = await getMyThemePreference(supabase);
+      return {
+        accountId: authData.user.id,
+        preference,
+        loadFailed: false,
+        searchEnabled,
+      };
+    } catch (error) {
+      if (
+        error instanceof ThemePreferenceError &&
+        error.reason === "access_denied"
+      ) {
+        return {
+          accountId: null,
+          preference: systemTheme,
+          loadFailed: false,
+          searchEnabled,
+        };
+      }
+      return {
+        accountId: authData.user.id,
+        preference: systemTheme,
+        loadFailed: true,
+        searchEnabled,
+      };
+    }
+  } catch {
+    return {
+      accountId: null,
+      preference: systemTheme,
+      loadFailed: false,
+      searchEnabled: false,
+    };
+  }
+}
+
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const themeBootstrap = await loadThemeBootstrap();
+
   return (
-    <html lang="en" className="dark">
+    <html lang="es" data-theme={themeBootstrap.preference.theme}>
       <body
-        className={`${inter.variable} ${bricolage.variable} bg-black font-sans text-white antialiased`}
+        className={`${inter.variable} ${bricolage.variable} bg-surface-base font-sans text-text-primary antialiased`}
       >
         <script
           type="application/ld+json"
@@ -85,8 +148,7 @@ export default function RootLayout({
               "@context": "https://schema.org",
               "@type": "SoftwareApplication",
               name: "OpenKanban",
-              description:
-                "A sleek, real-time Kanban board with no signup required. Just type a URL and start organizing instantly across devices.",
+              description: "Acceso privado a tus tableros de OpenKanban.",
               applicationCategory: "ProductivityApplication",
               operatingSystem: "Any",
               offers: {
@@ -97,21 +159,18 @@ export default function RootLayout({
             }),
           }}
         />
-        <OfflineBanner />
-        {children}
-        <Toaster
-          theme="dark"
-          position="bottom-right"
-          toastOptions={{
-            style: {
-              background: "#111",
-              border: "1px solid #1a1a1a",
-              color: "#fff",
-            },
-          }}
-          visibleToasts={5}
-          richColors
-        />
+        <ThemePreferenceProvider
+          accountId={themeBootstrap.accountId}
+          initialPreference={themeBootstrap.preference}
+          loadFailed={themeBootstrap.loadFailed}
+        >
+          <PwaProvider>
+            <OfflineBanner />
+            <GlobalSearchLauncher enabled={themeBootstrap.searchEnabled} />
+            {children}
+            <ThemeAwareToaster />
+          </PwaProvider>
+        </ThemePreferenceProvider>
       </body>
     </html>
   );

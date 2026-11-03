@@ -15,7 +15,7 @@ BEGIN
     'SELECT public.create_column_p(''00000000-0000-0000-0000-000000000001''::uuid, ''Test'', 0)',
     'SELECT public.create_task_p(''00000000-0000-0000-0000-000000000001''::uuid, ''Test'')',
     'SELECT public.update_column_p(''00000000-0000-0000-0000-000000000001''::uuid)',
-    'SELECT public.update_task_p(''00000000-0000-0000-0000-000000000001''::uuid)',
+    'SELECT public.edit_task_fields_p(''00000000-0000-0000-0000-000000000001''::uuid, ''{}''::jsonb)',
     'SELECT public.update_column_positions_p(''[]''::jsonb)',
     'SELECT public.update_task_positions_p(''[]''::jsonb)'
   ] LOOP
@@ -48,7 +48,9 @@ BEGIN
   other_column := public.create_column_p('test-other', other_board.id, 'Private', 0);
   task := public.create_task_p('test-source', source_column.id, 'Fictional task');
   BEGIN
-    PERFORM public.update_task_p('test-source', task.id, p_column_id => other_column.id);
+    PERFORM public.update_task_positions_p('test-source', jsonb_build_array(
+      jsonb_build_object('id', task.id, 'column_id', other_column.id, 'position', 0)
+    ));
   EXCEPTION WHEN check_violation THEN
     denied := true;
   END;
@@ -98,25 +100,61 @@ DECLARE
   source_column public.columns;
   destination public.columns;
   task public.tasks;
-  data json;
+  second_task public.tasks;
   denied boolean := false;
 BEGIN
   SELECT id INTO board_id FROM public.get_board_p('test-source');
   SELECT * INTO source_column FROM public.get_columns_p(board_id) LIMIT 1;
+  SELECT * INTO second_task FROM public.get_tasks_by_board_p(board_id) WHERE title = 'Second task';
   destination := public.create_column_p('test-source', board_id, 'Doing', 1);
   SELECT * INTO task FROM public.get_tasks_by_board_p(board_id) WHERE title = 'Fictional task';
-  PERFORM public.update_task_p('test-source', task.id,
-    p_title => 'Edited task', p_description => 'Fictional details',
-    p_priority => 'urgent', p_column_id => destination.id, p_position => 0);
-  data := public.get_full_board_p('test-source');
-  IF data->'columns'->1->'tasks'->0->>'title' IS DISTINCT FROM 'Edited task'
-    OR data->'columns'->1->'tasks'->0->>'priority' IS DISTINCT FROM 'urgent'
-    OR data->'columns'->1->'tasks'->0->>'description' IS DISTINCT FROM 'Fictional details' THEN
+  PERFORM public.edit_task_fields_p('test-source', task.id,
+    '{"title":"Edited task","description":"Fictional details","priority":"urgent"}'::jsonb);
+  PERFORM public.update_task_positions_p('test-source', jsonb_build_array(
+    jsonb_build_object('id', task.id, 'column_id', destination.id, 'position', 0)
+  ));
+  IF (SELECT title FROM public.get_tasks_by_board_p(board_id) WHERE id = task.id) IS DISTINCT FROM 'Edited task'
+    OR (SELECT priority FROM public.get_tasks_by_board_p(board_id) WHERE id = task.id) IS DISTINCT FROM 'urgent'
+    OR (SELECT description FROM public.get_tasks_by_board_p(board_id) WHERE id = task.id) IS DISTINCT FROM 'Fictional details' THEN
     RAISE EXCEPTION 'Same-board task edit/move did not persist';
   END IF;
+  -- A stale task snapshot may only change ordering/column; current task content wins.
+  PERFORM public.edit_task_fields_p('test-source', task.id,
+    '{"title":"Concurrent title","description":"Concurrent description","priority":"low"}'::jsonb);
   PERFORM public.update_task_positions_p('test-source', jsonb_build_array(
     jsonb_build_object('id', task.id, 'column_id', source_column.id, 'position', 0)
   ));
+  IF (SELECT title FROM public.get_tasks_by_board_p(board_id) WHERE id = task.id) IS DISTINCT FROM 'Concurrent title'
+    OR (SELECT priority FROM public.get_tasks_by_board_p(board_id) WHERE id = task.id) IS DISTINCT FROM 'low'
+    OR (SELECT description FROM public.get_tasks_by_board_p(board_id) WHERE id = task.id) IS DISTINCT FROM 'Concurrent description' THEN
+    RAISE EXCEPTION 'Moving a stale task snapshot overwrote task content';
+  END IF;
+
+  -- Missing fields are unchanged; explicit JSON null clears description.
+  PERFORM public.edit_task_fields_p('test-source', task.id, '{"title":"Only title"}'::jsonb);
+  IF (SELECT description FROM public.get_tasks_by_board_p(board_id) WHERE id = task.id) IS DISTINCT FROM 'Concurrent description' THEN
+    RAISE EXCEPTION 'Omitted description was changed';
+  END IF;
+  PERFORM public.edit_task_fields_p('test-source', task.id, '{"description":null}'::jsonb);
+  IF (SELECT description FROM public.get_tasks_by_board_p(board_id) WHERE id = task.id) IS NOT NULL THEN
+    RAISE EXCEPTION 'Explicit null did not clear description';
+  END IF;
+
+  -- A position batch must reject content fields and roll back the whole batch.
+  denied := false;
+  BEGIN
+    PERFORM public.update_task_positions_p('test-source', jsonb_build_array(
+      jsonb_build_object('id', task.id, 'column_id', destination.id, 'position', 9),
+      jsonb_build_object('id', second_task.id, 'column_id', source_column.id, 'position', 2, 'title', 'Corrupted')
+    ));
+  EXCEPTION WHEN check_violation THEN
+    denied := true;
+  END;
+  IF NOT denied THEN RAISE EXCEPTION 'Position batch accepted task content fields'; END IF;
+  IF (SELECT column_id FROM public.get_tasks_by_board_p(board_id) WHERE id = task.id) IS DISTINCT FROM source_column.id
+    OR (SELECT position FROM public.get_tasks_by_board_p(board_id) WHERE id = task.id) IS DISTINCT FROM 0 THEN
+    RAISE EXCEPTION 'Rejected position batch partially moved a task';
+  END IF;
   PERFORM public.update_column_p('test-source', destination.id, p_title => 'Done');
   PERFORM public.batch_toggle_columns_collapse_p('test-source', true);
   IF public.get_full_board_p('test-source')->'columns'->1->>'title' IS DISTINCT FROM 'Done'
@@ -132,9 +170,9 @@ BEGIN
   END IF;
 
   -- The caller knows one slug but cannot use it to mutate another board's task.
-  PERFORM public.update_task_p('test-other', task.id, p_title => 'Corrupted');
+  PERFORM public.edit_task_fields_p('test-other', task.id, '{"title":"Corrupted"}'::jsonb);
   PERFORM public.delete_task_p('test-other', task.id);
-  SELECT * INTO task FROM public.get_tasks_by_board_p(board_id) WHERE title = 'Edited task';
+  SELECT * INTO task FROM public.get_tasks_by_board_p(board_id) WHERE title = 'Only title';
   IF task.id IS NULL THEN RAISE EXCEPTION 'Wrong slug changed or deleted a task'; END IF;
 
   IF (SELECT count(*) FROM public.boards) <> 0

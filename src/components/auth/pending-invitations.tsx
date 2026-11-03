@@ -1,0 +1,193 @@
+"use client";
+
+import { useRouter } from "next/navigation";
+import { useState } from "react";
+import type { PendingBoardInvitation } from "@/lib/db/invitations";
+import { getPendingDirectInvitationAcceptanceOutcome } from "@/lib/invitation-acceptance-state";
+import {
+  acceptDirectInvitation,
+  rejectInvitation,
+} from "@/lib/invitation-actions";
+import {
+  completeInvitationOperation,
+  getOrCreateInvitationOperation,
+} from "@/lib/invitation-operation";
+
+export function PendingInvitations({
+  invitations,
+  loadError,
+}: {
+  invitations: PendingBoardInvitation[];
+  loadError: boolean;
+}) {
+  const router = useRouter();
+  const [pending, setPending] = useState(invitations);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [reconciliationRequiredIds, setReconciliationRequiredIds] = useState<
+    Set<string>
+  >(() => new Set());
+
+  async function accept(id: string) {
+    const scope = `accept-direct:${id}`;
+    const operation = getOrCreateInvitationOperation(scope, false);
+    setBusyId(id);
+    setError("");
+    setMessage("");
+    try {
+      const result = await acceptDirectInvitation(id, operation.operationId);
+      if (result.status !== "ok") {
+        setError(result.message);
+        return;
+      }
+      if (
+        result.data.status === "unavailable" ||
+        result.data.status === "expired_unknown"
+      ) {
+        completeInvitationOperation(scope);
+        const outcome = getPendingDirectInvitationAcceptanceOutcome(
+          result.data.status,
+        );
+        setError(outcome.message);
+        if (outcome.requiresReconciliation) {
+          setReconciliationRequiredIds((current) => new Set(current).add(id));
+        }
+        if (outcome.removeInvitation) {
+          setPending((current) =>
+            current.filter((invitation) => invitation.id !== id),
+          );
+        }
+        return;
+      }
+      completeInvitationOperation(scope);
+      router.push(`/${result.data.board_slug}`);
+    } catch {
+      setError(
+        "No se pudo confirmar la aceptación. Reintenta esta misma solicitud.",
+      );
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function reject(id: string) {
+    setBusyId(id);
+    setError("");
+    setMessage("");
+    const result = await rejectInvitation(id);
+    setBusyId(null);
+    if (result.status !== "ok" || !result.data) {
+      setError(
+        result.status === "unavailable"
+          ? result.message
+          : "Esta invitación ya no está disponible. Actualiza la lista.",
+      );
+      return;
+    }
+    setPending((current) =>
+      current.filter((invitation) => invitation.id !== id),
+    );
+    setMessage("Invitación rechazada.");
+  }
+
+  return (
+    <section className="mt-8" aria-labelledby="pending-invitations-title">
+      <div>
+        <p className="text-sm text-text-secondary">
+          Compartieron un tablero contigo
+        </p>
+        <h2
+          id="pending-invitations-title"
+          className="mt-1 font-semibold text-xl"
+        >
+          Invitaciones pendientes
+        </h2>
+      </div>
+      {loadError ? (
+        <p
+          className="mt-4 rounded-xl border border-priority-urgent/30 bg-priority-urgent/10 p-4 text-priority-urgent text-sm"
+          role="alert"
+        >
+          No se pudieron cargar las invitaciones. Inténtalo de nuevo más tarde.
+        </p>
+      ) : pending.length > 0 ? (
+        <ul className="mt-4 grid gap-3 sm:grid-cols-2">
+          {pending.map((invitation) => (
+            <li
+              key={invitation.id}
+              className="rounded-2xl border border-border bg-surface-raised p-5"
+            >
+              <p className="font-semibold">{invitation.board_name}</p>
+              <p className="mt-2 text-sm text-text-secondary">
+                Invitó {invitation.inviter_email} · rol colaborador
+              </p>
+              <p className="mt-2 text-text-muted text-xs">
+                Vence{" "}
+                {new Intl.DateTimeFormat("es-AR", {
+                  dateStyle: "medium",
+                  timeStyle: "short",
+                }).format(new Date(invitation.expires_at))}
+              </p>
+              <div className="mt-4 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => void accept(invitation.id)}
+                  disabled={
+                    busyId !== null ||
+                    reconciliationRequiredIds.has(invitation.id)
+                  }
+                  className="rounded-lg bg-accent px-4 py-2 font-semibold text-accent-foreground text-sm disabled:opacity-50"
+                >
+                  {busyId === invitation.id
+                    ? "Aceptando…"
+                    : reconciliationRequiredIds.has(invitation.id)
+                      ? "Aceptación pendiente de verificar"
+                      : "Aceptar"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void reject(invitation.id)}
+                  disabled={
+                    busyId !== null ||
+                    reconciliationRequiredIds.has(invitation.id)
+                  }
+                  className="rounded-lg border border-border px-4 py-2 text-sm text-text-secondary hover:bg-surface-hover disabled:opacity-50"
+                >
+                  Rechazar
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-4 rounded-xl border border-border bg-surface-raised p-4 text-sm text-text-secondary">
+          No tienes invitaciones pendientes.
+        </p>
+      )}
+      {error ? (
+        <p
+          className="mt-3 text-priority-urgent text-sm"
+          role="alert"
+          aria-live="assertive"
+        >
+          {error}
+        </p>
+      ) : null}
+      {reconciliationRequiredIds.size > 0 ? (
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="mt-3 min-h-11 rounded-xl border border-border px-5 py-3 text-sm text-text-primary transition hover:bg-surface-hover"
+        >
+          Actualizar Tableros y verificar acceso
+        </button>
+      ) : null}
+      {message ? (
+        <output className="mt-3 text-sm text-text-secondary" aria-live="polite">
+          {message}
+        </output>
+      ) : null}
+    </section>
+  );
+}

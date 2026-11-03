@@ -5,19 +5,19 @@ import { Logo } from "@/components/ui/logo";
 export const metadata: Metadata = {
   title: "OpenKanban - Privacy Policy",
   description:
-    "Learn how OpenKanban handles your data with extreme frictionlessness. We collect minimal data and do not track you.",
+    "How OpenKanban handles account identity and private board data.",
 };
 
 export default function PrivacyPage() {
   return (
-    <div className="min-h-screen bg-black pb-32 font-sans text-white selection:bg-accent selection:text-black">
+    <div className="min-h-screen bg-surface-base pb-32 font-sans text-text-primary selection:bg-accent selection:text-black">
       {/* Header */}
-      <header className="border-neutral-900 border-b px-6 py-6">
+      <header className="border-border border-b px-6 py-6">
         <div className="mx-auto flex max-w-4xl items-center justify-between">
           <Logo size={24} className="transition-opacity hover:opacity-80" />
           <Link
             href="/"
-            className="text-neutral-400 text-sm transition-colors hover:text-white"
+            className="text-sm text-text-secondary transition-colors hover:text-text-primary"
           >
             Back to Home
           </Link>
@@ -29,28 +29,29 @@ export default function PrivacyPage() {
         <h1 className="mb-6 font-bold font-display text-5xl tracking-tight md:text-6xl">
           Privacy Policy.
         </h1>
-        <p className="mb-16 font-mono text-accent text-sm">
+        <p className="mb-16 font-mono text-accent-text text-sm">
           Last updated: {new Date().toLocaleDateString()}
         </p>
 
-        <div className="space-y-12 text-neutral-300 leading-relaxed">
+        <div className="space-y-12 text-text-secondary leading-relaxed">
           <section>
-            <h2 className="mb-4 font-bold font-display text-2xl text-white">
+            <h2 className="mb-4 font-bold font-display text-2xl text-text-primary">
               1. Data Collection Philosophy
             </h2>
             <p className="mb-4">
-              OpenKanban's core philosophy is extreme frictionlessness. As a
-              direct result, we gather the absolute minimum amount of data
-              required to make the service function.
+              OpenKanban requires a Google account that has been explicitly
+              enabled for the application. Authentication is provided by
+              Supabase and Google.
             </p>
-            <p className="mb-4 font-bold text-white">
-              We do not track you. We do not require emails, names, or
-              passwords.
+            <p className="mb-4 font-bold text-text-primary">
+              OpenKanban stores the account identifier and verified Google email
+              needed to admit and identify your account. It does not receive
+              your Google password.
             </p>
           </section>
 
           <section>
-            <h2 className="mb-4 font-bold font-display text-2xl text-white">
+            <h2 className="mb-4 font-bold font-display text-2xl text-text-primary">
               2. What We Collect
             </h2>
             <ul className="mt-2 list-disc space-y-2 pl-5">
@@ -61,48 +62,43 @@ export default function PrivacyPage() {
                 sessions.
               </li>
               <li>
-                <strong>Anonymous Analytics:</strong> We may collect totally
-                anonymous telemetry (like page views or error logs) purely to
-                ensure the service remains stable and fast. This data cannot be
-                tied back to you.
+                <strong>Authentication data:</strong> Google and Supabase
+                process authentication information needed to sign in and
+                maintain your session.
               </li>
             </ul>
           </section>
 
           <section>
-            <h2 className="mb-4 font-bold font-display text-2xl text-white">
+            <h2 className="mb-4 font-bold font-display text-2xl text-text-primary">
               3. Data Visibility & Security
             </h2>
             <p className="mb-4">
-              Because OpenKanban does not use authentication,{" "}
-              <strong>
-                anyone who knows or guesses the exact URL slug of your board can
-                view, edit, and delete its contents.
-              </strong>
+              OpenKanban checks your authenticated account and its explicit
+              application access before serving a board. Each board belongs to
+              its owner account. An administrator can manage who may use the
+              application, but that role does not grant access to another
+              account's board content.
             </p>
-            <p className="mb-4 text-neutral-400 italic">
-              Please do not store highly sensitive personal information,
-              cryptographic keys, or confidential financial data on OpenKanban.
-              By design, security is derived from the obscurity of your board
-              name.
+            <p className="mb-4 text-text-secondary italic">
+              Board URLs identify a route and do not grant access by themselves.
             </p>
           </section>
 
           <section>
-            <h2 className="mb-4 font-bold font-display text-2xl text-white">
+            <h2 className="mb-4 font-bold font-display text-2xl text-text-primary">
               4. Third-Party Services
             </h2>
             <p className="mb-4">
-              We do not sell, rent, or trade your board content with any third
-              parties. Code hosting and deployment may utilize secure
-              third-party infrastructure (like Vercel or cloud databases), which
-              comply with standard security and privacy frameworks for data at
-              rest.
+              Google, Supabase, and the hosting provider process data needed to
+              authenticate, store, and deliver the service. Board content is not
+              shared with other application accounts unless a future
+              collaboration feature explicitly grants access.
             </p>
           </section>
 
           <section>
-            <h2 className="mb-4 font-bold font-display text-2xl text-white">
+            <h2 className="mb-4 font-bold font-display text-2xl text-text-primary">
               5. Deletion & Retention
             </h2>
             <p className="mb-4">
